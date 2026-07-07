@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="villakilavuzu" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="villakilavuzu">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/villakilavuzu.com/web.villakilavuzu.com/backend-api" local="$PROJECT_DIR$/backend-api" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>
