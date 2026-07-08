@@ -14,12 +14,23 @@ final class Response
     /** @var array */
     private $options;
 
+    /** @var int|null Aktif endpoint'in sürümü (varsa yanıta eklenir) */
+    private $version = null;
+
     /**
      * @param array $options config/app.php (force_http_200, cors_origin) ayarları
      */
     public function __construct(array $options = [])
     {
         $this->options = $options;
+    }
+
+    /**
+     * @param int|null $version
+     */
+    public function setVersion($version): void
+    {
+        $this->version = $version;
     }
 
     public function success(array $data = [], int $status = 200): void
@@ -37,6 +48,10 @@ final class Response
 
     private function send(int $status, array $payload): void
     {
+        if ($this->version !== null) {
+            $payload['version'] = $this->version;
+        }
+
         if (!headers_sent()) {
             header('Content-Type: application/json; charset=utf-8');
             header('Access-Control-Allow-Origin: ' . ($this->options['cors_origin'] ?? '*'));

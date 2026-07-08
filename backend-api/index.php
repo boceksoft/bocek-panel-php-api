@@ -25,6 +25,9 @@ error_reporting($app['debug'] ? E_ALL : 0);
 $request  = new Request($app['base_path']);
 $response = new Response($app);
 
+// Aktif kaynağın sürümünü yanıta ekle (versions.txt'ten gelir).
+$response->setVersion($context['versions'][$request->resource()] ?? null);
+
 // CORS preflight isteği
 if ($request->method() === 'OPTIONS') {
     http_response_code(204);

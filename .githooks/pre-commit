@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#
+# Bu commit'te değişen her controller için backend-api/versions.txt içindeki
+# sürümü 1 artırır ve dosyayı aynı commit'e ekler.
+#
+# Etkinleştirmek (bir kez):  git config core.hooksPath .githooks
+# (bash 3.2 uyumlu — associative array/jq kullanmaz.)
+#
+set -eu
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+CTRL_DIR='backend-api/src/Controller'
+VERS_FILE="$REPO_ROOT/backend-api/versions.txt"
+
+# Bu commit'te eklenen/değiştirilen/yeniden adlandırılan controller dosyaları
+changed=$(git diff --cached --name-only --diff-filter=ACMR -- "$CTRL_DIR" \
+    | grep -E '/[A-Za-z0-9]+Controller\.php$' || true)
+
+# Taban Controller sınıfı bir endpoint değil, sürümlenmez
+changed=$(printf '%s\n' "$changed" | grep -vE '/Controller\.php$' || true)
+
+if [ -z "$changed" ]; then
+    exit 0
+fi
+
+touch "$VERS_FILE"
+
+for file in $changed; do
+    base=$(basename "$file" .php)                                   # OffersController
+    name=${base%Controller}                                         # Offers
+    first=$(printf '%s' "$name" | cut -c1 | tr '[:upper:]' '[:lower:]')
+    rest=$(printf '%s' "$name" | cut -c2-)
+    res="$first$rest"                                               # offers
+
+    if grep -qE "^$res " "$VERS_FILE"; then
+        cur=$(grep -E "^$res " "$VERS_FILE" | head -n1 | awk '{print $2}')
+        new=$((cur + 1))
+        tmp=$(mktemp)
+        awk -v r="$res" -v n="$new" '$1==r{print r" "n; next} {print}' "$VERS_FILE" > "$tmp"
+        mv "$tmp" "$VERS_FILE"
+    else
+        new=1
+        echo "$res 1" >> "$VERS_FILE"
+    fi
+
+    echo "  [versiyon] $res -> $new"
+done
+
+git add "$VERS_FILE"

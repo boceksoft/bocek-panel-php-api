@@ -23,7 +23,20 @@ if (is_file($app['external_config_path'])) {
     require $app['external_config_path'];
 }
 
+// Endpoint sürümleri (git hook üretir): her satır "kaynak sürüm".
+$versions = [];
+$versionsFile = $backendRoot . '/versions.txt';
+if (is_file($versionsFile)) {
+    foreach (file($versionsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $parts = explode(' ', trim($line), 2);
+        if ($parts[0] !== '') {
+            $versions[$parts[0]] = (int) ($parts[1] ?? 0);
+        }
+    }
+}
+
 return [
-    'app' => $app,
-    'db'  => $config['db'] ?? [],
+    'app'      => $app,
+    'db'       => $config['db'] ?? [],
+    'versions' => $versions,
 ];
