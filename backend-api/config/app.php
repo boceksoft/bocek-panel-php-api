@@ -34,7 +34,7 @@ return [
 
     // Auth GEREKTİRMEYEN kaynaklar (ilk yol segmenti). tokens = token üretimi,
     // update = otomatik güncelleme (kendi "deploy_secret" ile korunur).
-    'public_resources' => ['tokens', 'update','reservationsCreate'],
+    'public_resources' => ['tokens', 'update','reservationscreate'],
 
     // DB bilgileri ($config['db']) ve Domain sabitinin geldiği,
     // repo dışındaki config dosyasının yolu (backend-api/../api/config.php).
