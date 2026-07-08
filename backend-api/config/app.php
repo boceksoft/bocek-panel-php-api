@@ -10,11 +10,11 @@ declare(strict_types=1);
 
 return [
     // true: hata detayları yanıta eklenir. Canlıda false olmalı.
-    'debug' => true,
+    'debug' => false,
 
     // IIS hata sayfalarını yutmasın diye her yanıtı HTTP 200 döndür.
     // Standart HTTP kodlarına dönmek için false yap.
-    'force_http_200' => false,
+    'force_http_200' => true,
 
     // CORS: izin verilen origin.
     'cors_origin' => '*',
