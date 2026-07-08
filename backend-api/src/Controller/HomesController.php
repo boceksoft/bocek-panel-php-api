@@ -188,7 +188,7 @@ final class HomesController extends Controller
         }
 
         if ($maxTL > 0) {
-            $sql .= " AND fiyatlar.sqfiyat * rate.rate BETWEEN {$minTL} AND {$maxTL}";
+            $sql .= " AND fiyatlar_num.sqfiyat * rate_num.rate BETWEEN {$minTL} AND {$maxTL}";
         }
 
         $orderByEk = '';
@@ -303,6 +303,10 @@ final class HomesController extends Controller
      */
     private function buildSql(array $c): string
     {
+        $homeRate = "TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), h.kur{$c['dbt']}), ''))";
+        $currencyRate = 'rate_num.rate';
+        $price = 'fiyatlar_num.sqfiyat';
+
         return "
 SELECT
     COUNT(*) OVER() AS totalCount,
@@ -310,7 +314,7 @@ SELECT
     h.url{$c['dbt']} AS url,
     h.title{$c['dbt']} AS title,
     h.kisa_icerik{$c['dbt']} AS kisa_icerik,
-    CASE WHEN h.kur{$c['dbt']} > 0 THEN h.kur{$c['dbt']} ELSE 0 END AS kur,
+    CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE 0 END AS kur,
     h.baslik{$c['dbt']} AS baslik,
     h.baslik AS basliko,
     h.icerik{$c['dbt']},
@@ -323,10 +327,10 @@ SELECT
     {$c['takvimSelect']}
     CAST(ROUND(
         (CASE
-            WHEN h.doviz{$c['dbt']} = '{$c['doviz']}' THEN fiyatlar.sqfiyat
-            WHEN h.doviz{$c['dbt']} = 'tl' THEN (fiyatlar.sqfiyat / NULLIF({$c['hedefKur']}, 0))
-            WHEN '{$c['doviz']}' = 'tl' THEN (fiyatlar.sqfiyat * (CASE WHEN h.kur{$c['dbt']} > 0 THEN h.kur{$c['dbt']} ELSE rate.rate END))
-            ELSE (fiyatlar.sqfiyat * (CASE WHEN h.kur{$c['dbt']} > 0 THEN h.kur{$c['dbt']} ELSE rate.rate END) / NULLIF({$c['hedefKur']}, 0))
+            WHEN h.doviz{$c['dbt']} = '{$c['doviz']}' THEN {$price}
+            WHEN h.doviz{$c['dbt']} = 'tl' THEN ({$price} / NULLIF({$c['hedefKur']}, 0))
+            WHEN '{$c['doviz']}' = 'tl' THEN ({$price} * (CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE {$currencyRate} END))
+            ELSE ({$price} * (CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE {$currencyRate} END) / NULLIF({$c['hedefKur']}, 0))
         END), 0
     ) AS INT) AS fiyat,
     {$c['ksqlx']}
@@ -340,11 +344,11 @@ INNER JOIN rate ON rate.CurrencyName = h.doviz{$c['dbt']}
 {$c['nettarihSql']}
 {$c['takvimCross']}
 CROSS APPLY (
-    SELECT ISNULL((
+    SELECT ISNULL(TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), (
         SELECT TOP 1 gece FROM sezonlar
         WHERE site = 1 AND islem = 'emlak' AND islem_id = h.id
           " . ($c['hasDate'] ? "AND LEN(CONVERT(date, '{$c['t1']}', 104)) >= 8 AND CONVERT(date, '{$c['t1']}', 104) BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)" : '') . "
-    ), 0) AS val
+    )), '')), 0) AS val
 ) AS mm
 CROSS APPLY (
     SELECT
@@ -359,6 +363,12 @@ CROSS APPLY (
             ORDER BY od.tarih ASC), 999) AS cikisbosluk
 ) AS bosluklar
 CROSS APPLY ({$c['dsql2']}) AS fiyatlar
+CROSS APPLY (
+    SELECT TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), fiyatlar.sqfiyat), '')) AS sqfiyat
+) AS fiyatlar_num
+CROSS APPLY (
+    SELECT TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), rate.rate), '')) AS rate
+) AS rate_num
 INNER JOIN tip t ON t.id = h.emlak_tipi
 INNER JOIN destinations d2 ON d2.id = h.emlak_bolgesi
 INNER JOIN destinations d1 ON d1.id = d2.cat
@@ -367,7 +377,8 @@ LEFT  JOIN destinations d ON d.id = d0.cat
 LEFT  JOIN kanun7464 kanun ON kanun.homeId = h.id
 WHERE h.aktif{$c['dbt']} = 1
   AND d2.aktif = 1 AND d1.aktif = 1 AND t.aktif = 1
-  AND fiyatlar.sqfiyat > 0
+  AND fiyatlar_num.sqfiyat > 0
+  AND rate_num.rate > 0
   {$c['takvimWhere']}
 ";
     }
@@ -388,9 +399,9 @@ WHERE h.aktif{$c['dbt']} = 1
         if ($takvimKuraliReq === '1') {
             $select = '0 AS gecemax, sezon.gece AS sezongece,';
             $cross = "CROSS APPLY (
-                SELECT TOP 1 (CASE WHEN ISNULL(gece,'')='' THEN 0 ELSE gece END) AS gece,
-                ISNULL((SELECT DATEDIFF(day, MAX(CONVERT(date, dd.tarih2, 104)), CONVERT(date, '{$t1}', 104)) FROM dolu dd WHERE dd.emlak = h.id AND dd.durum = 3 AND CONVERT(date, dd.tarih2, 104) <= CONVERT(date, '{$t1}', 104)), gece) AS girisara,
-                ISNULL((SELECT DATEDIFF(day, CONVERT(date, '{$t2}', 104), MIN(CONVERT(date, dd.tarih, 104))) FROM dolu dd WHERE dd.emlak = h.id AND dd.durum = 3 AND CONVERT(date, dd.tarih, 104) >= CONVERT(date, '{$t2}', 104)), gece) AS cikisara
+                SELECT TOP 1 ISNULL(TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), gece), '')), 0) AS gece,
+                ISNULL((SELECT DATEDIFF(day, MAX(CONVERT(date, dd.tarih2, 104)), CONVERT(date, '{$t1}', 104)) FROM dolu dd WHERE dd.emlak = h.id AND dd.durum = 3 AND CONVERT(date, dd.tarih2, 104) <= CONVERT(date, '{$t1}', 104)), ISNULL(TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), gece), '')), 0)) AS girisara,
+                ISNULL((SELECT DATEDIFF(day, CONVERT(date, '{$t2}', 104), MIN(CONVERT(date, dd.tarih, 104))) FROM dolu dd WHERE dd.emlak = h.id AND dd.durum = 3 AND CONVERT(date, dd.tarih, 104) >= CONVERT(date, '{$t2}', 104)), ISNULL(TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), gece), '')), 0)) AS cikisara
                 FROM sezonlar
                 WHERE site = 1 AND islem = 'emlak' AND islem_id = h.id AND LEN(tarih2) = 10
                   AND CONVERT(date, '{$t1}', 104) >= CONVERT(date, sezonlar.tarih1, 104)
@@ -401,7 +412,7 @@ WHERE h.aktif{$c['dbt']} = 1
                        AND DATEDIFF(day, CONVERT(date, '{$t1}', 104), CONVERT(date, '{$t2}', 104)) >= sezon.gece ";
         } elseif ($gun !== 0) {
             $cross = "CROSS APPLY (
-                SELECT TOP 1 (CASE WHEN ISNULL(gece,'')='' THEN 0 ELSE gece END) AS gece
+                SELECT TOP 1 ISNULL(TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), gece), '')), 0) AS gece
                 FROM sezonlar
                 WHERE site = 1 AND islem = 'emlak' AND islem_id = h.id AND LEN(tarih2) = 10
                   AND CONVERT(date, '{$t1}', 104) >= CONVERT(date, sezonlar.tarih1, 104)
@@ -465,7 +476,7 @@ WHERE h.aktif{$c['dbt']} = 1
 
         return "CROSS APPLY (
             SELECT TOP 1 * FROM dbo.musaitlik({$season}, {$season}, {$currentYear}, h.id, {$siteId})
-            WHERE fiyat * rate.rate BETWEEN {$minTL} AND {$maxForNet}
+            WHERE TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), fiyat), '')) * TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), rate.rate), '')) BETWEEN {$minTL} AND {$maxForNet}
               AND (SELECT TOP 1 COUNT(dolu.id) FROM dolu
                   WHERE dolu.emlak = h.id AND dolu.durum = 3
                     AND ((DATEADD(day, -1, tarih2) BETWEEN dolu.tarih AND dolu.tarih2)
@@ -493,10 +504,10 @@ WHERE h.aktif{$c['dbt']} = 1
                 $clause = $orderByEk . $gelismis . ' h.id DESC';
                 break;
             case 3:
-                $clause = $orderByEk . $gelismis . ' fiyatlar.sqfiyat * rate.rate ASC';
+                $clause = $orderByEk . $gelismis . ' fiyatlar_num.sqfiyat * rate_num.rate ASC';
                 break;
             case 4:
-                $clause = $orderByEk . $gelismis . ' fiyatlar.sqfiyat * rate.rate DESC';
+                $clause = $orderByEk . $gelismis . ' fiyatlar_num.sqfiyat * rate_num.rate DESC';
                 break;
             case 5:
                 $clause = $gelismis . ' h.kisi ASC, h.siralama ASC';
@@ -530,7 +541,7 @@ WHERE h.aktif{$c['dbt']} = 1
         $v = $this->p($key);
 
         return is_numeric($v) ? (int) $v : $default;
-    }
+    }  
 
     /**
      * tip=7&tip=12 gibi tekrarlı parametreleri virgülle birleştirir.

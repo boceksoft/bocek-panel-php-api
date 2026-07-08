@@ -54,13 +54,16 @@ final class ReservationsController extends Controller
         $girisTarih1 = $this->parseTrDate($girisTarih1P);
         $girisTarih2 = $this->parseTrDate($this->p('girisTarih2'));
 
-        $musteriAra = $this->p('musteri') !== '' ? $this->p('musteri') : $this->p('kelime');
-        $evkodu     = $this->safeIntList($this->p('evkodu'));
-        $odemesekli = $this->safeIntList($this->p('odemesekli'));
-        $odemeturu  = $this->safeIntList($this->p('odemeturu'));
-        $acenta     = $this->safeIntList($this->p('acenta'));
-        $rqsite     = $this->safeIntList($this->p('rqsite'));
-        $site       = $this->safeIntList($this->p('site'));
+        $musteriAra    = $this->p('musteri') !== '' ? $this->p('musteri') : $this->p('kelime');
+        // 'emlak' = ASP form adı, 'evkodu' = alternatif
+        $evkodu        = $this->safeIntList($this->p('emlak') !== '' ? $this->p('emlak') : $this->p('evkodu'));
+        $odemesekli    = $this->safeIntList($this->p('odemesekli'));
+        $odemeturu     = $this->safeIntList($this->p('odemeturu'));
+        $acenta        = $this->safeIntList($this->p('acenta'));
+        $altacenta     = $this->p('altacenta'); // acenta_users.id
+        $altacentaInt  = preg_match('/^\d+$/', trim($altacenta)) ? (int) trim($altacenta) : 0;
+        $rqsite        = $this->safeIntList($this->p('rqsite'));
+        $site          = $this->safeIntList($this->p('site'));
 
         $kisibilgileri = $this->p('kisibilgileri');
         if ($kisibilgileri === '1') {
@@ -123,6 +126,11 @@ final class ReservationsController extends Controller
         if ($acenta !== '') {
             $where[] = "kayitlar.satis_kanallari_id IN ($acenta)";
         }
+        // altacenta — acenta_users tablosundaki alt acenta kullanıcısı
+        if ($altacentaInt > 0) {
+            $where[] = 'kayitlar.altacenta_id = :altacenta';
+            $params[':altacenta'] = $altacentaInt;
+        }
         if ($rezDurumu !== '') {
             $where[] = "dolu.durum IN ($rezDurumu)";
         }
@@ -152,7 +160,7 @@ final class ReservationsController extends Controller
 
         $whereSql = $where ? ('WHERE 1=1 AND ' . implode(' AND ', $where)) : 'WHERE 1=1';
 
-        // ASP birebir: sadece durum=3 (Onaylı) seçiliyse giriş tarihine göre ASC,
+        // ASP birebir: sadece durum=3 (Onaylı) seçiliyse giriş tarihine en yakın önce (ABS DATEDIFF),
         // aksi halde en yeni kayıt üstte (id DESC).
         $durumValues = array_filter(
             array_map('trim', explode(',', $durumRaw . ',' . $rezDurumuRaw)),
@@ -161,7 +169,12 @@ final class ReservationsController extends Controller
             }
         );
         $onlyDurum3 = count($durumValues) > 0 && count(array_diff($durumValues, ['3'])) === 0;
-        $orderSql = $onlyDurum3 ? 'ORDER BY dolu.tarih ASC' : 'ORDER BY kayitlar.id DESC';
+        if ($onlyDurum3) {
+            $refDate  = $girisTarih1 ?: date('Y-m-d');
+            $orderSql = "ORDER BY ABS(DATEDIFF(day, dolu.tarih, '$refDate')) ASC, kayitlar.id DESC";
+        } else {
+            $orderSql = 'ORDER BY kayitlar.id DESC';
+        }
 
         $sql = $this->buildSql($whereSql, $orderSql, $allRows);
 
@@ -178,38 +191,53 @@ final class ReservationsController extends Controller
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         // Ciro toplamları (window fonksiyonlarından ilk satırda gelir)
-        $totalCount = $toplamTutar = $toplamOnOdeme = $toplamKalan = $toplamKar = 0;
+        $totalCount     = 0;
+        $toplamTutar    = 0.0;
+        $toplamOnOdeme  = 0.0;
+        $toplamKalan    = 0.0;
+        $toplamKar      = 0.0;
+        $toplamMaliyet  = 0.0;
+        $toplamTemizlik = 0.0;
+
         if (count($rows) > 0) {
-            $totalCount    = (int) $rows[0]['totalCount'];
-            $toplamTutar   = (float) $rows[0]['sumTutar'];
-            $toplamOnOdeme = (float) $rows[0]['sumOnOdeme'];
-            $toplamKalan   = (float) $rows[0]['sumKalan'];
-            $toplamKar     = (float) $rows[0]['sumKar'];
+            $totalCount     = (int)   $rows[0]['totalCount'];
+            $toplamTutar    = (float) $rows[0]['sumTutar'];
+            $toplamOnOdeme  = (float) $rows[0]['sumOnOdeme'];
+            $toplamKalan    = (float) $rows[0]['sumKalan'];
+            $toplamKar      = (float) $rows[0]['sumKar'];
+            $toplamMaliyet  = (float) $rows[0]['sumMaliyet'];
+            $toplamTemizlik = (float) $rows[0]['sumTemizlik'];
         }
 
         $rows = $this->normalizeRows($rows);
 
         $this->response->success([
-            'items' => $rows,
-            'meta' => [
-                'total'       => $totalCount,
-                'page'        => $allRows ? 1 : $page,
-                'per_page'    => $allRows ? $totalCount : $perPage,
-                'total_pages' => $allRows ? 1 : (int) ceil($totalCount / max(1, $perPage)),
-                'count'       => count($rows),
+            'status'      => 'success',
+            'total'       => $totalCount,
+            'page'        => $allRows ? 1 : $page,
+            'per_page'    => $allRows ? $totalCount : $perPage,
+            'total_pages' => $allRows ? 1 : (int) ceil($totalCount / max(1, $perPage)),
+            'count'       => count($rows),
+
+            'ciro_bilgileri' => [
+                'toplamTutar'    => round($toplamTutar,    2),
+                'toplamOnOdeme'  => round($toplamOnOdeme,  2),
+                'toplamKalan'    => round($toplamKalan,    2),
+                'toplamKar'      => round($toplamKar,      2),
+                'toplamMaliyet'  => round($toplamMaliyet,  2),
+                'toplamTemizlik' => round($toplamTemizlik, 2),
             ],
-            'ciro' => [
-                'toplamTutar'   => round($toplamTutar, 2),
-                'toplamOnOdeme' => round($toplamOnOdeme, 2),
-                'toplamKalan'   => round($toplamKalan, 2),
-                'toplamKar'     => round($toplamKar, 2),
+
+            'ciro_bilgileri_formatted' => [
+                'toplamTutar'    => $this->trMoney($toplamTutar),
+                'toplamOnOdeme'  => $this->trMoney($toplamOnOdeme),
+                'toplamKalan'    => $this->trMoney($toplamKalan),
+                'toplamKar'      => $this->trMoney($toplamKar),
+                'toplamMaliyet'  => $this->trMoney($toplamMaliyet),
+                'toplamTemizlik' => $this->trMoney($toplamTemizlik),
             ],
-            'ciro_formatted' => [
-                'toplamTutar'   => $this->trMoney($toplamTutar),
-                'toplamOnOdeme' => $this->trMoney($toplamOnOdeme),
-                'toplamKalan'   => $this->trMoney($toplamKalan),
-                'toplamKar'     => $this->trMoney($toplamKar),
-            ],
+
+            'data' => $rows,
         ]);
     }
 
@@ -222,6 +250,8 @@ SELECT
     SUM(ISNULL(TRY_CONVERT(float, CASE WHEN kayitlar.tur = 2 THEN kayitlar.toplam_tutar ELSE kayitlar.on_odeme END), 0) * (CASE WHEN kayitlar.doviz = 'tl' THEN 1 ELSE ISNULL(kayitlar.kur, 1) END)) OVER() AS sumOnOdeme,
     SUM(ISNULL(TRY_CONVERT(float, CASE WHEN kayitlar.tur = 2 THEN '0' ELSE kayitlar.kalan END), 0) * (CASE WHEN kayitlar.doviz = 'tl' THEN 1 ELSE ISNULL(kayitlar.kur, 1) END)) OVER() AS sumKalan,
     SUM((ISNULL(TRY_CONVERT(float, kayitlar.toplam_tutar), 0) * (CASE WHEN kayitlar.doviz = 'tl' THEN 1 ELSE ISNULL(kayitlar.kur, 1) END)) / 100 * ISNULL(kayitlar.kazancorani, 0)) OVER() AS sumKar,
+    SUM(ISNULL(TRY_CONVERT(float, kayitlar.maliyet), 0) * (CASE WHEN kayitlar.doviz = 'tl' THEN 1 ELSE ISNULL(kayitlar.kur, 1) END)) OVER() AS sumMaliyet,
+    SUM(ISNULL(TRY_CONVERT(float, kayitlar.temizlik), 0) * (CASE WHEN kayitlar.doviz = 'tl' THEN 1 ELSE ISNULL(kayitlar.kur, 1) END)) OVER() AS sumTemizlik,
     kayitlar.id, kayitlar.site, kayitlar.evid,
     homes.id AS home_id, homes.baslik AS villa_adi, homes.url AS villa_url, homes.kazancorani AS kazancorani_homes,
     kayitlar.musteri AS musteri_adi,
@@ -308,7 +338,11 @@ $orderSql
         ];
 
         foreach ($rows as &$row) {
-            unset($row['totalCount'], $row['sumTutar'], $row['sumOnOdeme'], $row['sumKalan'], $row['sumKar']);
+            unset(
+                $row['totalCount'], $row['sumTutar'], $row['sumOnOdeme'],
+                $row['sumKalan'],   $row['sumKar'],
+                $row['sumMaliyet'], $row['sumTemizlik']
+            );
 
             foreach ($moneyFields as $f) {
                 if (array_key_exists($f, $row) && $row[$f] !== null && $row[$f] !== '') {
