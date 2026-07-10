@@ -10,7 +10,7 @@ declare(strict_types=1);
 
 return [
     // true: hata detayları yanıta eklenir. Canlıda false olmalı.
-    'debug' => false,
+    'debug' => true,
 
     // IIS hata sayfalarını yutmasın diye her yanıtı HTTP 200 döndür.
     // Standart HTTP kodlarına dönmek için false yap.
@@ -22,6 +22,26 @@ return [
     // Uygulamanın yayınlandığı alt yol. Kök dizinse '' bırak.
     // Örn: https://web.villakilavuzu.com/backend-api  ->  '/backend-api'
     'base_path' => '/backend-api',
+
+    // dolu tablosunda kayitlar.id ile eslesen kolon adi.
+    // Bazi SQL Server kurulumlari case-sensitive oldugu icin siteye gore override edilebilir.
+    'dolu_kayit_id_column' => 'kayitid',
+
+    // ruleshomes tablosunda rules.id ile eslesen kolon adi.
+    'ruleshomes_rules_id_column' => 'rulesId',
+
+    // ruleshomes tablosunda homes.id ile eslesen kolon adi.
+    'ruleshomes_homes_id_column' => 'homesId',
+
+    // redirects tablosunda expiredDate/expiredMode kolonlari varsa true, yoksa false.
+    'links_use_expiration_columns' => false,
+
+    // Link olustururken redirect hedefinde kullanilan arama sayfasi sorgusu.
+    // Sorgu ilk satirdaki "url" alanindan arama sayfasi yolunu okumalidir.
+    'links_search_page_query' => 'SELECT url FROM sayfalar WHERE id = 229',
+
+    // Rezervasyon filtrelerinde acenta_users tablosundan alt acentalar cekilsin mi?
+    'reservation_filters_use_acenta_users' => false,
 
     // IP beyaz liste. Boş bırakılırsa IP kontrolü KAPALI olur.
     'allowed_ips' => [

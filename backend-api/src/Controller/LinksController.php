@@ -59,7 +59,8 @@ final class LinksController extends Controller
         $originalLink = $this->randomString(4) . $nextId;
 
         // 4) Yönlendirme hedefini kur (arama sayfası DB'den, Domain dış config'ten)
-        $urlRow = $pdo->query('SELECT url FROM tip WHERE id = 1')->fetch();
+        $searchPageQuery = trim((string) ($this->app['links_search_page_query'] ?? 'SELECT url FROM tip WHERE id = 1'));
+        $urlRow = $pdo->query($searchPageQuery)->fetch();
         $aramaSayfasi = (string) ($urlRow['url'] ?? '');
         $domain = defined('Domain') ? (string) constant('Domain') : '';
 
@@ -76,6 +77,7 @@ final class LinksController extends Controller
         $redirectTo = $domain . '/' . $aramaSayfasi . '?' . urldecode(http_build_query($params));
 
         // 5) Süre verildiyse son kullanma tarihini hesapla
+        $useExpirationColumns = (bool) ($this->app['links_use_expiration_columns'] ?? true);
         $expiredMode = 0;
         $expiredDate = null;
         if ($sure > 0) {
@@ -86,17 +88,26 @@ final class LinksController extends Controller
         }
 
         // 6) Kaydet
-        $stmt = $pdo->prepare(
-            'INSERT INTO redirects (originalLink, teklifId, redirectTo, expiredDate, expiredMode)
-             VALUES (:originalLink, :teklifId, :redirectTo, :expiredDate, :expiredMode)'
-        );
-        $stmt->execute([
+        $insertColumns = 'originalLink, teklifId, redirectTo';
+        $insertValues = ':originalLink, :teklifId, :redirectTo';
+        $insertParams = [
             ':originalLink' => $originalLink,
             ':teklifId'     => $teklifId,
             ':redirectTo'   => $redirectTo,
-            ':expiredDate'  => $expiredDate,
-            ':expiredMode'  => $expiredMode,
-        ]);
+        ];
+
+        if ($useExpirationColumns) {
+            $insertColumns .= ', expiredDate, expiredMode';
+            $insertValues .= ', :expiredDate, :expiredMode';
+            $insertParams[':expiredDate'] = $expiredDate;
+            $insertParams[':expiredMode'] = $expiredMode;
+        }
+
+        $stmt = $pdo->prepare(
+            'INSERT INTO redirects (' . $insertColumns . ')
+             VALUES (' . $insertValues . ')'
+        );
+        $stmt->execute($insertParams);
 
         // 7) Standart başarı zarfı
         $finalLink = str_replace('www.', '', $domain) . '/' . $originalLink . '?v';

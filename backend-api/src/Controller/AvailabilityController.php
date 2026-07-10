@@ -30,6 +30,21 @@ final class AvailabilityController extends Controller
         $defaultCurrencyId = defined('DEFAULT_CURRENCY_ID') ? (int) constant('DEFAULT_CURRENCY_ID') : 1;
         $uzanti  = defined('UZANTI') ? (string) constant('UZANTI') : '';
         $siteVal = defined('PRICE_SITE') ? (int) constant('PRICE_SITE') : 1;
+        $doluKayitIdColumn = (string) ($this->app['dolu_kayit_id_column'] ?? 'kayitid');
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $doluKayitIdColumn)) {
+            throw new HttpException('Gecersiz dolu kayit id kolon ayari.', 'CONFIG_ERROR', 500);
+        }
+        $doluKayitIdSql = 'dolu.[' . $doluKayitIdColumn . ']';
+        $ruleshomesRulesIdColumn = (string) ($this->app['ruleshomes_rules_id_column'] ?? 'rulesId');
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $ruleshomesRulesIdColumn)) {
+            throw new HttpException('Gecersiz ruleshomes rules id kolon ayari.', 'CONFIG_ERROR', 500);
+        }
+        $ruleshomesRulesIdSql = 'rh.[' . $ruleshomesRulesIdColumn . ']';
+        $ruleshomesHomesIdColumn = (string) ($this->app['ruleshomes_homes_id_column'] ?? 'homesId');
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $ruleshomesHomesIdColumn)) {
+            throw new HttpException('Gecersiz ruleshomes homes id kolon ayari.', 'CONFIG_ERROR', 500);
+        }
+        $ruleshomesHomesIdSql = 'rh.[' . $ruleshomesHomesIdColumn . ']';
 
         // Home bilgisi (döviz + sembol)
         $homeStmt = $pdo->prepare(
@@ -44,7 +59,6 @@ final class AvailabilityController extends Controller
         if (!$home) {
             throw new HttpException('Kayıt bulunamadı. EntityId: ' . $entityId, 'NOT_FOUND', 404);
         }
-
         // Varsayılan dolu tarihler sorgusu
         $doluTarihlerSql = "SELECT
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS doluGirisler,
@@ -103,16 +117,16 @@ final class AvailabilityController extends Controller
                             '|', i.oran, '|', ISNULL(i.sahte_oran,0), ',',
                             i.tarih2, '|', i.oran, '|', ISNULL(i.sahte_oran,0)
                         ), ','
-                    ),'')
+                    ),'') 
                     FROM indirimler i
                     WHERE i.tarih2 > GETDATE() AND GETDATE() BETWEEN i.showDate1 AND i.showDate2 AND i.emlak = " . $entityId . "
                     GROUP BY i.emlak),'') AS indirimler) AS indirimler,
                 (SELECT
-                    ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS odemeGirisler,
-                    ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS odemeCikislar,
-                    ISNULL(STRING_AGG(dbo.Fn_aratarihler2(tarih,tarih2),','),'') AS odemeGunler,
-                    ISNULL(STRING_AGG(CONCAT(REPLICATE(CONCAT(DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,saat,103)),','),DATEDIFF(day,CONVERT(date,tarih,103),CONVERT(date,tarih2,103))),DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,saat,103))),','),'') AS odemeSaatler
-                    FROM dolu LEFT JOIN kayitlar ON kayitlar.id = dolu.kayitId WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 1 AND emlak = " . $entityId . ") AS odeme,
+                    ISNULL(STRING_AGG(CONCAT(YEAR(dolu.tarih),'-',FORMAT(dolu.tarih,'MM'),'-',FORMAT(dolu.tarih,'dd')),','),'') AS odemeGirisler,
+                    ISNULL(STRING_AGG(CONCAT(YEAR(dolu.tarih2),'-',FORMAT(dolu.tarih2,'MM'),'-',FORMAT(dolu.tarih2,'dd')),','),'') AS odemeCikislar,
+                    ISNULL(STRING_AGG(dbo.Fn_aratarihler2(dolu.tarih,dolu.tarih2),','),'') AS odemeGunler,
+                    ISNULL(STRING_AGG(CONCAT(REPLICATE(CONCAT(DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,kayitlar.saat,103)),','),DATEDIFF(day,CONVERT(date,dolu.tarih,103),CONVERT(date,dolu.tarih2,103))),DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,kayitlar.saat,103))),','),'') AS odemeSaatler
+                    FROM dolu LEFT JOIN kayitlar ON kayitlar.id = " . $doluKayitIdSql . " WHERE CONVERT(date,dolu.tarih2,103) > CONVERT(date,GETDATE(),103) AND dolu.durum = 1 AND dolu.emlak = " . $entityId . ") AS odeme,
                 (SELECT
                     ISNULL((SELECT r.baslik,
                     CONVERT(VARCHAR, r.date1, 103) AS date1,
@@ -122,8 +136,8 @@ final class AvailabilityController extends Controller
                         CONVERT(VARCHAR, ruletypes.id) as id,
                         rulesruletypes.[value] as [value]
                         FROM rulesruletypes INNER JOIN ruletypes ON ruletypes.id = rulesruletypes.ruletypes WHERE rulesid = r.id FOR JSON PATH) AS maddeler
-                        FROM ruleshomes rh INNER JOIN rules r ON r.id = rh.rulesid WHERE r.isactive = 1 AND rh.homesid = " . $entityId . " FOR JSON PATH),'') AS kurallar ) AS kurallar,
-                (SELECT
+                        FROM ruleshomes rh INNER JOIN rules r ON r.id = " . $ruleshomesRulesIdSql . " WHERE r.isactive = 1 AND " . $ruleshomesHomesIdSql . " = " . $entityId . " FOR JSON PATH),'') AS kurallar ) AS kurallar,
+                (SELECT 
                     ISNULL(STRING_AGG(
                         CAST(CONCAT(YEAR(CONVERT(date,tarih1,103)),'-',FORMAT(CONVERT(date,tarih1,103),'MM'),'-',FORMAT(CONVERT(date,tarih1,103),'dd'),',',
                         dbo.Fn_aratarihler2(CONVERT(date,tarih1,103),CONVERT(date,tarih2,103)),

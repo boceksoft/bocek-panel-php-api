@@ -6,6 +6,12 @@ error_reporting(0);
 // config.php dosyasını çağır (Yolun doğru olduğundan emin ol)
 require_once __DIR__ . '/../api/config.php';
 
+$backendApiAppConfig = require __DIR__ . '/config/app.php';
+$backendApiLocalConfigPath = __DIR__ . '/config/app.local.php';
+if (is_file($backendApiLocalConfigPath)) {
+    $backendApiAppConfig = array_merge($backendApiAppConfig, require $backendApiLocalConfigPath);
+}
+
 header('Content-Type: application/json; charset=utf-8');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -114,7 +120,8 @@ try {
 // 4. MEVCUT ESKİ KODLAR (URL ÇEKME)
 // ─────────────────────────────────────────────────────────────────────────────
 try {
-    $stmt = $pdo->query("SELECT url FROM tip WHERE id = 1");
+    $searchPageQuery = trim((string) ($backendApiAppConfig['links_search_page_query'] ?? 'SELECT url FROM tip WHERE id = 1'));
+    $stmt = $pdo->query($searchPageQuery);
     $row = $stmt->fetch();
 
     $aramaSayfasiUrl = $row ? $row['url'] : '';

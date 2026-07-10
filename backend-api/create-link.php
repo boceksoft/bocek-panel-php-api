@@ -89,6 +89,10 @@ try {
 
     $redirectTo = $domain . "/" . $aramaSayfasi . "?" . urldecode($queryString);
 
+    $useExpirationColumns = isset($backendApiAppConfig['links_use_expiration_columns'])
+        ? (bool)$backendApiAppConfig['links_use_expiration_columns']
+        : true;
+
     $expiredMode = 0;
     $expiredDate = null;
 
@@ -100,17 +104,25 @@ try {
     }
 
     // Geçersiz kolon olan userId sorgudan tamamen kaldırıldı, sadece teklifId yazılıyor
-    $sqlInsert = "INSERT INTO redirects (originalLink, teklifId, redirectTo, expiredDate, expiredMode) 
-                  VALUES (:originalLink, :teklifId, :redirectTo, :expiredDate, :expiredMode)";
-
-    $stmtInsert = $pdo->prepare($sqlInsert);
-    $stmtInsert->execute(array(
+    $insertColumns = "originalLink, teklifId, redirectTo";
+    $insertValues = ":originalLink, :teklifId, :redirectTo";
+    $insertParams = array(
         ':originalLink' => $originalLink,
         ':teklifId'     => $teklifId,
-        ':redirectTo'   => $redirectTo,
-        ':expiredDate'  => $expiredDate,
-        ':expiredMode'  => $expiredMode
-    ));
+        ':redirectTo'   => $redirectTo
+    );
+
+    if ($useExpirationColumns) {
+        $insertColumns .= ", expiredDate, expiredMode";
+        $insertValues .= ", :expiredDate, :expiredMode";
+        $insertParams[':expiredDate'] = $expiredDate;
+        $insertParams[':expiredMode'] = $expiredMode;
+    }
+
+    $sqlInsert = "INSERT INTO redirects (" . $insertColumns . ") VALUES (" . $insertValues . ")";
+
+    $stmtInsert = $pdo->prepare($sqlInsert);
+    $stmtInsert->execute($insertParams);
 
     $finalLink = str_replace("www.", "", $domain) . "/" . $originalLink . "?v";
 
