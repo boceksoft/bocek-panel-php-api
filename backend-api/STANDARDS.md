@@ -156,11 +156,25 @@ git tag 1.4.0
 git push --tags
 ```
 
-- `GET /backend-api/version` → kurulu sürümü döner: `{"version":"1.4.0","sha":"...","deployed_at":"..."}`.
+- `GET /backend-api/version` → kurulu sürümü döner:
+  `{"version":"1.4.0","sha":"...","deployed_at":"...","changelog":[{"sha":"a1b2c3d","message":"..."}]}`.
   Herkese açıktır (sır istemez), sadece bilgi verir — güncelleme YAPMAZ.
 - Repoda hiç tag yoksa (henüz hiç etiketlenmemiş proje) `version: null` döner, `sha` yine gösterilir.
 - Tag adları semver benzeri olmalı (`1.4.0`, `v1.4.0`, `1.4`, `1`): "en son sürüm" bunlar arasından
   `version_compare` ile bulunur. Semver'e uymayan tag'ler (örn. `nightly`) sıralamaya katılmaz.
+
+### Changelog: "bu sürümde ne değişti" — commit mesajlarından otomatik
+
+Tag atarken ayrıca bir şey yazman gerekmez: her güncellemede, önceki kurulu sürümle yeni
+sürüm arasındaki **commit mesajları** GitHub'ın "compare" API'sinden otomatik çekilip
+kaydedilir (en yeni commit ilk sırada, en fazla 50 commit).
+
+- `GET /backend-api/version` ve `GET /backend-api/update/status` → son güncellemenin
+  changelog'unu (`changelog` alanı) gösterir — kalıcıdır, `.deploy-state.json`'da tutulur.
+- `GET /backend-api/update/changelog?from=1.3.0&to=1.4.0` → **kurulum yapmadan** iki sürüm
+  arasındaki farkı önizler (ikisi de opsiyonel: `to` boşsa en son tag, `from` boşsa şu an
+  kurulu sürüm). 400 siteye toplu güncelleme öncesi "bu sürümde ne var" görmek için kullanılır.
+  Bu uç da `X-Deploy-Secret` ister.
 
 ## Otomatik güncelleme (400 site — git binary'siz)
 

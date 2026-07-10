@@ -9,9 +9,11 @@ use App\Core\Updater;
 
 /*
  * Kendi kendini güncelleme kaynağı.
- *   POST /backend-api/update          -> repodaki EN SON git tag'ini indirir, kurar
- *                                         (body: {"version":"1.4.0"} verilirse O tag kurulur)
- *   GET  /backend-api/update/status   -> şu an kurulu sürüm/commit'i gösterir (indirmez)
+ *   POST /backend-api/update             -> repodaki EN SON git tag'ini indirir, kurar
+ *                                            (body: {"version":"1.4.0"} verilirse O tag kurulur)
+ *   GET  /backend-api/update/status      -> şu an kurulu sürüm/commit'i ve son changelog'u gösterir (indirmez)
+ *   GET  /backend-api/update/changelog   -> KURMADAN, iki sürüm arasındaki commit özetini gösterir
+ *                                            (?from=1.3.0&to=1.4.0 — ikisi de opsiyonel)
  *
  * Sürümlendirme git tag'lerine dayanır: "git tag 1.4.0 && git push --tags" ile
  * gönderdiğin her tag, o an kurulabilecek bir sürümdür. Repoda hiç tag yoksa
@@ -54,6 +56,28 @@ final class UpdateController extends Controller
         $updater = new Updater(dirname(__DIR__, 2), $this->app);
 
         $this->response->success($updater->readState());
+    }
+
+    /**
+     * Kurulum YAPMADAN, iki sürüm arasında neler değişmiş görmek için.
+     *
+     * @Get("changelog")
+     * @query from string Başlangıç tag'i. Boşsa: şu an kurulu sürüm.
+     * @query to string Bitiş tag'i. Boşsa: en son tag.
+     */
+    public function changelog(): void
+    {
+        $this->assertSecret();
+
+        $from = (string) $this->request->query('from', '');
+        $to = (string) $this->request->query('to', '');
+
+        $updater = new Updater(dirname(__DIR__, 2), $this->app);
+
+        $this->response->success($updater->previewChangelog(
+            $from !== '' ? $from : null,
+            $to !== '' ? $to : null
+        ));
     }
 
     private function assertSecret(): void
