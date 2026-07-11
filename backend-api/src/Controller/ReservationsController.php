@@ -361,7 +361,7 @@ SELECT
     ISNULL(sk.baslik, N'') AS satiskanali,
 $acentaSelectSql
     REPLACE(ISNULL(es.tel, ''), ' ', '') AS evsahibitel,
-    ISNULL(homes.whatsapp_grup, '') AS whatsapp,
+    ISNULL(homes.rez_takip_yeri_adi, '') AS whatsapp,
     kayitlar.oznot AS oz_not,
     kisi.total AS kisi_bilgileri_count,
     yorumsay.total AS yorum_count,
