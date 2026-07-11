@@ -53,8 +53,9 @@ return [
     'auth_enabled' => true,
 
     // Auth GEREKTİRMEYEN kaynaklar (ilk yol segmenti). tokens = token üretimi,
-    // update = otomatik güncelleme (kendi "deploy_secret" ile korunur).
-    'public_resources' => ['tokens', 'update'],
+    // update = otomatik güncelleme (kendi "deploy_secret" ile korunur),
+    // version = kurulu sürümü gösterir (salt okunur, sır istemez).
+    'public_resources' => ['tokens', 'update', 'version'],
 
     // DB bilgileri ($config['db']) ve Domain sabitinin geldiği,
     // repo dışındaki config dosyasının yolu (backend-api/../api/config.php).

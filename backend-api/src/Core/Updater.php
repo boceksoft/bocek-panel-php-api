@@ -31,12 +31,14 @@ final class Updater
     }
 
     /**
-     * Güncellemeyi çalıştırır. Sonuç: ['updated' => bool, 'from' => ?string, 'to' => string, 'backup' => ?string]
+     * Güncellemeyi çalıştırır.
      *
-     * @param bool $force true ise SHA aynı olsa bile indirip yeniden kurar (400 sitede
-     *                    varsayılan false: gereksiz indirme/yedekleme yapılmaz).
+     * @param bool        $force           true ise SHA aynı olsa bile indirip yeniden kurar.
+     * @param string|null $requestedVersion Belirli bir git tag (örn. "1.4.0"). null ise: EN SON tag.
+     *                                      Repoda hiç tag yoksa branch'in son commit'ine düşer.
+     * @return array{updated:bool,from_version:?string,to_version:?string,from_sha:?string,to_sha:string,backup:?string}
      */
-    public function run(bool $force = false): array
+    public function run(bool $force = false, $requestedVersion = null): array
     {
         $owner  = $this->config['github_owner'] ?? '';
         $repo   = $this->config['github_repo'] ?? '';
@@ -51,12 +53,27 @@ final class Updater
         // kendisine yazılamıyorsa (IIS AppPool izni yoksa) devam etmenin anlamı yok.
         $this->assertRootWritable();
 
-        $sha = $this->resolveSha($owner, $repo, $branch, $token);
-        $previousSha = $this->deployedSha();
+        [$sha, $version] = $this->resolveTarget($owner, $repo, $branch, $token, $requestedVersion);
+
+        $previousState = $this->readState();
+        $previousSha = $previousState['sha'] ?? null;
+        $previousVersion = $previousState['version'] ?? null;
 
         if (!$force && $sha === $previousSha) {
-            return ['updated' => false, 'from' => $previousSha, 'to' => $sha, 'backup' => null];
+            return [
+                'updated'      => false,
+                'from_version' => $previousVersion,
+                'to_version'   => $version,
+                'from_sha'     => $previousSha,
+                'to_sha'       => $sha,
+                'changelog'    => [],
+                'backup'       => null,
+            ];
         }
+
+        // Ne değişti? previousSha -> sha arasındaki commit özetleri (GitHub compare API).
+        // Bilgilendirme amaçlıdır; alınamazsa güncellemeyi engellemez.
+        $changelog = $this->fetchChangelog($owner, $repo, $token, $previousSha, $sha);
 
         $tmpZip = $this->downloadZip($owner, $repo, $sha, $token);
         $extractDir = $this->extractZip($tmpZip);
@@ -66,18 +83,168 @@ final class Updater
             $sourceRoot = $this->findBackendApiRoot($extractDir, $repo, $sha);
             $backupPath = $this->backupCurrent();
             $this->copyOverlay($sourceRoot, $this->root);
-            $this->writeState($sha, $previousSha);
-            $this->log("OK  {$previousSha} -> {$sha}");
+            $this->writeState($sha, $version, $previousSha, $previousVersion, $changelog);
+            $this->log("OK  {$previousVersion}({$previousSha}) -> {$version}({$sha})");
         } finally {
             $this->removeDir($extractDir);
         }
 
         return [
-            'updated' => $previousSha !== $sha,
-            'from'    => $previousSha,
-            'to'      => $sha,
-            'backup'  => $backupPath ?? null,
+            'updated'      => $previousSha !== $sha,
+            'from_version' => $previousVersion,
+            'to_version'   => $version,
+            'from_sha'     => $previousSha,
+            'to_sha'       => $sha,
+            'changelog'    => $changelog,
+            'backup'       => $backupPath ?? null,
         ];
+    }
+
+    /**
+     * Kurulum YAPMADAN, iki sürüm/commit arasındaki değişiklik özetini döner.
+     * $to boşsa: en son tag (repoda tag yoksa branch HEAD). $from boşsa: şu an
+     * sunucuda kurulu olan sürüm. Böylece bir sürümü kurmadan önce "neler
+     * değişecek" görülebilir.
+     *
+     * @param string|null $from Tag adı ya da commit sha. Boşsa: kurulu sürüm.
+     * @param string|null $to   Tag adı ya da commit sha. Boşsa: en son tag.
+     * @return array{from_version:?string,from_sha:?string,to_version:?string,to_sha:string,changelog:array<int,array{sha:string,message:string}>}
+     */
+    public function previewChangelog($from = null, $to = null): array
+    {
+        $owner  = $this->config['github_owner'] ?? '';
+        $repo   = $this->config['github_repo'] ?? '';
+        $branch = $this->config['github_branch'] ?? 'main';
+        $token  = $this->config['github_token'] ?? '';
+
+        if ($owner === '' || $repo === '') {
+            throw new HttpException('github_owner / github_repo tanımlı değil.', 'UPDATE_CONFIG', 500);
+        }
+
+        $tags = $this->fetchTags($owner, $repo, $token);
+
+        if ($to !== null && $to !== '') {
+            $toTag = $this->findTag($tags, $to);
+            if ($toTag === null) {
+                throw new HttpException("İstenen versiyon bulunamadı: {$to}", 'UPDATE_VERSION_NOT_FOUND', 404);
+            }
+            $toSha = $toTag['sha'];
+            $toVersion = $toTag['name'];
+        } else {
+            $latest = $this->pickLatestTag($tags);
+            if ($latest !== null) {
+                $toSha = $latest['sha'];
+                $toVersion = $latest['name'];
+            } else {
+                $toSha = $this->resolveBranchSha($owner, $repo, $branch, $token);
+                $toVersion = null;
+            }
+        }
+
+        if ($from !== null && $from !== '') {
+            $fromTag = $this->findTag($tags, $from);
+            if ($fromTag === null) {
+                throw new HttpException("İstenen versiyon bulunamadı: {$from}", 'UPDATE_VERSION_NOT_FOUND', 404);
+            }
+            $fromSha = $fromTag['sha'];
+            $fromVersion = $fromTag['name'];
+        } else {
+            $current = $this->readState();
+            $fromSha = $current['sha'] ?? null;
+            $fromVersion = $current['version'] ?? null;
+        }
+
+        return [
+            'from_version' => $fromVersion,
+            'from_sha'     => $fromSha,
+            'to_version'   => $toVersion,
+            'to_sha'       => $toSha,
+            'changelog'    => $this->fetchChangelog($owner, $repo, $token, $fromSha, $toSha),
+        ];
+    }
+
+    /**
+     * base..head arasındaki commit'lerin özetini (GitHub compare API) döner;
+     * en yeni commit ilk sırada. base null/head ile aynıysa boş liste (karşılaştıracak
+     * bir şey yok — ör. ilk kurulum). En fazla 50 commit gösterilir.
+     *
+     * @param string|null $base
+     * @return array<int,array{sha:string,message:string}>
+     */
+    private function fetchChangelog(string $owner, string $repo, string $token, $base, string $head): array
+    {
+        if ($base === null || $base === $head) {
+            return [];
+        }
+
+        $url = "https://api.github.com/repos/{$owner}/{$repo}/compare/{$base}...{$head}";
+        [$status, $body] = $this->httpGet($url, $this->githubHeaders($token, 'application/vnd.github+json'));
+
+        if ($status !== 200) {
+            $this->log("UYARI: changelog alınamadı (HTTP {$status}) {$base}...{$head}");
+
+            return [];
+        }
+
+        $data = json_decode($body, true);
+        if (!is_array($data) || empty($data['commits']) || !is_array($data['commits'])) {
+            return [];
+        }
+
+        $commits = [];
+        foreach (array_reverse($data['commits']) as $commit) {
+            $message = (string) ($commit['commit']['message'] ?? '');
+            $firstLine = trim(explode("\n", $message)[0]);
+            if ($firstLine === '') {
+                continue;
+            }
+
+            $commits[] = [
+                'sha'     => substr((string) ($commit['sha'] ?? ''), 0, 7),
+                'message' => $firstLine,
+            ];
+
+            if (count($commits) >= 50) {
+                break;
+            }
+        }
+
+        return $commits;
+    }
+
+    /**
+     * Kurulacak hedefi belirler:
+     *  - $requestedVersion verildiyse: o tag'i bul (yoksa hata).
+     *  - Verilmediyse: repodaki en son (semver en büyük) tag.
+     *  - Repoda hiç tag yoksa: branch'in son commit'i (version = null).
+     *
+     * @param string|null $requestedVersion
+     * @return array{0:string,1:?string} [sha, version]
+     */
+    private function resolveTarget(string $owner, string $repo, string $branch, string $token, $requestedVersion): array
+    {
+        $tags = $this->fetchTags($owner, $repo, $token);
+
+        if ($requestedVersion !== null && $requestedVersion !== '') {
+            $tag = $this->findTag($tags, $requestedVersion);
+            if ($tag === null) {
+                throw new HttpException(
+                    "İstenen versiyon bulunamadı: {$requestedVersion}",
+                    'UPDATE_VERSION_NOT_FOUND',
+                    404
+                );
+            }
+
+            return [$tag['sha'], $tag['name']];
+        }
+
+        $latest = $this->pickLatestTag($tags);
+        if ($latest !== null) {
+            return [$latest['sha'], $latest['name']];
+        }
+
+        // Repoda hiç tag yok: branch'in son commit'ine düş (henüz tag atılmamış proje).
+        return [$this->resolveBranchSha($owner, $repo, $branch, $token), null];
     }
 
     /**
@@ -120,21 +287,124 @@ final class Updater
     }
 
     /**
-     * @return array{sha:?string, deployed_at:?string, previous_sha:?string}
+     * Şu an sunucuda kayıtlı olan sürüm (git tag). Repo hiç tag'lenmediyse null.
+     *
+     * @return string|null
+     */
+    public function deployedVersion()
+    {
+        $state = $this->readState();
+
+        return $state['version'] ?? null;
+    }
+
+    /**
+     * @return array{sha:?string, version:?string, deployed_at:?string, previous_sha:?string, previous_version:?string, changelog:array}
      */
     public function readState(): array
     {
+        $empty = [
+            'sha' => null, 'version' => null, 'deployed_at' => null,
+            'previous_sha' => null, 'previous_version' => null, 'changelog' => [],
+        ];
+
         $path = $this->stateFile();
         if (!is_file($path)) {
-            return ['sha' => null, 'deployed_at' => null, 'previous_sha' => null];
+            return $empty;
         }
 
         $data = json_decode((string) file_get_contents($path), true);
 
-        return is_array($data) ? $data : ['sha' => null, 'deployed_at' => null, 'previous_sha' => null];
+        return is_array($data) ? array_merge($empty, $data) : $empty;
     }
 
-    private function resolveSha(string $owner, string $repo, string $branch, string $token): string
+    /**
+     * Repodaki tüm tag'leri (isim + commit sha) döner. Tag yoksa boş dizi.
+     *
+     * @return array<int,array{name:string,sha:string}>
+     */
+    private function fetchTags(string $owner, string $repo, string $token): array
+    {
+        $url = "https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=100";
+        [$status, $body] = $this->httpGet($url, $this->githubHeaders($token, 'application/vnd.github+json'));
+
+        if ($status !== 200) {
+            throw new HttpException(
+                "GitHub'dan etiket (tag) listesi alınamadı (HTTP {$status}).",
+                'UPDATE_GITHUB',
+                502
+            );
+        }
+
+        $data = json_decode($body, true);
+        if (!is_array($data)) {
+            return [];
+        }
+
+        $tags = [];
+        foreach ($data as $row) {
+            if (!empty($row['name']) && !empty($row['commit']['sha'])) {
+                $tags[] = ['name' => (string) $row['name'], 'sha' => (string) $row['commit']['sha']];
+            }
+        }
+
+        return $tags;
+    }
+
+    /**
+     * Semver benzeri (1.2.3, v1.2.3, 1.2, 1 gibi) tag'ler arasından en büyüğünü seçer.
+     * Semver'e uymayan tag'ler (örn. "nightly") sıralamaya katılmaz.
+     *
+     * @param array<int,array{name:string,sha:string}> $tags
+     * @return array{name:string,sha:string}|null
+     */
+    private function pickLatestTag(array $tags)
+    {
+        $best = null;
+        $bestVersion = null;
+
+        foreach ($tags as $tag) {
+            $normalized = ltrim($tag['name'], 'vV');
+            if (preg_match('/^\d+(\.\d+){0,2}/', $normalized) !== 1) {
+                continue;
+            }
+
+            if ($bestVersion === null || version_compare($normalized, $bestVersion, '>')) {
+                $bestVersion = $normalized;
+                $best = $tag;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * İstenen tag adını arar. "1.4.0" <-> "v1.4.0" farkını tolere eder.
+     *
+     * @param array<int,array{name:string,sha:string}> $tags
+     * @return array{name:string,sha:string}|null
+     */
+    private function findTag(array $tags, string $wanted)
+    {
+        $wanted = trim($wanted);
+
+        foreach ($tags as $tag) {
+            if ($tag['name'] === $wanted) {
+                return $tag;
+            }
+        }
+
+        $alt = (strncasecmp($wanted, 'v', 1) === 0) ? substr($wanted, 1) : ('v' . $wanted);
+        foreach ($tags as $tag) {
+            if ($tag['name'] === $alt) {
+                return $tag;
+            }
+        }
+
+        return null;
+    }
+
+    private function resolveBranchSha(string $owner, string $repo, string $branch, string $token): string
     {
         $url = "https://api.github.com/repos/{$owner}/{$repo}/commits/{$branch}";
         [$status, $body] = $this->httpGet($url, $this->githubHeaders($token, 'application/vnd.github+json'));
@@ -400,12 +670,21 @@ final class Updater
         @rmdir($dir);
     }
 
-    private function writeState(string $sha, $previousSha): void
+    /**
+     * @param string|null $version
+     * @param string|null $previousSha
+     * @param string|null $previousVersion
+     * @param array<int,array{sha:string,message:string}> $changelog
+     */
+    private function writeState(string $sha, $version, $previousSha, $previousVersion, array $changelog = []): void
     {
         $state = [
-            'sha'          => $sha,
-            'previous_sha' => $previousSha,
-            'deployed_at'  => date('Y-m-d H:i:s'),
+            'sha'              => $sha,
+            'version'          => $version,
+            'previous_sha'     => $previousSha,
+            'previous_version' => $previousVersion,
+            'changelog'        => $changelog,
+            'deployed_at'      => date('Y-m-d H:i:s'),
         ];
         file_put_contents($this->stateFile(), json_encode($state, JSON_PRETTY_PRINT));
     }
