@@ -48,6 +48,25 @@ return [
     'homes_management_use_favorite_column' => false,
     'homes_management_use_opportunity_column' => false,
 
+    // Homes management iptal sarti select'i icin sayfalar{dbtable}.id degeri.
+    // Siteye gore degisirse app.local.php icinde [1 => 4, 2 => 12] gibi override edilebilir.
+    'homes_management_cancellation_policy_page_id' => 4,
+
+    // Siteye gore kolon suffix'i. app.local.php icinde projeye gore override edilebilir.
+    'site_column_suffixes' => [
+        1 => '',
+        2 => '_s2',
+        3 => '_s3',
+    ],
+
+    // Tekil kolonlar genel suffix'ten farkliysa burada override edilebilir.
+    // Ornek: [2 => ['doviz' => '', 'kur' => '_s2']]
+    'site_field_suffixes' => [
+        3 => [
+            'depozito' => '',
+        ],
+    ],
+
     // IP beyaz liste. Boş bırakılırsa IP kontrolü KAPALI olur.
     'allowed_ips' => [
         '31.210.157.219', // natsisa

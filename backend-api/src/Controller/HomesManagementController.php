@@ -31,15 +31,21 @@ final class HomesManagementController extends Controller
      * @query missing_year int If 1, returns homes without season in year
      * @query document string Comma separated document filters
      * @query sort int 1/2 order, 3/4 id
+     * @query site int Site id
      */
     public function index(): void
     {
         $pdo = $this->db->pdo();
-        $suffix = defined('UZANTI') ? (string) constant('UZANTI') : '';
-        $activeColumn = 'h.aktif' . $suffix;
-        $showcaseColumn = 'h.vitrin' . $suffix;
-        $favoriteColumn = 'h.favori' . $suffix;
-        $opportunityColumn = 'h.firsat' . $suffix;
+        $siteId = $this->siteId();
+        $currentSite = $this->siteInfo($pdo, $siteId);
+        $activeColumn = 'h.' . $this->siteColumn('aktif', $siteId);
+        $showcaseColumn = 'h.' . $this->siteColumn('vitrin', $siteId);
+        $favoriteColumn = 'h.' . $this->siteColumn('favori', $siteId);
+        $opportunityColumn = 'h.' . $this->siteColumn('firsat', $siteId);
+        $titleColumn = 'h.' . $this->siteColumn('baslik', $siteId);
+        $imageColumn = 'h.' . $this->siteColumn('resim', $siteId);
+        $depositColumn = 'h.' . $this->siteColumn('depozito', $siteId);
+        $regionTitleColumn = 'd.' . $this->siteColumn('baslik', $siteId);
 
         $pageRaw = $this->p('page') !== '' ? $this->p('page') : $this->p('sayfa', '1');
         $allRows = strtolower($pageRaw) === 'tumu' || strtolower($this->p('per_page')) === 'tumu' || $this->p('per_page') === '0';
@@ -51,13 +57,23 @@ final class HomesManagementController extends Controller
         $params = [];
         $hasTypeFilter = false;
 
+        if ($siteId > 1) {
+            $where[] = "EXISTS (
+                SELECT 1
+                FROM tip siteTip
+                WHERE siteTip.cat = {$siteId}
+                  AND ISNULL(siteTip.aktif, 0) = 1
+                  AND (h.emlak_tipi = siteTip.id OR ',' + REPLACE(h.kategori, ' ', '') + ',' LIKE '%,' + CONVERT(varchar(32), siteTip.id) + ',%')
+            )";
+        }
+
         $search = $this->p('keyword') !== '' ? $this->p('keyword') : $this->p('kelime');
         $title = $this->p('title') !== '' ? $this->p('title') : $this->p('baslik');
         if ($title !== '') {
-            $this->addTextSearchFilter($where, $params, $suffix, $title, 'title', false);
+            $this->addTextSearchFilter($where, $params, $titleColumn, $title, 'title', false);
         }
         if ($search !== '') {
-            $this->addTextSearchFilter($where, $params, $suffix, $search, 'keyword', true);
+            $this->addTextSearchFilter($where, $params, $titleColumn, $search, 'keyword', true);
         }
 
         $typeRaw = $this->p('type') !== '' ? $this->p('type') : $this->p('tip');
@@ -166,17 +182,25 @@ final class HomesManagementController extends Controller
 SELECT
     COUNT(*) OVER() AS totalCount,
     h.id,
+    {$siteId} AS site_id,
     h.evkodu AS code,
-    h.baslik{$suffix} AS title,
-    h.baslik{$suffix} AS gavel_title,
+    {$titleColumn} AS title,
+    {$titleColumn} AS gavel_title,
     h.siralama AS sort_order,
-    h.resim AS image,
+    {$imageColumn} AS image,
+    h.yatak_odasi AS bedroom_count,
+    h.kisi AS capacity,
+    h.banyo AS bathroom_count,
+    h.kazancorani AS earning_rate,
+    {$depositColumn} AS deposit_percentage,
+    ISNULL(h.bakimciad, '') AS caretaker_name,
+    ISNULL(h.bakimcitel, '') AS caretaker_phone,
     " . $this->selectValue($activeColumn) . " AS active,
     " . $this->selectValue($showcaseColumn) . " AS showcase,
     " . $this->selectValue($favoriteColumn) . " AS favorite,
     " . $this->selectValue($opportunityColumn) . " AS opportunity,
     d.id AS region_id,
-    d.baslik AS region_title,
+    {$regionTitleColumn} AS region_title,
     ISNULL(gavel.gavel, 0) AS document_passive,
     CASE WHEN ISNULL(gavel.gavel, 0) = 0 THEN 'default' ELSE '' END AS document_button_class,
     calendar.exists_value AS rental_calendar,
@@ -194,7 +218,7 @@ OUTER APPLY (
     SELECT CASE WHEN EXISTS (
         SELECT 1 FROM sonDakika sd
         WHERE sd.islem_id = h.id
-          AND sd.site = 1
+          AND sd.site = {$siteId}
           AND CONVERT(date, sd.tarih2, 103) >= CONVERT(date, GETDATE(), 103)
     ) THEN 1 ELSE 0 END AS exists_value
 ) AS lastMinute
@@ -203,6 +227,7 @@ OUTER APPLY (
         SELECT 1 FROM sezonlar sz
         WHERE sz.islem = 'emlak'
           AND sz.islem_id = h.id
+          AND sz.site = {$siteId}
           AND CONVERT(date, sz.tarih1, 103) <= CONVERT(date, :yearEnd, 23)
           AND CONVERT(date, sz.tarih2, 103) >= CONVERT(date, :yearStart, 23)
     )" : '0 = 1') . " THEN 1 ELSE 0 END AS exists_value
@@ -229,12 +254,20 @@ WHERE {$whereSql}
             $imageList = $this->imageList((string) $row['image'], $cdnBase);
             $row = [
                 'id' => (int) $row['id'],
+                'site_id' => (int) $row['site_id'],
                 'code' => (string) $row['code'],
                 'title' => (string) $row['title'],
                 'gavel_title' => (string) $row['gavel_title'],
                 'sort_order' => (int) $row['sort_order'],
                 'image' => $imageList ? $imageList[0] : '',
                 'image_list' => $imageList,
+                'bedroom_count' => (int) $row['bedroom_count'],
+                'capacity' => (int) $row['capacity'],
+                'bathroom_count' => (int) $row['bathroom_count'],
+                'earning_rate' => (float) $row['earning_rate'],
+                'deposit_percentage' => (float) $row['deposit_percentage'],
+                'caretaker_name' => (string) $row['caretaker_name'],
+                'caretaker_phone' => (string) $row['caretaker_phone'],
                 'active' => (bool) $row['active'],
                 'showcase' => (bool) $row['showcase'],
                 'favorite' => (bool) $row['favorite'],
@@ -254,6 +287,7 @@ WHERE {$whereSql}
             'items' => $rows,
             'meta' => [
                 'total' => $total,
+                'site' => $currentSite,
                 'page' => $page,
                 'per_page' => $allRows ? $total : $perPage,
                 'total_pages' => $allRows ? 1 : (int) ceil($total / max(1, $perPage)),
@@ -276,13 +310,105 @@ WHERE {$whereSql}
         return is_numeric($v) ? (int) $v : $default;
     }
 
+    private function siteId(): int
+    {
+        if ($this->p('site') !== '') {
+            return max(1, (int) $this->p('site'));
+        }
+
+        return defined('PRICE_SITE') ? max(1, (int) constant('PRICE_SITE')) : 1;
+    }
+
+    private function siteSuffix(int $siteId): string
+    {
+        if ($siteId === 1) {
+            return '';
+        }
+
+        $suffixes = $this->app['site_column_suffixes'] ?? [];
+        if (is_array($suffixes)) {
+            if (array_key_exists($siteId, $suffixes)) {
+                return $this->safeSuffix((string) $suffixes[$siteId]);
+            }
+            if (array_key_exists((string) $siteId, $suffixes)) {
+                return $this->safeSuffix((string) $suffixes[(string) $siteId]);
+            }
+        }
+
+        global $SITES;
+        if (isset($SITES[$siteId]) && is_array($SITES[$siteId]) && isset($SITES[$siteId]['dbtable'])) {
+            return $this->safeSuffix((string) $SITES[$siteId]['dbtable']);
+        }
+
+        return $siteId > 1 ? '_s' . $siteId : '';
+    }
+
+    private function siteColumn(string $baseColumn, int $siteId): string
+    {
+        return $baseColumn . $this->fieldSuffix($baseColumn, $siteId);
+    }
+
+    private function fieldSuffix(string $baseColumn, int $siteId): string
+    {
+        $fieldSuffixes = $this->app['site_field_suffixes'] ?? [];
+        if (is_array($fieldSuffixes)) {
+            $siteFields = $fieldSuffixes[$siteId] ?? ($fieldSuffixes[(string) $siteId] ?? null);
+            if (is_array($siteFields) && array_key_exists($baseColumn, $siteFields)) {
+                return $this->safeSuffix((string) $siteFields[$baseColumn]);
+            }
+        }
+
+        return $this->siteSuffix($siteId);
+    }
+
+    private function safeSuffix(string $suffix): string
+    {
+        return $suffix === '' || preg_match('/^_[A-Za-z0-9]+$/', $suffix) === 1 ? $suffix : '';
+    }
+
+    /**
+     * @return array{id:int,isim:string}
+     */
+    private function siteInfo(PDO $pdo, int $siteId): array
+    {
+        try {
+            $stmt = $pdo->prepare(
+                "SELECT TOP 1 id, site
+                 FROM tip
+                 WHERE id = :site"
+            );
+            $stmt->bindValue(':site', $siteId, PDO::PARAM_INT);
+            $stmt->execute();
+            $row = $stmt->fetch();
+        } catch (\PDOException $e) {
+            $row = false;
+        }
+
+        $name = is_array($row) ? $this->siteDisplayName((string) $row['site']) : '';
+        if ($name === '') {
+            $name = 'Site ' . $siteId;
+        }
+
+        return [
+            'id' => $siteId,
+            'isim' => $name,
+        ];
+    }
+
+    private function siteDisplayName(string $site): string
+    {
+        $parts = explode(',', $site, 2);
+
+        return trim($parts[0]);
+    }
+
     /**
      * @param array<int,string> $where
      */
     private function addTextSearchFilter(
         array &$where,
         array &$params,
-        string $suffix,
+        string $titleColumn,
         string $value,
         string $prefix,
         bool $includeExactId
@@ -297,13 +423,13 @@ WHERE {$whereSql}
         }
 
         $parts = [];
-        $titleNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE(h.baslik{$suffix}, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
+        $titleNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE({$titleColumn}, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
         $codeNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE(h.evkodu, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
         $valueNoSpace = preg_replace('/\s+/', '', $value) ?? '';
         foreach ($tokens as $index => $token) {
             $titleParam = ':' . $prefix . 'Name' . $index;
             $codeParam = ':' . $prefix . 'Code' . $index;
-            $parts[] = "(h.baslik{$suffix} LIKE {$titleParam} OR h.evkodu LIKE {$codeParam})";
+            $parts[] = "({$titleColumn} LIKE {$titleParam} OR h.evkodu LIKE {$codeParam})";
             $params[$titleParam] = '%' . $token . '%';
             $params[$codeParam] = '%' . $token . '%';
         }
@@ -317,9 +443,9 @@ WHERE {$whereSql}
             $params[$codeNoSpaceParam] = '%' . $valueNoSpace . '%';
         }
         if ($includeExactId) {
-            $idParam = ':' . $prefix . 'Exact';
-            $where[] = "({$textWhere} OR CONVERT(varchar(32), h.id) = {$idParam})";
-            $params[$idParam] = $value;
+            $exactIdParam = ':' . $prefix . 'Exact';
+            $where[] = "({$textWhere} OR CONVERT(varchar(32), h.id) = {$exactIdParam})";
+            $params[$exactIdParam] = $value;
             return;
         }
 

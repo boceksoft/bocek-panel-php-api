@@ -49,6 +49,18 @@ return [
     // Bu sitede acenta_users tablosu yoksa false yap.
     // 'reservation_filters_use_acenta_users' => false,
 
+    // Iptal sarti select'i icin sayfalar{dbtable}.id degeri farkliysa override et.
+    // Tek deger: 'homes_management_cancellation_policy_page_id' => 4,
+    // Site bazli: 'homes_management_cancellation_policy_page_id' => [1 => 4, 2 => 12],
+
+    // Site kolon suffix yapisi farkliysa override et.
+    // Ornek: site 2 genel olarak _s2 kolonlarini kullaniyorsa:
+    // 'site_column_suffixes' => [1 => '', 2 => '_s2', 3 => '_s3'],
+
+    // Tekil kolonlar farkli davranacaksa override et.
+    // Ornek: site 2 depozito_s2 yoksa ortak depozito kolonunu kullan:
+    // 'site_field_suffixes' => [2 => ['depozito' => '']],
+
     // Bu sitede farklı IP kısıtı gerekiyorsa override et.
     // 'allowed_ips' => ['1.2.3.4'],
 
