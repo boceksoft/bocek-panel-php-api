@@ -18,6 +18,21 @@
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
 
+IF OBJECT_ID('dbo.blockList', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.blockList
+    (
+        id           int IDENTITY(1,1) NOT NULL
+            CONSTRAINT PK_blockList PRIMARY KEY,
+        ip           nvarchar(200) NULL,
+        [minute]     int NULL,
+        createdDate  datetime NULL
+            CONSTRAINT DF_blockList_createdDate DEFAULT GETDATE(),
+        modifiedDate datetime NULL
+            CONSTRAINT DF_blockList_modifiedDate DEFAULT GETDATE()
+    );
+END;
+
 IF OBJECT_ID('dbo.havuztipitanimlari', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.havuztipitanimlari
