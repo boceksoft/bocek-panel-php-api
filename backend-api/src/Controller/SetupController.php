@@ -13,6 +13,35 @@ use App\Core\HttpException;
 final class SetupController extends Controller
 {
     /**
+     * Adds columns used by the current API SQL queries when they are missing.
+     *
+     * @Post("collums")
+     */ 
+    public function collums(): void
+    {
+        $sqlPath = dirname(__DIR__, 2) . '/setup-collums.sql';
+        if (!is_file($sqlPath)) {
+            throw new HttpException('Kolon setup SQL dosyasi bulunamadi.', 'SETUP_SQL_NOT_FOUND', 500);
+        }
+
+        $sql = file_get_contents($sqlPath);
+        if (!is_string($sql) || trim($sql) === '') {
+            throw new HttpException('Kolon setup SQL dosyasi bos.', 'SETUP_SQL_EMPTY', 500);
+        }
+
+        try {
+            $this->execSqlBatches($sql);
+        } catch (\PDOException $e) {
+            throw new HttpException('Kolon setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
+        }
+
+        $this->response->success([
+            'setup' => 'collums',
+            'status' => 'completed',
+        ]);
+    }
+
+    /**
      * Creates/backfills dbo.havuztanimlamari from dbo.homes pool columns.
      *
      * @Post("havuztanimlamari")
@@ -132,5 +161,22 @@ WHEN NOT MATCHED THEN
             ],
             'status' => 'completed',
         ]);
+    }
+
+    private function execSqlBatches(string $sql): void
+    {
+        $batches = preg_split('/^\s*GO\s*;?\s*$/mi', $sql);
+        if (!is_array($batches)) {
+            $batches = [$sql];
+        }
+
+        foreach ($batches as $batch) {
+            $batch = trim($batch);
+            if ($batch === '') {
+                continue;
+            }
+
+            $this->db->pdo()->exec($batch);
+        }
     }
 }

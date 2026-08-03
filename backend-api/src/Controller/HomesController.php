@@ -1,9 +1,10 @@
 <?php
 
+
 declare(strict_types=1);
 
 namespace App\Controller;
-
+error_reporting(E_ALL);
 use DateTime;
 use PDO;
 
@@ -266,6 +267,10 @@ final class HomesController extends Controller
             }
             if (isset($row['cikisbosluk']) && (int) $row['cikisbosluk'] === 999) {
                 $row['cikisbosluk'] = null;
+            }
+
+            if (isset($row['url'])) {
+                $row['url'] = $this->fullHomeUrl((string) $row['url']);
             }
 
             $resimStr = isset($row['resim']) ? (string) $row['resim'] : '';
@@ -541,7 +546,7 @@ WHERE h.aktif{$c['dbt']} = 1
         $v = $this->p($key);
 
         return is_numeric($v) ? (int) $v : $default;
-    }  
+    }
 
     /**
      * tip=7&tip=12 gibi tekrarlı parametreleri virgülle birleştirir.
@@ -603,5 +608,17 @@ WHERE h.aktif{$c['dbt']} = 1
         });
 
         return $valid ? implode(',', $valid) : '';
+    }
+
+    private function fullHomeUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || preg_match('#^https?://#i', $url) === 1) {
+            return $url;
+        }
+
+        $domain = defined('Domain') ? rtrim((string) constant('Domain'), '/') : '';
+
+        return $domain !== '' ? $domain . '/' . ltrim($url, '/') : $url;
     }
 }

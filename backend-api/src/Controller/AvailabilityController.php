@@ -45,6 +45,11 @@ final class AvailabilityController extends Controller
             throw new HttpException('Gecersiz ruleshomes homes id kolon ayari.', 'CONFIG_ERROR', 500);
         }
         $ruleshomesHomesIdSql = 'rh.[' . $ruleshomesHomesIdColumn . ']';
+        $rulesruletypesRulesIdColumn = (string) ($this->app['rulesruletypes_rules_id_column'] ?? 'rulesId');
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $rulesruletypesRulesIdColumn)) {
+            throw new HttpException('Gecersiz rulesruletypes rules id kolon ayari.', 'CONFIG_ERROR', 500);
+        }
+        $rulesruletypesRulesIdSql = 'rulesruletypes.[' . $rulesruletypesRulesIdColumn . ']';
 
         // Home bilgisi (döviz + sembol)
         $homeStmt = $pdo->prepare(
@@ -135,7 +140,7 @@ final class AvailabilityController extends Controller
                         CONVERT(VARCHAR, r.date2, 103) as date2,
                         CONVERT(VARCHAR, ruletypes.id) as id,
                         rulesruletypes.[value] as [value]
-                        FROM rulesruletypes INNER JOIN ruletypes ON ruletypes.id = rulesruletypes.ruletypes WHERE rulesid = r.id FOR JSON PATH) AS maddeler
+                        FROM rulesruletypes INNER JOIN ruletypes ON ruletypes.id = rulesruletypes.ruletypes WHERE " . $rulesruletypesRulesIdSql . " = r.id FOR JSON PATH) AS maddeler
                         FROM ruleshomes rh INNER JOIN rules r ON r.id = " . $ruleshomesRulesIdSql . " WHERE r.isactive = 1 AND " . $ruleshomesHomesIdSql . " = " . $entityId . " FOR JSON PATH),'') AS kurallar ) AS kurallar,
                 (SELECT 
                     ISNULL(STRING_AGG(

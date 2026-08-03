@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Core\HttpException;
 use PDO;
 
 /*
@@ -26,6 +27,11 @@ final class ReservationsController extends Controller
     {
         $pdo = $this->db->pdo();
         $useAcentaUsers = !empty($this->app['reservation_filters_use_acenta_users']);
+        $useMaliyetColumn = $this->configBool('reservations_use_maliyet_column', false);
+        $defterReservationIdColumnSql = $this->qualifiedColumn(
+            'defter',
+            $this->configString('defter_reservation_id_column')
+        );
 
         // Sayfalama
         $page       = max(1, $this->pInt('page', $this->pInt('s', 1)));
@@ -176,7 +182,14 @@ final class ReservationsController extends Controller
 
         $orderSql = 'ORDER BY kayitlar.id DESC';
 
-        $sql = $this->buildSql($whereSql, $orderSql, $allRows, $useAcentaUsers);
+        $sql = $this->buildSql(
+            $whereSql,
+            $orderSql,
+            $allRows,
+            $useAcentaUsers,
+            $useMaliyetColumn,
+            $defterReservationIdColumnSql
+        );
 
         // Çalıştır
         $stmt = $pdo->prepare($sql);
@@ -241,8 +254,19 @@ final class ReservationsController extends Controller
         ]);
     }
 
-    private function buildSql(string $whereSql, string $orderSql, bool $allRows, bool $useAcentaUsers): string
+    private function buildSql(
+        string $whereSql,
+        string $orderSql,
+        bool $allRows,
+        bool $useAcentaUsers,
+        bool $useMaliyetColumn,
+        string $defterReservationIdColumnSql
+    ): string
     {
+        $maliyetValueSql = $useMaliyetColumn
+            ? 'ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.maliyet)), 0)'
+            : '0';
+
         $acentaSelectSql = $useAcentaUsers
             ? "
     a.kayitId AS acenta_rez_no,
@@ -283,23 +307,7 @@ SELECT
                 tutar.kar * tutar.kur_carpan
         END
     ) OVER() AS sumKar,
-    SUM(
-        CASE
-            WHEN tutar.maliyet = 0 THEN
-                (tutar.toplam_tutar * tutar.kur_carpan)
-                -
-                (
-                    CASE
-                        WHEN tutar.kar = 0 THEN
-                            (tutar.toplam_tutar * tutar.kur_carpan) / 100 * ISNULL(TRY_CONVERT(float, kayitlar.kazancorani), 0)
-                        ELSE
-                            tutar.kar * tutar.kur_carpan
-                    END
-                )
-            ELSE
-                tutar.maliyet * tutar.kur_carpan
-        END
-    ) OVER() AS sumMaliyet,
+    SUM(tutar.maliyet * tutar.kur_carpan) OVER() AS sumMaliyet,
     SUM(tutar.temizlik * tutar.kur_carpan) OVER() AS sumTemizlik,
     kayitlar.id, kayitlar.site, kayitlar.evid,
     homes.id AS home_id, homes.baslik AS villa_adi, homes.baslik_s3 AS villa_adi_s3, homes.url AS villa_url,
@@ -333,21 +341,7 @@ SELECT
         ELSE
             tutar.kar * tutar.kur_carpan
     END AS kar_tl,
-    CASE
-        WHEN tutar.maliyet = 0 THEN
-            (tutar.toplam_tutar * tutar.kur_carpan)
-            -
-            (
-                CASE
-                    WHEN tutar.kar = 0 THEN
-                        (tutar.toplam_tutar * tutar.kur_carpan) / 100 * ISNULL(TRY_CONVERT(float, kayitlar.kazancorani), 0)
-                    ELSE
-                        tutar.kar * tutar.kur_carpan
-                END
-            )
-        ELSE
-            tutar.maliyet * tutar.kur_carpan
-    END AS maliyet_tl,
+    tutar.maliyet * tutar.kur_carpan AS maliyet_tl,
     tutar.temizlik * tutar.kur_carpan AS temizlik_tl,
     kayitlar.odeme AS odeme_sekli,
     CASE kayitlar.odeme WHEN 1 THEN N'Kredi Kartı' WHEN 2 THEN N'Havale' WHEN 3 THEN N'Western Union' WHEN 4 THEN N'Sanal Kart' WHEN 5 THEN N'Sanal Havale' WHEN 6 THEN N'Nakit' ELSE N'-' END AS odeme_sekli_text,
@@ -381,13 +375,13 @@ CROSS APPLY (
         ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.toplam_tutar)), 0) AS toplam_tutar,
         ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.on_odeme)), 0) AS on_odeme,
         ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.kalan)), 0) AS kalan,
-        ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.maliyet)), 0) AS maliyet,
+        {$maliyetValueSql} AS maliyet,
         ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.temizlik)), 0) AS temizlik,
         ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.kar)), 0) AS kar,
         CASE WHEN kayitlar.doviz = 'tl' THEN 1 ELSE ISNULL(TRY_CONVERT(float, kayitlar.kur), 1) END AS kur_carpan
 ) AS tutar
 CROSS APPLY (
-    SELECT COUNT(defter.id) AS total FROM defter WHERE defter.rezid = kayitlar.id
+    SELECT COUNT(defter.id) AS total FROM defter WHERE {$defterReservationIdColumnSql} = kayitlar.id
 ) AS yorumsay
 CROSS APPLY (  
     SELECT COUNT(kb.id) AS total FROM kisi_bilgileri kb WHERE kb.siparis_kodu = kayitlar.id
@@ -670,5 +664,48 @@ $orderSql
     private function trMoney(float $n): string
     {
         return number_format($n, 2, ',', '.');
+    }
+
+    private function configBool(string $key, bool $default): bool
+    {
+        if (!array_key_exists($key, $this->app)) {
+            return $default;
+        }
+
+        $value = $this->app[$key];
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return $value !== 0;
+        }
+
+        $parsed = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+        return $parsed === null ? $default : $parsed;
+    }
+
+    private function qualifiedColumn(string $alias, string $column): string
+    {
+        if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $column) !== 1) {
+            throw new HttpException('Gecersiz defter rezervasyon kolon ayari.', 'CONFIG_ERROR', 500);
+        }
+
+        return $alias . '.[' . $column . ']';
+    }
+
+    private function configString(string $key): string
+    {
+        if (!array_key_exists($key, $this->app) || trim((string) $this->app[$key]) === '') {
+            throw new HttpException('Eksik config ayari: ' . $key, 'CONFIG_ERROR', 500, null, [
+                'config_path' => $this->app['_config_path'] ?? null,
+                'local_config_path' => $this->app['_local_config_path'] ?? null,
+                'local_config_loaded' => $this->app['_local_config_loaded'] ?? null,
+                'loaded_config_keys' => implode(',', array_keys($this->app)),
+            ]);
+        }
+
+        return trim((string) $this->app[$key]);
     }
 }

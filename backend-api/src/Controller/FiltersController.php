@@ -397,7 +397,7 @@ final class FiltersController extends Controller
             ['id' => 'title', 'baslik' => 'Baslik'],
             ['id' => 'gavel_title', 'baslik' => '7464 Baslik'],
             ['id' => 'sort_order', 'baslik' => 'Siralama'],
-            ['id' => 'image', 'baslik' => 'Resim'], 
+            ['id' => 'image', 'baslik' => 'Resim'],
             ['id' => 'active', 'baslik' => 'Aktif'],
             ['id' => 'showcase', 'baslik' => 'Vitrin'],
             ['id' => 'favorite', 'baslik' => 'Favori'],
@@ -479,7 +479,7 @@ final class FiltersController extends Controller
             ['id' => 'odemeTarihi', 'label' => 'Ödeme Tarihi', 'default' => false, 'orderable' => true, 'class' => 'default'],
             ['id' => 'doviz', 'label' => 'Döviz', 'default' => false, 'orderable' => true, 'class' => 'default'],
             ['id' => 'kur', 'label' => 'Kur', 'default' => false, 'orderable' => true, 'class' => 'default'],
-        ]; 
+        ];
     }
 
     /**

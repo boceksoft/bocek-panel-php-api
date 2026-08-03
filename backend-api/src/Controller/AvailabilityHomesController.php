@@ -22,7 +22,7 @@ final class AvailabilityHomesController extends Controller
      * @query villaadi string Villa adi aramasi
      * @query bolge string Bolge kimlikleri
      * @query kisi int Minimum kisi
-     * @query page int Sayfa 
+     * @query page int Sayfa
      * @query per_page int Sayfa basi kayit
      */
     public function index(): void
@@ -268,7 +268,7 @@ OFFSET :offset ROWS FETCH NEXT :perPage ROWS ONLY";
         }
 
         return null;
-    }
+    } 
 
     private function safeIntList(string $s): string
     {

@@ -14,15 +14,22 @@ $backendRoot = dirname(__DIR__, 2); // backend-api/
 require_once $backendRoot . '/src/Core/Autoloader.php';
 Autoloader::register($backendRoot . '/src');
 
+$appConfigPath = $backendRoot . '/config/app.php';
+
 /** @var array $app */
-$app = require $backendRoot . '/config/app.php';
+$app = require $appConfigPath;
 
 // Sunucuya özel ayarlar (sırlar, base_path/allowed_ips override'ları).
 // Git'e girmez, otomatik güncelleme bu dosyaya DOKUNMAZ.
 $localConfigPath = $backendRoot . '/config/app.local.php';
-if (is_file($localConfigPath)) {
+$localConfigLoaded = is_file($localConfigPath);
+if ($localConfigLoaded) {
     $app = array_merge($app, require $localConfigPath);
 }
+
+$app['_config_path'] = $appConfigPath;
+$app['_local_config_path'] = $localConfigPath;
+$app['_local_config_loaded'] = $localConfigLoaded;
 
 // Repo dışındaki config: $config['db'] ve Domain sabitini tanımlar.
 $config = [];

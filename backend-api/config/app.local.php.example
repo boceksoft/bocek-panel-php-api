@@ -39,6 +39,10 @@ return [
     // Ornekler: 'homesId', 'homesid'
     // 'ruleshomes_homes_id_column' => 'homesId',
 
+    // Bu sitede rulesruletypes tablosundaki rule iliski kolonu farkliysa override et.
+    // Ornekler: 'rulesId', 'rulesid'
+    // 'rulesruletypes_rules_id_column' => 'rulesId',
+
     // Bu sitede redirects tablosunda expiredDate/expiredMode kolonlari yoksa false yap.
     // 'links_use_expiration_columns' => true,
 
@@ -48,6 +52,21 @@ return [
 
     // Bu sitede acenta_users tablosu yoksa false yap.
     // 'reservation_filters_use_acenta_users' => false,
+
+    // Bu sitede kayitlar.maliyet kolonu yoksa false yap.
+    // 'reservations_use_maliyet_column' => false,
+
+    // Bu sitede defter.rezid farkliysa override et.
+    // Ornekler: 'rezid', 'rezId', 'kayitid', 'kayitId'
+    // 'defter_reservation_id_column' => 'rezid',
+
+    // Bu sitede kayitlar.ulke farkliysa override et.
+    // Ornekler: 'ulke', 'ulkeKodu', 'countryCode'
+    // 'reservations_country_code_column' => 'ulke',
+
+    // Kolon tanimi setup endpoint'i farkli tabloya yazacaksa override et.
+    // Ornekler: 'kolonlar', 'dbo.kolonlar'
+    // 'kolonlar_table' => 'kolonlar',
 
     // Iptal sarti select'i icin sayfalar{dbtable}.id degeri farkliysa override et.
     // Tek deger: 'homes_management_cancellation_policy_page_id' => 4,

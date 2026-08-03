@@ -337,7 +337,7 @@ final class HomesManagementDetailUpdateController extends Controller
             return [];
         }
 
-        if (strpos($value, '#') !== false) { 
+        if (strpos($value, '#') !== false) {
             return explode('#', $value);
         }
 
@@ -466,22 +466,22 @@ final class HomesManagementDetailUpdateController extends Controller
 
         $single = [];
         foreach ([
-            'sezon',
-            'tarih1',
-            'tarih2',
-            'baslangicTarihi',
-            'bitisTarihi',
-            'fiyat',
-            'gecelik_fiyat',
-            'haftalik_fiyat',
-            'minKonaklama',
-            'mingece',
-            'gece',
-            'fiyatTipi',
-            'fiyat_tipi',
-            'sezonId',
-            'seasonId',
-        ] as $key) {
+                     'sezon',
+                     'tarih1',
+                     'tarih2',
+                     'baslangicTarihi',
+                     'bitisTarihi',
+                     'fiyat',
+                     'gecelik_fiyat',
+                     'haftalik_fiyat',
+                     'minKonaklama',
+                     'mingece',
+                     'gece',
+                     'fiyatTipi',
+                     'fiyat_tipi',
+                     'sezonId',
+                     'seasonId',
+                 ] as $key) {
             if (array_key_exists($key, $payload)) {
                 $single[$key] = $payload[$key];
             }
@@ -517,32 +517,32 @@ final class HomesManagementDetailUpdateController extends Controller
 
         $single = [];
         foreach ([
-            'extraPaymentTypeId',
-            'typeId',
-            'tipId',
-            'typeCode',
-            'tip',
-            'kod',
-            'seasonIds',
-            'sezonIds',
-            'seasonId',
-            'sezonId',
-            'tarih1',
-            'tarih2',
-            'baslangicTarihi',
-            'bitisTarihi',
-            'fiyat',
-            'value',
-            'amount',
-            'currencyId',
-            'paraBirimi',
-            'currency_id',
-            'fiyatTipi',
-            'fiyat_tipi',
-            'priceType',
-            'description',
-            'aciklama',
-        ] as $key) {
+                     'extraPaymentTypeId',
+                     'typeId',
+                     'tipId',
+                     'typeCode',
+                     'tip',
+                     'kod',
+                     'seasonIds',
+                     'sezonIds',
+                     'seasonId',
+                     'sezonId',
+                     'tarih1',
+                     'tarih2',
+                     'baslangicTarihi',
+                     'bitisTarihi',
+                     'fiyat',
+                     'value',
+                     'amount',
+                     'currencyId',
+                     'paraBirimi',
+                     'currency_id',
+                     'fiyatTipi',
+                     'fiyat_tipi',
+                     'priceType',
+                     'description',
+                     'aciklama',
+                 ] as $key) {
             if (array_key_exists($key, $payload)) {
                 $single[$key] = $payload[$key];
             }
@@ -1341,15 +1341,15 @@ final class HomesManagementDetailUpdateController extends Controller
     {
         $sections = [];
         foreach ([
-            'havuzlar',
-            'odalar',
-            'indirimler',
-            'konumnotlari',
-            'ozelliklerVeOlanaklar.havuzlar',
-            'ozelliklerVeOlanaklar.odalar',
-            'fiyatlandirmaVeKurallar.indirimler',
-            'konumBilgileri.konumNotlari',
-        ] as $path) {
+                     'havuzlar',
+                     'odalar',
+                     'indirimler',
+                     'konumnotlari',
+                     'ozelliklerVeOlanaklar.havuzlar',
+                     'ozelliklerVeOlanaklar.odalar',
+                     'fiyatlandirmaVeKurallar.indirimler',
+                     'konumBilgileri.konumNotlari',
+                 ] as $path) {
             if ($this->hasPath($payload, $path)) {
                 $sections[] = $path;
             }

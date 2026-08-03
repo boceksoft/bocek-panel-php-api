@@ -80,7 +80,7 @@ final class HomesManagementController extends Controller
         if ($typeRaw !== '' && $typeRaw !== '0') {
             $typeIds = array_values(array_filter(array_map('intval', explode(',', $typeRaw)), function ($value) {
                 return $value > 0;
-            })); 
+            }));
             if ($typeIds) {
                 $hasTypeFilter = true;
                 $typeWhere = [];
@@ -491,7 +491,7 @@ WHERE {$whereSql}
     private function safeIntList(string $s): string
     {
         $parts = array_map('intval', explode(',', $s));
-        $valid = array_filter($parts, function ($v) { 
+        $valid = array_filter($parts, function ($v) {
             return $v > 0;
         });
 

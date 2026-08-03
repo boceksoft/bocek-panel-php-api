@@ -18,7 +18,7 @@ final class HomesManagementDetailController extends Controller
      *
      * @Get
      * @query id int required Emlak kimliği
-     */ 
+     */
     public function index(): void
     {
         $id = (int) $this->request->query('id', 0);
@@ -27,7 +27,7 @@ final class HomesManagementDetailController extends Controller
         }
 
         $siteId = max(1, (int) $this->request->query('site', 1));
-        $pdo = $this->db->pdo();  
+        $pdo = $this->db->pdo();
 
         $rs = $this->fetchOne(
             $pdo,
@@ -47,7 +47,7 @@ final class HomesManagementDetailController extends Controller
             [':id' => $id]
         );
 
-        if (!$rs) { 
+        if (!$rs) {
             throw new HttpException('Belirtilen ID ile emlak bulunamadı.', 'NOT_FOUND', 404);
         }
 
@@ -274,7 +274,13 @@ final class HomesManagementDetailController extends Controller
     private function onlyBaslik(array $rows): array
     {
         return array_map(
-            static fn (array $row): array => ['baslik' => trim((string) ($row['baslik'] ?? '')) !== '' ? $row['baslik'] : ''],
+            static function (array $row): array {
+                return [
+                    'baslik' => trim((string) ($row['baslik'] ?? '')) !== ''
+                        ? $row['baslik']
+                        : ''
+                ];
+            },
             $rows
         );
     }
@@ -1008,13 +1014,26 @@ final class HomesManagementDetailController extends Controller
     {
         $currency = strtolower(trim((string) $value));
 
-        return match ($currency) {
-            'tl', 'try' => 'TRY',
-            'dolar', 'usd' => 'USD',
-            'euro', 'eur' => 'EUR',
-            'pound', 'gbp' => 'GBP',
-            default => $currency !== '' ? strtoupper($currency) : '',
-        };
+        switch ($currency) {
+            case 'tl':
+            case 'try':
+                return 'TRY';
+
+            case 'dolar':
+            case 'usd':
+                return 'USD';
+
+            case 'euro':
+            case 'eur':
+                return 'EUR';
+
+            case 'pound':
+            case 'gbp':
+                return 'GBP';
+
+            default:
+                return $currency !== '' ? strtoupper($currency) : '';
+        }
     }
 
     /**
@@ -1025,7 +1044,11 @@ final class HomesManagementDetailController extends Controller
     {
         return array_filter(
             $row,
-            static fn (string $key): bool => !str_ends_with($key, '_s2'),
+            static function ($key): bool {
+                $key = (string) $key;
+
+                return substr($key, -3) !== '_s2';
+            },
             ARRAY_FILTER_USE_KEY
         );
     }
