@@ -729,3 +729,19 @@ BEGIN
     ALTER TABLE [dbo].[kayitlar] ADD [onaylanmaTarihi2] date NULL;
 END;
 GO
+
+IF OBJECT_ID(N'[dbo].[blockList]', N'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[blockList]
+    (
+        [id]           int IDENTITY(1,1) NOT NULL
+            CONSTRAINT [PK_blockList] PRIMARY KEY,
+        [ip]           nvarchar(200) NULL,
+        [minute]       int NULL,
+        [createdDate]  datetime NULL
+            CONSTRAINT [DF_blockList_createdDate] DEFAULT GETDATE(),
+        [modifiedDate] datetime NULL
+            CONSTRAINT [DF_blockList_modifiedDate] DEFAULT GETDATE()
+    );
+END;
+GO
