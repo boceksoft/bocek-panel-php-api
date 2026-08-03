@@ -723,3 +723,9 @@ BEGIN
     ALTER TABLE [KiralamaTakvimi].[HotelAvailabilityRooms] ADD [IsClosed] bit NULL;
 END;
 GO
+
+IF COL_LENGTH(N'[dbo].[kayitlar]', N'onaylanmaTarihi2') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[kayitlar] ADD [onaylanmaTarihi2] date NULL;
+END;
+GO
