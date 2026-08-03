@@ -43,6 +43,9 @@ return [
     // Rezervasyon filtrelerinde acenta_users tablosundan alt acentalar cekilsin mi?
     'reservation_filters_use_acenta_users' => false,
 
+    // Rezervasyon detayinda islem_kaydi tablosundan belge gecmisi cekilsin mi?
+    'reservation_detail_use_islem_kaydi' => true,
+
     // Homes management ekraninda opsiyonel homes kolonlari varsa true, yoksa false.
     'homes_management_use_showcase_column' => false,
     'homes_management_use_favorite_column' => false,

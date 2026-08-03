@@ -86,7 +86,9 @@ final class ReservationdetailController extends Controller
             [':id' => $id]
         );
 
-        $documentLogs = $this->fetchDocumentLogs($pdo, $id);
+        $documentLogs = $this->configBool('reservation_detail_use_islem_kaydi', true)
+            ? $this->fetchDocumentLogs($pdo, $id)
+            : [];
         $documentState = $this->fetchOne($pdo, 'SELECT * FROM belge_kayitlari WHERE musteriid = :id', [':id' => $id]);
 
         $latestLog = $this->fetchOne(
@@ -712,5 +714,21 @@ final class ReservationdetailController extends Controller
         }
 
         return trim((string) $this->app[$key]);
+    }
+
+    private function configBool(string $key, bool $default): bool
+    {
+        if (!array_key_exists($key, $this->app)) {
+            return $default;
+        }
+
+        $value = $this->app[$key];
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        $filtered = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+        return $filtered === null ? $default : $filtered;
     }
 }
