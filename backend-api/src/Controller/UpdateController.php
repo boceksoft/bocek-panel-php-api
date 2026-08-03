@@ -7,7 +7,7 @@ namespace App\Controller;
 use App\Core\HttpException;
 use App\Core\Updater;
 
-/*
+/* test gidermi
  * Kendi kendini güncelleme kaynağı.
  *   POST /backend-api/update             -> repodaki EN SON git tag'ini indirir, kurar
  *                                            (body: {"version":"1.4.0"} verilirse O tag kurulur)
