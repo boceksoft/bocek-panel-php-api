@@ -71,7 +71,9 @@ return [
     'allowed_ips' => [
         '31.210.157.219', // natsisa
         '78.189.74.10',
+        '37.247.103.149'// natsisa
     ],
+
 
     // Bearer token doğrulaması açık mı? Test için false yapabilirsin.
     'auth_enabled' => true,
