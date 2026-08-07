@@ -37,6 +37,9 @@ final class SetupController extends Controller
 
         $this->response->success([
             'setup' => 'collums',
+            'included_setups' => [
+                'extra-payments',
+            ],
             'status' => 'completed',
         ]);
     }
@@ -78,7 +81,25 @@ final class SetupController extends Controller
      */
     public function extraPayments(): void
     {
-        $sql = "
+        try {
+            $this->execSqlBatches($this->extraPaymentsSql());
+        } catch (\PDOException $e) {
+            throw new HttpException('Ekstra ucret tablolari setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
+        }
+
+        $this->response->success([
+            'setup' => 'extra-payments',
+            'tables' => [
+                'dbo.HomesExtraPaymentTypes',
+                'dbo.HomesExtraPaymentPrices',
+            ],
+            'status' => 'completed',
+        ]);
+    }
+
+    private function extraPaymentsSql(): string
+    {
+        return "
 IF OBJECT_ID('dbo.HomesExtraPaymentTypes', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.HomesExtraPaymentTypes
@@ -90,11 +111,21 @@ BEGIN
         IsDeleted bit NOT NULL CONSTRAINT DF_HomesExtraPaymentTypes_IsDeleted DEFAULT 0,
         IsIncluded bit NOT NULL CONSTRAINT DF_HomesExtraPaymentTypes_IsIncluded DEFAULT 0
     );
+END;
+GO
 
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'UX_HomesExtraPaymentTypes_Code'
+      AND object_id = OBJECT_ID('dbo.HomesExtraPaymentTypes')
+)
+BEGIN
     CREATE UNIQUE INDEX UX_HomesExtraPaymentTypes_Code
         ON dbo.HomesExtraPaymentTypes (Code)
         WHERE IsDeleted = 0;
 END;
+GO
 
 IF OBJECT_ID('dbo.HomesExtraPaymentPrices', 'U') IS NULL
 BEGIN
@@ -113,25 +144,43 @@ BEGIN
         CreatedOn smalldatetime NULL CONSTRAINT DF_HomesExtraPaymentPrices_CreatedOn DEFAULT GETDATE(),
         UpdatedOn smalldatetime NULL,
         IsDeleted bit NOT NULL CONSTRAINT DF_HomesExtraPaymentPrices_IsDeleted DEFAULT 0,
-        CONSTRAINT FK_HomesExtraPaymentPrices_Homes FOREIGN KEY (HomesId)
-            REFERENCES dbo.homes (id),
-        CONSTRAINT FK_HomesExtraPaymentPrices_Sezonlar FOREIGN KEY (SeasonId)
-            REFERENCES dbo.sezonlar (id),
         CONSTRAINT FK_HomesExtraPaymentPrices_Types FOREIGN KEY (ExtraPaymentTypeId)
             REFERENCES dbo.HomesExtraPaymentTypes (ExtraPaymentTypeId)
     );
-
-    CREATE INDEX IX_HomesExtraPaymentPrices_HomesId ON dbo.HomesExtraPaymentPrices (HomesId);
-    CREATE INDEX IX_HomesExtraPaymentPrices_SeasonId ON dbo.HomesExtraPaymentPrices (SeasonId);
-    CREATE INDEX IX_HomesExtraPaymentPrices_TypeId ON dbo.HomesExtraPaymentPrices (ExtraPaymentTypeId);
-    CREATE INDEX IX_HomesExtraPaymentPrices_DateRange ON dbo.HomesExtraPaymentPrices (StartDate, EndDate);
 END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_HomesExtraPaymentPrices_HomesId' AND object_id = OBJECT_ID('dbo.HomesExtraPaymentPrices'))
+    CREATE INDEX IX_HomesExtraPaymentPrices_HomesId ON dbo.HomesExtraPaymentPrices (HomesId);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_HomesExtraPaymentPrices_SeasonId' AND object_id = OBJECT_ID('dbo.HomesExtraPaymentPrices'))
+    CREATE INDEX IX_HomesExtraPaymentPrices_SeasonId ON dbo.HomesExtraPaymentPrices (SeasonId);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_HomesExtraPaymentPrices_TypeId' AND object_id = OBJECT_ID('dbo.HomesExtraPaymentPrices'))
+    CREATE INDEX IX_HomesExtraPaymentPrices_TypeId ON dbo.HomesExtraPaymentPrices (ExtraPaymentTypeId);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_HomesExtraPaymentPrices_DateRange' AND object_id = OBJECT_ID('dbo.HomesExtraPaymentPrices'))
+    CREATE INDEX IX_HomesExtraPaymentPrices_DateRange ON dbo.HomesExtraPaymentPrices (StartDate, EndDate);
+GO
 
 IF COL_LENGTH('dbo.HomesExtraPaymentPrices', 'CurrencyId') IS NULL
     ALTER TABLE dbo.HomesExtraPaymentPrices ADD CurrencyId int NULL;
+GO
 
 IF COL_LENGTH('dbo.HomesExtraPaymentPrices', 'PriceType') IS NULL
     ALTER TABLE dbo.HomesExtraPaymentPrices ADD PriceType nvarchar(32) NULL;
+GO
+
+IF COL_LENGTH('dbo.HomesExtraPaymentPrices', 'Description') IS NULL
+    ALTER TABLE dbo.HomesExtraPaymentPrices ADD Description nvarchar(511) NULL;
+GO
+
+IF COL_LENGTH('dbo.HomesExtraPaymentPrices', 'UpdatedOn') IS NULL
+    ALTER TABLE dbo.HomesExtraPaymentPrices ADD UpdatedOn smalldatetime NULL;
+GO
 
 MERGE dbo.HomesExtraPaymentTypes AS target
 USING (VALUES
@@ -145,22 +194,8 @@ WHEN MATCHED THEN
 WHEN NOT MATCHED THEN
     INSERT (Code, Name, HomeColumnBase, IsIncluded)
     VALUES (source.Code, source.Name, source.HomeColumnBase, source.IsIncluded);
+GO
 ";
-
-        try {
-            $this->db->pdo()->exec($sql);
-        } catch (\PDOException $e) {
-            throw new HttpException('Ekstra ucret tablolari setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
-        }
-
-        $this->response->success([
-            'setup' => 'extra-payments',
-            'tables' => [
-                'dbo.HomesExtraPaymentTypes',
-                'dbo.HomesExtraPaymentPrices',
-            ],
-            'status' => 'completed',
-        ]);
     }
 
     private function execSqlBatches(string $sql): void

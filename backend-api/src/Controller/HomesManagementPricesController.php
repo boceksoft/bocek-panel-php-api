@@ -9,7 +9,7 @@ use PDO;
 
 /*
  * Emlak fiyatlandirma iliskili kayitlari.
- * Sezonlar ve ekstra ucretler detail update akisi disinda ayri endpoint'lerden yonetilir.
+ * Sezonlar, ekstra ucretler ve indirimler detail update akisi disinda ayri endpoint'lerden yonetilir.
  */
 final class HomesManagementPricesController extends Controller
 { 
@@ -107,6 +107,57 @@ final class HomesManagementPricesController extends Controller
             'updated' => $result['updated'] > 0,
             'updated_related_sections' => [
                 'ekstra_ucretler' => $result['updated'],
+            ],
+            'skipped_related_rows' => $result['skipped'],
+        ]);
+    }
+
+    /**
+     * Emlak indirimlerini ekler veya gunceller.
+     *
+     * @Post("indirimler")
+     * @Put("indirimler")
+     * @Post("discounts")
+     * @Put("discounts")
+     * @query id int required Emlak ID
+     * @query site int Site ID
+     * @body id int required Emlak ID
+     * @body indirimler array Indirim satirlari
+     */
+    public function discounts(): void
+    {
+        $payload = $this->payload();
+        $id = $this->resolveId($payload);
+
+        if ($id <= 0) {
+            throw new HttpException('Lutfen gecerli bir emlak ID gonderin.', 'VALIDATION', 422);
+        }
+
+        $rows = $this->discountsPayload($payload);
+        if ($rows === []) {
+            throw new HttpException('Eklenecek veya guncellenecek indirim bulunamadi.', 'VALIDATION', 422);
+        }
+
+        $pdo = $this->db->pdo();
+        $this->assertHomeExists($pdo, $id);
+
+        $pdo->beginTransaction();
+        try {
+            $result = $this->updateDiscounts($pdo, $id, $rows, $this->siteId($payload));
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw new HttpException('Indirim bilgileri kaydedilemedi.', 'DB_UPDATE_FAILED', 500, $e);
+        }
+
+        $this->response->success([
+            'id' => $id,
+            'updated' => $result['updated'] > 0,
+            'updated_related_sections' => [
+                'indirimler' => $result['updated'],
             ],
             'skipped_related_rows' => $result['skipped'],
         ]);
@@ -254,6 +305,56 @@ final class HomesManagementPricesController extends Controller
     }
 
     /**
+     * @param array<string,mixed> $payload
+     * @return array<int,array<string,mixed>>
+     */
+    private function discountsPayload(array $payload): array
+    {
+        $value = null;
+        if ($this->hasPath($payload, 'indirimler')) {
+            $value = $this->getPath($payload, 'indirimler');
+        }
+        if ($this->hasPath($payload, 'discounts')) {
+            $value = $this->getPath($payload, 'discounts');
+        }
+        if ($this->hasPath($payload, 'fiyatlandirmaVeKurallar.indirimler')) {
+            $value = $this->getPath($payload, 'fiyatlandirmaVeKurallar.indirimler');
+        }
+
+        if (is_array($value)) {
+            if ($value === []) {
+                return [];
+            }
+
+            return $this->isList($value) ? array_values(array_filter($value, 'is_array')) : [$value];
+        }
+
+        $single = [];
+        foreach ([
+                     'tarih1',
+                     'tarih2',
+                     'baslangicTarihi',
+                     'bitisTarihi',
+                     'startDate',
+                     'endDate',
+                     'showDate1',
+                     'showDate2',
+                     'showdate1',
+                     'showdate2',
+                     'etkinBaslangicTarihi',
+                     'etkinBitisTarihi',
+                     'discountId',
+                     'indirimId',
+                 ] as $key) {
+            if (array_key_exists($key, $payload)) {
+                $single[$key] = $payload[$key];
+            }
+        }
+
+        return $single === [] ? [] : [$single];
+    }
+
+    /**
      * @param array<mixed> $value
      */
     private function isList(array $value): bool
@@ -333,7 +434,7 @@ final class HomesManagementPricesController extends Controller
     private function updateExtraPayments(PDO $pdo, int $homeId, array $rows): array
     {
         if (!$this->tableExists($pdo, 'dbo', 'HomesExtraPaymentPrices')) {
-            throw new HttpException('Ekstra ucret tablolari kurulu degil. Once setup/extra-payments calistirin.', 'SETUP_REQUIRED', 500);
+            throw new HttpException('Ekstra ucret tablolari kurulu degil. Once setup/collums veya setup/extra-payments calistirin.', 'SETUP_REQUIRED', 500);
         }
 
         $updated = 0;
@@ -395,6 +496,94 @@ final class HomesManagementPricesController extends Controller
         }
 
         return ['updated' => $updated, 'skipped' => $skipped];
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $rows
+     * @return array{updated:int,skipped:array<int,array<string,string>>}
+     */
+    private function updateDiscounts(PDO $pdo, int $homeId, array $rows, int $siteId): array
+    {
+        $updated = 0;
+        $skipped = [];
+
+        foreach ($rows as $index => $row) {
+            $startDate = $this->normalizeDate($this->firstPayloadValue($row, ['tarih1', 'baslangicTarihi', 'startDate', 'start_date']));
+            $endDate = $this->normalizeDate($this->firstPayloadValue($row, ['tarih2', 'bitisTarihi', 'endDate', 'end_date']));
+            $showStartDate = $this->normalizeDate($this->firstPayloadValue($row, ['showDate1', 'showdate1', 'etkinBaslangicTarihi', 'show_start_date']));
+            $showEndDate = $this->normalizeDate($this->firstPayloadValue($row, ['showDate2', 'showdate2', 'etkinBitisTarihi', 'show_end_date']));
+
+            if ($startDate === '' || $endDate === '' || $showStartDate === '' || $showEndDate === '') {
+                $skipped[] = [
+                    'section' => 'indirimler',
+                    'index' => (string) $index,
+                    'reason' => 'tarih1, tarih2, showDate1 ve showDate2 zorunlu.',
+                ];
+                continue;
+            }
+
+            $discountId = $this->numericValue($row, ['id', 'discountId', 'indirimId']);
+
+            if ($discountId > 0) {
+                $stmt = $pdo->prepare(
+                    "UPDATE indirimler
+                     SET tarih1 = CONVERT(date, :tarih1, 104),
+                         tarih2 = CONVERT(date, :tarih2, 104),
+                         showDate1 = CONVERT(date, :showDate1, 104),
+                         showDate2 = CONVERT(date, :showDate2, 104),
+                         site = :site,
+                         discountType = 3
+                     WHERE id = :id AND emlak = :homeId"
+                );
+                $stmt->execute([
+                    ':tarih1' => $startDate,
+                    ':tarih2' => $endDate,
+                    ':showDate1' => $showStartDate,
+                    ':showDate2' => $showEndDate,
+                    ':site' => $siteId,
+                    ':id' => $discountId,
+                    ':homeId' => $homeId,
+                ]);
+                if ($stmt->rowCount() > 0 || $this->discountExists($pdo, $homeId, $discountId)) {
+                    $updated++;
+                    continue;
+                }
+
+                $skipped[] = [
+                    'section' => 'indirimler',
+                    'index' => (string) $index,
+                    'reason' => 'Secilen indirim bulunamadi: ' . $discountId,
+                ];
+                continue;
+            }
+
+            $stmt = $pdo->prepare(
+                "INSERT INTO indirimler (emlak, tarih1, tarih2, site, showDate1, showDate2, discountType)
+                 VALUES (:homeId, CONVERT(date, :tarih1, 104), CONVERT(date, :tarih2, 104), :site, CONVERT(date, :showDate1, 104), CONVERT(date, :showDate2, 104), 3)"
+            );
+            $stmt->execute([
+                ':homeId' => $homeId,
+                ':tarih1' => $startDate,
+                ':tarih2' => $endDate,
+                ':site' => $siteId,
+                ':showDate1' => $showStartDate,
+                ':showDate2' => $showEndDate,
+            ]);
+            $updated++;
+        }
+
+        return ['updated' => $updated, 'skipped' => $skipped];
+    }
+
+    private function discountExists(PDO $pdo, int $homeId, int $discountId): bool
+    {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM indirimler WHERE id = :id AND emlak = :homeId');
+        $stmt->execute([
+            ':id' => $discountId,
+            ':homeId' => $homeId,
+        ]);
+
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     /**

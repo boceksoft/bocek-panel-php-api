@@ -55,6 +55,14 @@ return [
     // Siteye gore degisirse app.local.php icinde [1 => 4, 2 => 12] gibi override edilebilir.
     'homes_management_cancellation_policy_page_id' => 4,
 
+    // HTML'i PNG/JPG image'a cevirmek icin wkhtmltoimage binary yolu.
+    // Sunucuya gore app.local.php icinde override edilmelidir.
+    // Proje ici Windows: backend-api/bin/wkhtmltoimage.exe
+    // Proje ici Linux: backend-api/bin/wkhtmltoimage
+    // Ornek Windows: C:/Program Files/wkhtmltopdf/bin/wkhtmltoimage.exe
+    // Ornek Linux: /usr/bin/wkhtmltoimage
+    'html_to_image_binary' => '',
+
     // Siteye gore kolon suffix'i. app.local.php icinde projeye gore override edilebilir.
     'site_column_suffixes' => [
         1 => '',
