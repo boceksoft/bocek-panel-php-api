@@ -25,6 +25,7 @@ final class KolonlarController extends Controller
             'source' => 'controller_sql_inventory',
             'total_tables' => count($inventory['tables']),
             'total_columns' => $inventory['total_columns'],
+            'calculate_missing_from_setup' => $this->calculateMissingFromSetup(),
             'skipped' => $inventory['skipped'],
             'tables' => array_values($inventory['tables']),
         ]);
@@ -121,6 +122,8 @@ final class KolonlarController extends Controller
             }
         }
 
+        $this->addManualColumnReferences($tables);
+
         ksort($tables);
         $totalColumns = 0;
         foreach ($tables as &$table) {
@@ -140,6 +143,227 @@ final class KolonlarController extends Controller
             'total_columns' => $totalColumns,
             'skipped' => array_values($skipped),
         ];
+    }
+
+    /**
+     * Parser'in yakalayamadigi dinamik/unqualified SQL kolonlarini envantere ekler.
+     *
+     * @param array<string,array<string,mixed>> $tables
+     */
+    private function addManualColumnReferences(array &$tables): void
+    {
+        foreach ($this->calculateManualColumns() as $table => $columns) {
+            foreach ($columns as $column) {
+                $this->addManualColumnReference(
+                    $tables,
+                    $table,
+                    $column,
+                    'CalculateController',
+                    'CalculateController dynamic SQL/manual inventory'
+                );
+            }
+        }
+    }
+
+    /**
+     * @return array<string,array<int,string>>
+     */
+    private function calculateManualColumns(): array
+    {
+        return [
+            'KiralamaTakvimi.CalendarHomes' => [
+                'homesId',
+                'EstateId',
+                'RoomType',
+                'BookableDirectly',
+            ],
+            'KiralamaTakvimi.HotelAvailabilityRooms' => [
+                'EstateId',
+                'Date',
+                'RoomCount',
+                'IsClosed',
+            ],
+            'dolu' => [
+                'id',
+                'emlak',
+                'durum',
+                'Durum',
+                'tarih',
+                'tarih2',
+            ],
+            'homes' => [
+                'id',
+                'aktif',
+                'baslik',
+                'depozito',
+                'doviz',
+                'hasar',
+                'kazancorani',
+                'kur',
+                'resim',
+                'sitemap',
+            ],
+            'sezonlar' => [
+                'site',
+                'islem_id',
+                'islem',
+                'tarih1',
+                'tarih2',
+                'gece',
+                'temizlikgece',
+                'temizlikFiyat',
+                'isitmaFiyat',
+                'isitmaHizmetDisi',
+            ],
+            'dbo.HomesExtraPayments' => [
+                'id',
+                'homesId',
+                'title',
+                'amount',
+                'CurrencyId',
+                'start_date',
+                'end_date',
+                'IsOptional',
+                'Type',
+            ],
+            'promotionCodes' => [
+                'code',
+                'startDate',
+                'endDate',
+                'stock',
+                'isPrice',
+                'value',
+            ],
+            'Finance.Currency' => [
+                'CurrencyId',
+                'CurrencyName',
+                'CurrencyCode',
+                'Symbol',
+            ],
+            'Finance.Rate' => [
+                'RateId',
+            ],
+            'Finance.RateDetail' => [
+                'RateId',
+                'FromCurrencyId',
+                'ToCurrencyId',
+                'Buy',
+            ],
+        ];
+    }
+
+    /**
+     * @return array<int,array{table:string,missing_columns:array<int,string>,missing_count:int}>
+     */
+    private function calculateMissingFromSetup(): array
+    {
+        $setupColumns = $this->setupColumnSet();
+        $missing = [];
+
+        foreach ($this->calculateManualColumns() as $table => $columns) {
+            foreach ($columns as $column) {
+                $key = strtolower($this->normalizeSetupTableName($table));
+                if (isset($setupColumns[$key][strtolower($column)])) {
+                    continue;
+                }
+
+                $missing[$table][] = $column;
+            }
+        }
+
+        $result = [];
+        foreach ($missing as $table => $columns) {
+            $columns = array_values(array_unique($columns));
+            sort($columns);
+            $result[] = [
+                'table' => $table,
+                'missing_columns' => $columns,
+                'missing_count' => count($columns),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return array<string,array<string,bool>>
+     */
+    private function setupColumnSet(): array
+    {
+        $path = dirname(__DIR__, 2) . '/setup-collums.sql';
+        $content = is_file($path) ? file_get_contents($path) : '';
+        if (!is_string($content) || $content === '') {
+            return [];
+        }
+
+        $columns = [];
+        $count = preg_match_all(
+            "/COL_LENGTH\\(N?'([^']+)'\\s*,\\s*N?'([^']+)'\\)/i",
+            $content,
+            $matches,
+            PREG_SET_ORDER
+        );
+        if ($count === false || $count === 0) {
+            return [];
+        }
+
+        foreach ($matches as $match) {
+            $table = strtolower($this->normalizeSetupTableName($match[1]));
+            $column = strtolower($match[2]);
+            $columns[$table][$column] = true;
+        }
+
+        return $columns;
+    }
+
+    private function normalizeSetupTableName(string $table): string
+    {
+        $table = str_replace(['[', ']'], '', trim($table));
+        if (stripos($table, 'dbo.') === 0) {
+            return substr($table, 4);
+        }
+
+        return $table;
+    }
+
+    /**
+     * @param array<string,array<string,mixed>> $tables
+     */
+    private function addManualColumnReference(
+        array &$tables,
+        string $table,
+        string $column,
+        string $controller,
+        string $query
+    ): void {
+        if (!$this->referenceAllowed($table, $column)) {
+            return;
+        }
+
+        $tableKey = strtolower($table);
+        $columnKey = strtolower($column);
+        if (!isset($tables[$tableKey])) {
+            $tables[$tableKey] = [
+                'table' => $table,
+                'columns' => [],
+            ];
+        }
+        if (!isset($tables[$tableKey]['columns'][$columnKey])) {
+            $tables[$tableKey]['columns'][$columnKey] = [
+                'column' => $column,
+                'used_in' => [],
+            ];
+        }
+
+        $usageKey = $controller . ':manual';
+        if (!isset($tables[$tableKey]['columns'][$columnKey]['used_in'][$usageKey])) {
+            $tables[$tableKey]['columns'][$columnKey]['used_in'][$usageKey] = [
+                'controller' => $controller,
+                'file' => $controller . '.php',
+                'query_index' => -1,
+                'query' => $query,
+            ];
+        }
     }
 
     /**
