@@ -1268,3 +1268,104 @@ WHEN NOT MATCHED THEN
     INSERT (Code, Name, HomeColumnBase, IsIncluded)
     VALUES (source.Code, source.Name, source.HomeColumnBase, source.IsIncluded);
 GO
+
+IF OBJECT_ID(N'[dbo].[Natsisa_Fn_yenifiyathesapla_tablo]', N'TF') IS NOT NULL
+    DROP FUNCTION [dbo].[Natsisa_Fn_yenifiyathesapla_tablo];
+GO
+
+CREATE FUNCTION [dbo].[Natsisa_Fn_yenifiyathesapla_tablo](
+    @tarih1 DATE,
+    @tarih2 DATE,
+    @id INT,
+    @site INT
+)
+    RETURNS @result TABLE (
+                              ToplamTutar MONEY,
+                              IndirimTutari MONEY,
+                              SahteIndirimTutari MONEY
+                          )
+AS
+BEGIN
+    DECLARE @t1 DATE = @tarih1;
+    DECLARE @t2 DATE = @tarih2;
+    DECLARE @fyt MONEY = 0;
+    DECLARE @sondakika MONEY = 0;
+    DECLARE @oran INT = 0;
+    DECLARE @fiyatyok INT = 0;
+    DECLARE @gece INT = DATEDIFF(DAY, @tarih1, @tarih2);
+    DECLARE @indirimToplam MONEY = 0;
+    DECLARE @sahteIndirimToplam MONEY = 0;
+
+    WHILE @tarih1 < @tarih2
+        BEGIN
+            DECLARE @fiyat MONEY = 0;
+            DECLARE @indirim DECIMAL = 0;
+            DECLARE @IndirimTutari MONEY = 0;
+            DECLARE @sahte_oran DECIMAL = 0;
+
+            SELECT @fiyat = fiyat
+            FROM sezonlar
+            WHERE site = @site
+              AND LEN(tarih1) >= 8
+              AND islem = 'emlak'
+              AND islem_id = @id
+              AND (@tarih1 BETWEEN CONVERT(DATE, tarih1, 104) AND CONVERT(DATE, tarih2, 104));
+
+            SELECT @indirim = ISNULL(oran, 0),
+                   @sahte_oran = ISNULL(sahte_oran, 0)
+            FROM indirimler
+            WHERE site = @site
+              AND emlak = @id
+              AND @tarih1 BETWEEN tarih1 AND tarih2
+              AND CONVERT(DATE, GETDATE()) BETWEEN showDate1 AND showDate2;
+
+            SET @fiyat = @fiyat / 7;
+            SET @IndirimTutari = (@fiyat / 100) * @indirim;
+
+            SET @indirimToplam += @IndirimTutari;
+
+            IF @sahte_oran > 0
+                SET @sahteIndirimToplam += (((@fiyat - @IndirimTutari) * (100 / (100 - @sahte_oran)))) - (@fiyat - @IndirimTutari) + @IndirimTutari;
+            ELSE
+                SET @sahteIndirimToplam += @IndirimTutari;
+
+            SET @fyt += @fiyat - @IndirimTutari;
+
+            SET @tarih1 = DATEADD(DAY, 1, @tarih1);
+
+            IF (@fiyat = 0)
+                SET @fiyatyok = 1;
+        END;
+
+    IF @gece = 5
+        SELECT @oran = gece_5 FROM genel;
+    IF @gece = 4
+        SELECT @oran = gece_4 FROM genel;
+    IF @gece = 3
+        SELECT @oran = gece_3 FROM genel;
+    IF @gece = 2
+        SELECT @oran = gece_2 FROM genel;
+    IF @gece = 1
+        SELECT @oran = gece_1 FROM genel;
+
+    SET @fyt += (@fyt / 100) * @oran;
+
+    IF @fiyatyok = 1
+        SET @fyt = 0;
+
+    SELECT @sondakika = fiyat
+    FROM sonDakika
+    WHERE site = @site
+      AND islem_id = @id
+      AND CONVERT(DATE, tarih1, 104) = @t1
+      AND CONVERT(DATE, tarih2, 104) = @t2;
+
+    IF @sondakika != 0
+        SET @fyt = @sondakika;
+
+    INSERT INTO @result (ToplamTutar, IndirimTutari, SahteIndirimTutari)
+    VALUES (@fyt, @indirimToplam, @sahteIndirimToplam);
+
+    RETURN;
+END
+GO

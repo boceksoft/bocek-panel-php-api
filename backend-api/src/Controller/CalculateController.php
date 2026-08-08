@@ -325,7 +325,7 @@ SELECT
 FROM homes h
 INNER JOIN Finance.Currency FromC ON FromC.CurrencyName = h.doviz{$uzanti}
 CROSS APPLY (
-    SELECT * FROM dbo.Fn_yenifiyathesapla_tablo('{$start}', '{$end}', {$entityId}, {$site})
+    SELECT * FROM dbo.Natsisa_Fn_yenifiyathesapla_tablo('{$start}', '{$end}', {$entityId}, {$site})
 ) AS FiyatTablosu
 INNER JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
 INNER JOIN Finance.Currency BaseCurrency ON BaseCurrency.CurrencyId = 1
