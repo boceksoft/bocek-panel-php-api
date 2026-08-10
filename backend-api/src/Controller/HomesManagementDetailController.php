@@ -28,6 +28,11 @@ final class HomesManagementDetailController extends Controller
 
         $siteId = max(1, (int) $this->request->query('site', 1));
         $pdo = $this->db->pdo();
+        $hasNewRegionColumn = $this->columnExists($pdo, 'dbo', 'homes', 'n_emlak_bolgesi');
+        $newRegionSelect = $hasNewRegionColumn
+            ? "(SELECT baslik FROM destinations WHERE destinations.id = homes.n_emlak_bolgesi) AS n_emlak_bolgesi_baslik,"
+            : "CAST(NULL AS int) AS n_emlak_bolgesi,
+                CAST(NULL AS nvarchar(255)) AS n_emlak_bolgesi_baslik,";
 
         $rs = $this->fetchOne(
             $pdo,
@@ -37,7 +42,7 @@ final class HomesManagementDetailController extends Controller
                 (SELECT tel FROM kullanici WHERE yetki = 2 AND homes.evsahibi = kullanici.id) AS evstel,
                 (SELECT baslik FROM tip WHERE tip.id = homes.emlak_tipi) AS emlak_tipi_baslik,
                 (SELECT baslik FROM destinations WHERE destinations.id = homes.emlak_bolgesi) AS emlak_bolgesi_baslik,
-                (SELECT baslik FROM destinations WHERE destinations.id = homes.n_emlak_bolgesi) AS n_emlak_bolgesi_baslik,
+                {$newRegionSelect}
                 *,
                 CONVERT(varchar, tarih, 104) AS tarih,
                 CONVERT(datetime, yayinlama_tarihi) AS t,
@@ -662,6 +667,24 @@ final class HomesManagementDetailController extends Controller
         $stmt->execute([
             ':schema' => $schema,
             ':table' => $table,
+        ]);
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function columnExists(PDO $pdo, string $schema, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT COUNT(*)
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = :schema
+               AND TABLE_NAME = :table
+               AND COLUMN_NAME = :column'
+        );
+        $stmt->execute([
+            ':schema' => $schema,
+            ':table' => $table,
+            ':column' => $column,
         ]);
 
         return (int) $stmt->fetchColumn() > 0;
