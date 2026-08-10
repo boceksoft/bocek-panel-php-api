@@ -37,6 +37,7 @@ final class HomesManagementDetailController extends Controller
                 (SELECT tel FROM kullanici WHERE yetki = 2 AND homes.evsahibi = kullanici.id) AS evstel,
                 (SELECT baslik FROM tip WHERE tip.id = homes.emlak_tipi) AS emlak_tipi_baslik,
                 (SELECT baslik FROM destinations WHERE destinations.id = homes.emlak_bolgesi) AS emlak_bolgesi_baslik,
+                (SELECT baslik FROM destinations WHERE destinations.id = homes.n_emlak_bolgesi) AS n_emlak_bolgesi_baslik,
                 *,
                 CONVERT(varchar, tarih, 104) AS tarih,
                 CONVERT(datetime, yayinlama_tarihi) AS t,
@@ -79,6 +80,7 @@ final class HomesManagementDetailController extends Controller
             [':id' => $id]
         );
         $konum = $this->konumHiyerarsi($pdo, (int) ($rs['emlak_bolgesi'] ?? 0), $this->firstValueFrom($rs, ['emlak_bolgesi_baslik']));
+        $nKonum = $this->konumHiyerarsi($pdo, (int) ($rs['n_emlak_bolgesi'] ?? 0), $this->firstValueFrom($rs, ['n_emlak_bolgesi_baslik']));
         $this->response->success([
             'genelBilgiler' => [
                 'temelBilgiler' => [
@@ -148,9 +150,18 @@ final class HomesManagementDetailController extends Controller
                 'indirimler' => $this->indirimler($pdo, $id, $siteId),
             ],
             'konumBilgileri' => [
+                'emlak_bolgesi' => (int) ($rs['emlak_bolgesi'] ?? 0),
+                'emlak_bolgesi_baslik' => $this->firstValueFrom($rs, ['emlak_bolgesi_baslik']),
+                'n_emlak_bolgesi' => (int) ($rs['n_emlak_bolgesi'] ?? 0),
+                'n_emlak_bolgesi_baslik' => $this->firstValueFrom($rs, ['n_emlak_bolgesi_baslik']),
                 'il' => $konum['il'],
                 'ilce' => $konum['ilce'],
+                'mahalle_id' => (int) ($rs['emlak_bolgesi'] ?? 0),
                 'mahalle' => $konum['mahalle'],
+                'n_il' => $nKonum['il'],
+                'n_ilce' => $nKonum['ilce'],
+                'n_mahalle_id' => (int) ($rs['n_emlak_bolgesi'] ?? 0),
+                'n_mahalle' => $nKonum['mahalle'],
                 'enlem' => $this->firstValueFrom($rs, ['enlem']),
                 'boylam' => $this->firstValueFrom($rs, ['boylam']),
                 'konumNotlari' => $this->konumNotlari($pdo, $rawRs),

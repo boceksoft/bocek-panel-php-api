@@ -182,6 +182,10 @@ final class HomesManagementDetailUpdateController extends Controller
             $updates[$column] = $column === 'doviz' ? $this->currencyDbValue($value) : $value;
         }
 
+        if (array_key_exists('emlak_bolgesi', $updates)) {
+            $updates['n_emlak_bolgesi'] = $updates['emlak_bolgesi'];
+        }
+
         foreach ($payload as $key => $value) {
             if (
                 !is_string($key)

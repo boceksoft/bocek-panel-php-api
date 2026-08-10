@@ -132,6 +132,13 @@ END;
 GO
 
 IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+   AND COL_LENGTH(N'[dbo].[homes]', N'n_emlak_bolgesi') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[homes] ADD [n_emlak_bolgesi] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
    AND COL_LENGTH(N'[dbo].[homes]', N'url') IS NULL
 BEGIN
     ALTER TABLE [dbo].[homes] ADD [url] nvarchar(MAX) NULL;

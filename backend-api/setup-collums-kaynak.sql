@@ -86,6 +86,7 @@ VALUES
     (N'dbo', N'homes', N'evsahibi'),
     (N'dbo', N'homes', N'id'),
     (N'dbo', N'homes', N'kazancorani'),
+    (N'dbo', N'homes', N'n_emlak_bolgesi'),
     (N'dbo', N'homes', N'rez_takip_yeri_adi'),
     (N'dbo', N'homes', N'url'),
     (N'dbo', N'indirimler', N'emlak'),
