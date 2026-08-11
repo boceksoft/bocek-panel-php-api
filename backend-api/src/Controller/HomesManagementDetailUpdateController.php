@@ -13,7 +13,7 @@ use PDO;
  */
 final class HomesManagementDetailUpdateController extends Controller
 {
-    /**
+    /** test
      * Detay sayfasindan gelen emlak bilgilerini gunceller.
      *
      * @Post
@@ -133,6 +133,8 @@ final class HomesManagementDetailUpdateController extends Controller
             'komisyonorani' => 'kazancorani',
             'onodemeyontemi' => 'FirstPaymentTypeId',
             'bolge' => 'emlak_bolgesi',
+            'n_bolge' => 'n_emlak_bolgesi',
+            'n_emlak_bolgesi' => 'n_emlak_bolgesi',
             'enlem' => 'enlem',
             'boylam' => 'boylam',
             'mesafetipi' => 'mesafe_cetvelitipi',
@@ -163,6 +165,8 @@ final class HomesManagementDetailUpdateController extends Controller
             'fiyatlandirmaVeKurallar.odemeAyarlari.komisyonOrani' => 'kazancorani',
             'fiyatlandirmaVeKurallar.odemeAyarlari.onOdemeYontemiId' => 'FirstPaymentTypeId',
             'konumBilgileri.mahalle_id' => 'emlak_bolgesi',
+            'konumBilgileri.n_mahalle_id' => 'n_emlak_bolgesi',
+            'konumBilgileri.n_emlak_bolgesi' => 'n_emlak_bolgesi',
             'konumBilgileri.enlem' => 'enlem',
             'konumBilgileri.boylam' => 'boylam',
             'konumBilgileri.mesafeHesaplamaTipi' => 'mesafe_cetvelitipi',
@@ -182,7 +186,19 @@ final class HomesManagementDetailUpdateController extends Controller
             $updates[$column] = $column === 'doviz' ? $this->currencyDbValue($value) : $value;
         }
 
-        if (array_key_exists('emlak_bolgesi', $updates)) {
+        foreach ([
+                     'bolge' => 'emlak_bolgesi',
+                     'n_bolge' => 'n_emlak_bolgesi',
+                     'n_emlak_bolgesi' => 'n_emlak_bolgesi',
+                 ] as $path => $column) {
+            if (!$this->hasPath($payload, $path)) {
+                continue;
+            }
+
+            $updates[$column] = $this->normalizeScalar($this->getPath($payload, $path));
+        }
+
+        if (array_key_exists('emlak_bolgesi', $updates) && !array_key_exists('n_emlak_bolgesi', $updates)) {
             $updates['n_emlak_bolgesi'] = $updates['emlak_bolgesi'];
         }
 
