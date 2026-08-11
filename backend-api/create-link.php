@@ -97,7 +97,6 @@ try {
     $expiredDate = null;
 
     if ($sure > 0) {
-        $expiredMode = 1;
         $date = new DateTime();
         $date->modify("+{$sure} days");
         $expiredDate = $date->format('Y-m-d H:i:s');
