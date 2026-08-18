@@ -63,6 +63,7 @@ VALUES
     (N'dbo', N'dolu', N'durum'),
     (N'dbo', N'dolu', N'emlak'),
     (N'dbo', N'dolu', N'id'),
+    (N'dbo', N'dolu', N'IsExternal'),
     (N'dbo', N'dolu', N'kayitid'),
     (N'dbo', N'dolu', N'tarih'),
     (N'dbo', N'dolu', N'tarih2'),

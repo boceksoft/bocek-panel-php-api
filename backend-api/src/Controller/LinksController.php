@@ -77,7 +77,6 @@ final class LinksController extends Controller
         $redirectTo = $domain . '/' . $aramaSayfasi . '?' . urldecode(http_build_query($params));
 
         // 5) Süre verildiyse son kullanma tarihini hesapla
-        $useExpirationColumns = (bool) ($this->app['links_use_expiration_columns'] ?? true);
         $expiredMode = 0;
         $expiredDate = null;
         if ($sure > 0) {
@@ -95,12 +94,10 @@ final class LinksController extends Controller
             ':redirectTo'   => $redirectTo,
         ];
 
-        if ($useExpirationColumns) {
-            $insertColumns .= ', expiredDate, expiredMode';
-            $insertValues .= ', :expiredDate, :expiredMode';
-            $insertParams[':expiredDate'] = $expiredDate;
-            $insertParams[':expiredMode'] = $expiredMode;
-        }
+        $insertColumns .= ', expiredDate, expiredMode';
+        $insertValues .= ', :expiredDate, :expiredMode';
+        $insertParams[':expiredDate'] = $expiredDate;
+        $insertParams[':expiredMode'] = $expiredMode;
 
         $stmt = $pdo->prepare(
             'INSERT INTO redirects (' . $insertColumns . ')
