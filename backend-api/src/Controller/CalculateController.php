@@ -27,9 +27,9 @@ final class CalculateController extends Controller
      */
     public function index(): void
     {
-        $entityId = (int) $this->param('EntityId', $this->param('id', 0));
-        $start = $this->normalizeDate((string) $this->param('start', ''));
-        $end = $this->normalizeDate((string) $this->param('end', ''));
+        $entityId = (int) $this->configuredParam('entity_id', ['EntityId', 'id'], 0);
+        $start = $this->normalizeDate((string) $this->configuredParam('start', ['start'], ''));
+        $end = $this->normalizeDate((string) $this->configuredParam('end', ['end'], ''));
 
         if ($entityId <= 0) {
             throw new HttpException('EntityId belirtilmedi.', 'VALIDATION', 422);
@@ -95,9 +95,9 @@ final class CalculateController extends Controller
      */
     public function image(): void
     {
-        $entityId = (int) $this->param('EntityId', $this->param('id', 0));
-        $start = $this->normalizeDate((string) $this->param('start', ''));
-        $end = $this->normalizeDate((string) $this->param('end', ''));
+        $entityId = (int) $this->configuredParam('entity_id', ['EntityId', 'id'], 0);
+        $start = $this->normalizeDate((string) $this->configuredParam('start', ['start'], ''));
+        $end = $this->normalizeDate((string) $this->configuredParam('end', ['end'], ''));
 
         if ($entityId <= 0 || $start === null || $end === null || $end <= $start) {
             $this->sendSvg($this->renderErrorSvg('Gecersiz parametre.'));
@@ -151,6 +151,30 @@ final class CalculateController extends Controller
     }
 
     /**
+     * @param string[] $defaultKeys
+     * @param mixed $default
+     * @return mixed
+     */
+    private function configuredParam(string $name, array $defaultKeys, $default = null)
+    {
+        $configured = $this->app['calculate_param_names'][$name] ?? $defaultKeys;
+        $keys = is_array($configured) ? $configured : [$configured];
+
+        foreach ($keys as $key) {
+            if (!is_string($key) || trim($key) === '') {
+                continue;
+            }
+
+            $value = $this->param($key);
+            if ($value !== null && $value !== '') {
+                return $value;
+            }
+        }
+
+        return $default;
+    }
+
+    /**
      * @return string|null
      */
     private function normalizeDate(string $value)
@@ -160,9 +184,19 @@ final class CalculateController extends Controller
             return null;
         }
 
-        foreach (['Y-m-d', 'd.m.Y', 'm/d/Y'] as $format) {
+        $formats = $this->app['calculate_date_formats'] ?? ['Y-m-d', 'd.m.Y', 'm/d/Y'];
+        if (!is_array($formats)) {
+            $formats = ['Y-m-d', 'd.m.Y', 'm/d/Y'];
+        }
+
+        foreach ($formats as $format) {
+            if (!is_string($format) || trim($format) === '') {
+                continue;
+            }
+
             $date = DateTime::createFromFormat($format, $value);
-            if ($date instanceof DateTime) {
+            $errors = DateTime::getLastErrors();
+            if ($date instanceof DateTime && ($errors === false || ((int) $errors['warning_count'] === 0 && (int) $errors['error_count'] === 0))) {
                 return $date->format('Y-m-d');
             }
         }
@@ -271,12 +305,12 @@ final class CalculateController extends Controller
         $uzanti = $this->fieldSuffix($site);
         $depozitoSuffix = $this->fieldSuffix($site, 'depozito');
 
-        $sql = "
+        $sql = " 
 SELECT
-    FiyatTablosu.ToplamTutar * RD.Buy AS fyt,
-    FiyatTablosu.IndirimTutari * RD.Buy AS indirimTutari,
-    RD.Buy,
-    FiyatTablosu.SahteIndirimTutari * RD.Buy AS SahteIndirimTutari,
+    FiyatTablosu.ToplamTutar * COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS fyt,
+    FiyatTablosu.IndirimTutari * COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS indirimTutari,
+    COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS Buy,
+    FiyatTablosu.SahteIndirimTutari * COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS SahteIndirimTutari,
     (
         SELECT TOP 1
             CASE
@@ -308,32 +342,32 @@ SELECT
           AND islem = 'emlak'
           AND '{$start}' BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)
         ORDER BY id DESC
-    ), 0) * RD2.Buy AS temizlikFiyat,
+    ), 0) * COALESCE(RD2.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS temizlikFiyat,
     CASE WHEN h.kur{$uzanti} > 0 THEN h.kur{$uzanti} ELSE 0 END AS kur,
     h.depozito{$depozitoSuffix} AS depozito,
     dbo.FnRandomSplit(h.resim, ',') AS resim,
     h.baslik{$uzanti} AS baslik,
     h.hasar,
     h.kazancorani,
-    ToC.CurrencyName,
-    ToC.CurrencyCode AS CurrencyCode,
+    ISNULL(ToC.CurrencyName, h.doviz{$uzanti}) AS CurrencyName,
+    ISNULL(ToC.CurrencyCode, h.doviz{$uzanti}) AS CurrencyCode,
     h.id,
     h.sitemap,
     h.aktif{$uzanti} AS aktif,
-    ToC.CurrencyId,
-    ToC.Symbol
+    ISNULL(ToC.CurrencyId, {$defaultCurrencyId}) AS CurrencyId,
+    ISNULL(ToC.Symbol, N'TL') AS Symbol
 FROM homes h
-INNER JOIN Finance.Currency FromC ON FromC.CurrencyName = h.doviz{$uzanti}
+LEFT JOIN Finance.Currency FromC ON FromC.CurrencyName = h.doviz{$uzanti}
 CROSS APPLY (
     SELECT * FROM dbo.Natsisa_Fn_yenifiyathesapla_tablo('{$start}', '{$end}', {$entityId}, {$site})
 ) AS FiyatTablosu
-INNER JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
-INNER JOIN Finance.Currency BaseCurrency ON BaseCurrency.CurrencyId = 1
-INNER JOIN Finance.Rate FR ON FR.RateId = :RateId
-INNER JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
+LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
+LEFT JOIN Finance.Currency BaseCurrency ON BaseCurrency.CurrencyId = 1
+LEFT JOIN Finance.Rate FR ON FR.RateId = :RateId
+LEFT JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
     AND RD.FromCurrencyId = FromC.CurrencyId
     AND RD.RateId = FR.RateId
-INNER JOIN Finance.RateDetail RD2 ON RD2.ToCurrencyId = ToC.CurrencyId
+LEFT JOIN Finance.RateDetail RD2 ON RD2.ToCurrencyId = ToC.CurrencyId
     AND RD2.FromCurrencyId = BaseCurrency.CurrencyId
     AND RD2.RateId = FR.RateId
 WHERE h.id = {$entityId}";
@@ -505,7 +539,7 @@ WHERE h.id = {$entityId}";
                     $heatingFees[] = $heatingFee;
                 }
 
-                $extras = $this->extraPayments($pdo, $entityId, $day, $rateId, $defaultCurrencyId);
+                $extras = $this->extraPayments($pdo, $entityId, $day, $rateId, $defaultCurrencyId, (float) $home['Buy']);
                 if ($extras) {
                     $extraServices[] = [
                         'date' => $day,
@@ -549,6 +583,12 @@ WHERE h.id = {$entityId}";
         }
 
         if ($night < $minNight) {
+            if (!$this->objectExists($pdo, 'dbo', 'kisasureli3', 'IF')
+                && !$this->objectExists($pdo, 'dbo', 'kisasureli3', 'TF')
+            ) {
+                return true;
+            }
+
             $stmt = $pdo->prepare(
                 "SELECT *
                  FROM kisasureli3(:startDate, :endDate, {$entityId}, '1,2,3,4,5,6') AS kisasureli
@@ -633,20 +673,25 @@ WHERE h.id = {$entityId}";
     /**
      * @return array<int,array<string,mixed>>
      */
-    private function extraPayments(PDO $pdo, int $entityId, string $day, int $rateId, int $defaultCurrencyId): array
+    private function extraPayments(PDO $pdo, int $entityId, string $day, int $rateId, int $defaultCurrencyId, float $fallbackBuy): array
     {
+        if (!$this->objectExists($pdo, 'dbo', 'HomesExtraPayments', 'U')) {
+            return [];
+        }
+
         $site = defined('PRICE_SITE') ? (int) constant('PRICE_SITE') : 1;
         $uzanti = $this->fieldSuffix($site);
+        $fallbackBuySql = $fallbackBuy > 0 ? (string) $fallbackBuy : '1';
 
         $stmt = $pdo->prepare(
             "SELECT EP.*,
                     EP.title{$uzanti} AS title,
-                    CAST(EP.amount * RD.Buy AS decimal(18, 0)) AS amount
+                    CAST(EP.amount * COALESCE(RD.Buy, {$fallbackBuySql}, 1) AS decimal(18, 0)) AS amount
              FROM dbo.HomesExtraPayments EP
-             INNER JOIN Finance.Currency FromC ON FromC.CurrencyId = EP.CurrencyId
-             INNER JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
-             INNER JOIN Finance.Rate FR ON FR.RateId = :RateId
-             INNER JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
+             LEFT JOIN Finance.Currency FromC ON FromC.CurrencyId = EP.CurrencyId
+             LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
+             LEFT JOIN Finance.Rate FR ON FR.RateId = :RateId
+             LEFT JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
                 AND RD.FromCurrencyId = FromC.CurrencyId
                 AND RD.RateId = FR.RateId
              WHERE EP.homesId = :homesId
@@ -660,6 +705,20 @@ WHERE h.id = {$entityId}";
         ]);
 
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    private function objectExists(PDO $pdo, string $schema, string $object, string $type): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT OBJECT_ID(:objectName, :objectType) AS object_id'
+        );
+        $stmt->execute([
+            'objectName' => $schema . '.' . $object,
+            'objectType' => $type,
+        ]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row && $row['object_id'] !== null;
     }
 
     /**
@@ -918,17 +977,46 @@ WHERE h.id = {$entityId}";
             return '';
         }
 
+        $config = is_array($this->app['calculate_reservation_url'] ?? null)
+            ? $this->app['calculate_reservation_url']
+            : [];
+        $path = trim((string) ($config['path'] ?? '/rezervasyon'));
+        $path = $path === '' ? '' : '/' . ltrim($path, '/');
+        $params = is_array($config['params'] ?? null) ? $config['params'] : [];
+        $dateFormat = trim((string) ($config['date_format'] ?? 'Y-m-d'));
+        $dateFormat = $dateFormat !== '' ? $dateFormat : 'Y-m-d';
+
         $query = [
-            'ProductId' => $entityId,
-            'start' => $start,
-            'end' => $end,
+            $this->queryParamName($params, 'entity_id', 'ProductId') => $entityId,
+            $this->queryParamName($params, 'start', 'start') => $this->formatDate($start, $dateFormat),
+            $this->queryParamName($params, 'end', 'end') => $this->formatDate($end, $dateFormat),
         ];
 
         if ((string) $this->param('pool_fee', '') === '1') {
-            $query['buyPool'] = 1;
+            $query[$this->queryParamName($params, 'pool_fee', 'buyPool')] = 1;
         }
 
-        return $domain . '/rezervasyon?' . http_build_query($query, '', '&');
+        return $domain . $path . '?' . http_build_query($query, '', '&');
+    }
+
+    /**
+     * @param array<string,mixed> $params
+     */
+    private function queryParamName(array $params, string $name, string $default): string
+    {
+        $value = trim((string) ($params[$name] ?? $default));
+
+        return $value !== '' ? $value : $default;
+    }
+
+    private function formatDate(string $date, string $format): string
+    {
+        $dateTime = DateTime::createFromFormat('Y-m-d', $date);
+        if (!$dateTime instanceof DateTime) {
+            return $date;
+        }
+
+        return $dateTime->format($format);
     }
 
     /**

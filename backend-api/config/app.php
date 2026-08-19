@@ -27,6 +27,11 @@ return [
     // Bazi SQL Server kurulumlari case-sensitive oldugu icin siteye gore override edilebilir.
     'dolu_kayit_id_column' => 'kayitid',
 
+    // Guest movements listesinde homes.id ile eslesen kolon.
+    // Varsayilan dolu.emlak'tir. Bazi sitelerde kayitlar.evid kullanilirsa
+    // app.local.php icinde 'k.evid' olarak override edilebilir.
+    'guest_movements_home_id_column' => 'd.emlak',
+
     // ruleshomes tablosunda rules.id ile eslesen kolon adi.
     'ruleshomes_rules_id_column' => 'rulesId',
 
@@ -54,6 +59,34 @@ return [
     // Homes management iptal sarti select'i icin sayfalar{dbtable}.id degeri.
     // Siteye gore degisirse app.local.php icinde [1 => 4, 2 => 12] gibi override edilebilir.
     'homes_management_cancellation_policy_page_id' => 4,
+
+    // Calculate endpoint parametre adlari ve kabul edilen tarih formatlari.
+    // Eski sitelerde app.local.php icinde sadece bu alanlari override ederek
+    // ProductId/checkin/checkout veya 17.09.2026, 2026-09-17 gibi varyasyonlar desteklenir.
+    'calculate_param_names' => [
+        'entity_id' => ['EntityId', 'id', 'ProductId'],
+        'start' => ['start', 'searchdate1', 'checkin', 'date1'],
+        'end' => ['end', 'searchdate2', 'checkout', 'date2'],
+    ],
+    'calculate_date_formats' => [
+        'Y-m-d',
+        'Y.m.d',
+        'd.m.Y',
+        'd-m-Y',
+        'm/d/Y',
+    ],
+    'calculate_reservation_url' => [
+        'path' => '/rezervasyon',
+        'params' => [
+            'entity_id' => 'id',
+            'start' => 'reservationdate1',
+            'end' => 'reservationdate2',
+            'pool_fee' => 'buyPool',
+        ],
+        // Ornekler: Y-m-d => 2026-09-17, Y.m.d => 2026.09.17,
+        // d-m-Y => 17-09-2026, d.m.Y => 17.09.2026
+        'date_format' => 'd.m.Y',
+    ],
 
     // HTML'i PNG/JPG image'a cevirmek icin wkhtmltoimage binary yolu.
     // Sunucuya gore app.local.php icinde override edilmelidir.

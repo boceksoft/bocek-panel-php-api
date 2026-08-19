@@ -53,9 +53,9 @@ final class AvailabilityController extends Controller
 
         // Home bilgisi (döviz + sembol)
         $homeStmt = $pdo->prepare(
-            "SELECT h.id, h.doviz{$uzanti} AS doviz, ToC.Symbol
+            "SELECT h.id, h.doviz{$uzanti} AS doviz, ISNULL(ToC.Symbol, N'TL') AS Symbol
              FROM homes h
-             INNER JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
+             LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
              WHERE h.id = :id"
         );
         $homeStmt->execute(['id' => $entityId, 'DefaultCurrencyId' => $defaultCurrencyId]);
@@ -68,7 +68,7 @@ final class AvailabilityController extends Controller
         $doluTarihlerSql = "SELECT
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS doluGirisler,
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS doluCikislar,
-            ISNULL(STRING_AGG(dbo.Fn_aratarihler2(tarih,tarih2),','),'') AS doluGunler
+            ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS doluGunler
             FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId;
 
         // Oda tipi (hotel availability) kontrolü
@@ -106,19 +106,19 @@ final class AvailabilityController extends Controller
                 (SELECT
                     ISNULL(STRING_AGG(CONVERT(date,tarih1,103),','),'') AS sondakikaGirisler,
                     ISNULL(STRING_AGG(CONVERT(date,tarih2,103),','),'') AS sondakikaCikislar,
-                    ISNULL(STRING_AGG(dbo.Fn_aratarihler2(CONVERT(date,tarih1,103),CONVERT(date,tarih2,103)),','),'') AS sondakikaGunler
+                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(CONVERT(date,tarih1,103),CONVERT(date,tarih2,103)),','),'') AS sondakikaGunler
                     FROM sonDakika WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND site = " . $siteVal . " AND islem_id = " . $entityId . ") AS sonDakika,
                 (" . $doluTarihlerSql . ") AS dolu,
                 (SELECT
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS dolu_fakeGirisler,
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS dolu_fakeCikislar,
-                    ISNULL(STRING_AGG(dbo.Fn_aratarihler2(tarih,tarih2),','),'') AS dolu_fakeGunler
+                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS dolu_fakeGunler
                     FROM dolu_fake WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId . ") AS fake_dolu,
                 (SELECT ISNULL((SELECT
                     ISNULL(STRING_AGG(
                         CONCAT(
                             i.tarih1, '|', i.oran, '|', ISNULL(i.sahte_oran,0), ',',
-                            REPLACE(dbo.Fn_aratarihler2(i.tarih1, i.tarih2), ',',  '|'+CAST(i.oran AS VARCHAR)+'|'+CAST(ISNULL(i.sahte_oran,0) AS VARCHAR)+',' ),
+                            REPLACE(dbo.Natsisa_Fn_aratarihler2(i.tarih1, i.tarih2), ',',  '|'+CAST(i.oran AS VARCHAR)+'|'+CAST(ISNULL(i.sahte_oran,0) AS VARCHAR)+',' ),
                             '|', i.oran, '|', ISNULL(i.sahte_oran,0), ',',
                             i.tarih2, '|', i.oran, '|', ISNULL(i.sahte_oran,0)
                         ), ','
@@ -129,7 +129,7 @@ final class AvailabilityController extends Controller
                 (SELECT
                     ISNULL(STRING_AGG(CONCAT(YEAR(dolu.tarih),'-',FORMAT(dolu.tarih,'MM'),'-',FORMAT(dolu.tarih,'dd')),','),'') AS odemeGirisler,
                     ISNULL(STRING_AGG(CONCAT(YEAR(dolu.tarih2),'-',FORMAT(dolu.tarih2,'MM'),'-',FORMAT(dolu.tarih2,'dd')),','),'') AS odemeCikislar,
-                    ISNULL(STRING_AGG(dbo.Fn_aratarihler2(dolu.tarih,dolu.tarih2),','),'') AS odemeGunler,
+                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(dolu.tarih,dolu.tarih2),','),'') AS odemeGunler,
                     ISNULL(STRING_AGG(CONCAT(REPLICATE(CONCAT(DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,kayitlar.saat,103)),','),DATEDIFF(day,CONVERT(date,dolu.tarih,103),CONVERT(date,dolu.tarih2,103))),DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,kayitlar.saat,103))),','),'') AS odemeSaatler
                     FROM dolu LEFT JOIN kayitlar ON kayitlar.id = " . $doluKayitIdSql . " WHERE CONVERT(date,dolu.tarih2,103) > CONVERT(date,GETDATE(),103) AND dolu.durum = 1 AND dolu.emlak = " . $entityId . ") AS odeme,
                 (SELECT
@@ -145,13 +145,13 @@ final class AvailabilityController extends Controller
                 (SELECT 
                     ISNULL(STRING_AGG(
                         CAST(CONCAT(YEAR(CONVERT(date,tarih1,103)),'-',FORMAT(CONVERT(date,tarih1,103),'MM'),'-',FORMAT(CONVERT(date,tarih1,103),'dd'),',',
-                        dbo.Fn_aratarihler2(CONVERT(date,tarih1,103),CONVERT(date,tarih2,103)),
+                        dbo.Natsisa_Fn_aratarihler2(CONVERT(date,tarih1,103),CONVERT(date,tarih2,103)),
                         ',',YEAR(CONVERT(date,tarih2,103)),'-',FORMAT(CONVERT(date,tarih2,103),'MM'),'-',FORMAT(CONVERT(date,tarih2,103),'dd')) AS NVARCHAR(MAX)),','),'') AS fiyatlarTarihler,
                     ISNULL(STRING_AGG(CAST(REPLICATE(CONVERT(NVARCHAR,(CAST((ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7) AS decimal(10,0))))+',',DATEDIFF(day,CONVERT(date,tarih1,103),CONVERT(date,tarih2,103)))+CONVERT(NVARCHAR,(CAST(ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7 AS decimal(10,0)))) AS NVARCHAR(MAX)),','),'') AS fiyatlar
                     FROM sezonlar
                     LEFT JOIN kanun7464 ka ON ka.homeId=" . (int) $home['id'] . "
-                    INNER JOIN Finance.Currency FromC ON FromC.CurrencyName='" . $home['doviz'] . "'
-                    INNER JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
+                    LEFT JOIN Finance.Currency FromC ON FromC.CurrencyName='" . $home['doviz'] . "'
+                    LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
                     LEFT JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
                         AND RD.FromCurrencyId = FromC.CurrencyId AND RD.RateId = :RateId
                 WHERE site = " . $siteVal . " AND islem_id = " . $entityId . " AND islem = 'emlak' AND CONVERT(date,tarih2,103) >= CONVERT(date,GETDATE(),103)) AS fiyatlar";

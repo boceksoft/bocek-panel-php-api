@@ -64,6 +64,37 @@ return [
     // Ornekler: 'ulke', 'ulkeKodu', 'countryCode'
     // 'reservations_country_code_column' => 'ulke',
 
+    // Calculate endpoint gelen parametre adlari farkliysa override et.
+    // 'calculate_param_names' => [
+    //     'entity_id' => ['EntityId', 'id', 'ProductId'],
+    //     'start' => ['start', 'searchdate1', 'checkin', 'date1'],
+    //     'end' => ['end', 'searchdate2', 'checkout', 'date2'],
+    // ],
+
+    // Calculate endpoint'in kabul edecegi tarih formatlari.
+    // 'calculate_date_formats' => [
+    //     'Y-m-d',
+    //     'Y.m.d',
+    //     'd.m.Y',
+    //     'd-m-Y',
+    //     'm/d/Y',
+    // ],
+
+    // Calculate sonucunda donen reservation_url parametreleri ve tarih yazimi.
+    // date_format ornekleri:
+    // Y-m-d => 2026-09-17, Y.m.d => 2026.09.17,
+    // d-m-Y => 17-09-2026, d.m.Y => 17.09.2026
+    // 'calculate_reservation_url' => [
+    //     'path' => '/rezervasyon',
+    //     'params' => [
+    //         'entity_id' => 'ProductId',
+    //         'start' => 'start',
+    //         'end' => 'end',
+    //         'pool_fee' => 'buyPool',
+    //     ],
+    //     'date_format' => 'Y-m-d',
+    // ],
+
     // Kolon tanimi setup endpoint'i farkli tabloya yazacaksa override et.
     // Ornekler: 'kolonlar', 'dbo.kolonlar'
     // 'kolonlar_table' => 'kolonlar',

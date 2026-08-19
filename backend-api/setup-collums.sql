@@ -82,6 +82,20 @@ ALTER TABLE [dbo].[dolu] ADD [IsExternal] bit NULL CONSTRAINT DF_dolu_IsExternal
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[dolu_fake]', N'U') IS NULL
+BEGIN
+CREATE TABLE [dbo].[dolu_fake]
+(
+    [id] int IDENTITY(1,1) NOT NULL,
+    [emlak] int NULL,
+    [tarih] date NULL,
+    [tarih2] date NULL,
+    [durum] int NULL,
+    CONSTRAINT [PK_dolu_fake] PRIMARY KEY ([id])
+);
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[dolu_fake]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[dolu_fake]', N'id') IS NULL
 BEGIN
@@ -107,6 +121,13 @@ IF OBJECT_ID(N'[dbo].[dolu_fake]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[dolu_fake]', N'tarih') IS NULL
 BEGIN
 ALTER TABLE [dbo].[dolu_fake] ADD [tarih] date NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[dolu_fake]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[dolu_fake]', N'durum') IS NULL
+BEGIN
+ALTER TABLE [dbo].[dolu_fake] ADD [durum] int NULL;
 END;
 GO
 
@@ -999,6 +1020,26 @@ ALTER TABLE [dbo].[homes] ADD [sitemap] bit NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[HomesExtraPayments]', N'U') IS NULL
+BEGIN
+CREATE TABLE [dbo].[HomesExtraPayments]
+(
+    [id] int IDENTITY(1,1) NOT NULL,
+    [amount] int NULL,
+    [start_date] date NULL,
+    [end_date] date NULL,
+    [price] int NULL,
+    [homesId] int NULL,
+    [title] nvarchar(150) NULL,
+    [CurrencyId] tinyint NULL,
+    [title_s2] nvarchar(150) NULL,
+    [Type] tinyint NULL,
+    [IsOptional] bit NULL CONSTRAINT [DF_HomesExtraPayments_IsOptional] DEFAULT 1,
+    CONSTRAINT [PK_HomesExtraPayments] PRIMARY KEY ([id])
+);
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[HomesExtraPayments]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[HomesExtraPayments]', N'id') IS NULL
 BEGIN
@@ -1321,6 +1362,31 @@ UPDATE SET Name = source.Name, HomeColumnBase = source.HomeColumnBase, IsInclude
     WHEN NOT MATCHED THEN
 INSERT (Code, Name, HomeColumnBase, IsIncluded)
 VALUES (source.Code, source.Name, source.HomeColumnBase, source.IsIncluded);
+GO
+
+IF OBJECT_ID(N'[dbo].[Natsisa_Fn_aratarihler2]', N'FN') IS NOT NULL
+    DROP FUNCTION [dbo].[Natsisa_Fn_aratarihler2];
+GO
+
+CREATE FUNCTION [dbo].[Natsisa_Fn_aratarihler2](
+    @tarih1 DATE,
+    @tarih2 DATE
+)
+    RETURNS NVARCHAR(MAX)
+AS
+BEGIN
+    DECLARE @tarihler NVARCHAR(MAX) = '';
+
+    SET @tarih1 = DATEADD(DAY, 1, @tarih1);
+    WHILE @tarih1 < @tarih2
+BEGIN
+            SET @tarihler += (CASE WHEN @tarihler = '' THEN '' ELSE ',' END) +
+                             CONCAT(YEAR(@tarih1), '-', FORMAT(@tarih1, 'MM'), '-', FORMAT(@tarih1, 'dd'));
+            SET @tarih1 = DATEADD(DAY, 1, @tarih1);
+END;
+
+    RETURN @tarihler;
+END
 GO
 
 IF OBJECT_ID(N'[dbo].[Natsisa_Fn_yenifiyathesapla_tablo]', N'TF') IS NOT NULL
@@ -1423,6 +1489,217 @@ VALUES (@fyt, @indirimToplam, @sahteIndirimToplam);
 RETURN;
 END
 GO
+
+
+/* Finance semasini olustur */
+IF NOT EXISTS
+(
+    SELECT 1
+    FROM sys.schemas
+    WHERE name = N'Finance'
+)
+BEGIN
+    EXEC(N'CREATE SCHEMA Finance');
+END
+GO
+
+
+/* Currency */
+IF OBJECT_ID(N'Finance.Currency', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.Currency
+    (
+        CurrencyId   TINYINT      NOT NULL
+            CONSTRAINT PK_Finance_Currency PRIMARY KEY,
+        CurrencyCode NVARCHAR(50) NOT NULL,
+        CurrencyName NVARCHAR(20) NULL,
+        Symbol       NVARCHAR(3)  NULL,
+        SortOrder    TINYINT      NOT NULL
+            CONSTRAINT DF_Finance_Currency_SortOrder DEFAULT (0),
+        IsDeleted    BIT          NOT NULL
+            CONSTRAINT DF_Finance_Currency_IsDeleted DEFAULT (0),
+        PosCode      INT          NULL,
+        BYID         INT          NULL
+    );
+END
+GO
+
+
+/* FirstPaymentTypes */
+IF OBJECT_ID(N'Finance.FirstPaymentTypes', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.FirstPaymentTypes
+    (
+        Id    SMALLINT     NULL,
+        Title NVARCHAR(50) NULL
+    );
+END
+GO
+
+
+/* Payments */
+IF OBJECT_ID(N'Finance.Payments', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.Payments
+    (
+        PaymentId INT IDENTITY(1,1) NOT NULL
+            CONSTRAINT PK_Finance_Payments PRIMARY KEY,
+
+        CustomerName  NVARCHAR(255) NULL,
+        CustomerEmail NVARCHAR(255) NULL,
+        CustomerPhone NVARCHAR(50)  NULL,
+        ReservationId INT           NULL,
+
+        CreatedOn DATETIME NULL
+            CONSTRAINT DF_Finance_Payments_CreatedOn DEFAULT (GETDATE()),
+
+        Ip    NVARCHAR(50) NULL,
+        Price DECIMAL(8,2) NOT NULL,
+
+        CurrencyId TINYINT NULL
+            CONSTRAINT DF_Finance_Payments_CurrencyId DEFAULT (1)
+            CONSTRAINT FK_Finance_Payments_Currency
+                REFERENCES Finance.Currency (CurrencyId),
+
+        VirtualPosId  INT          NOT NULL,
+        Link          NVARCHAR(50) NULL,
+        PaymentStatus INT          NULL,
+        Site          INT          NULL,
+        ExpiredOn     DATETIME     NULL
+    );
+END
+GO
+
+
+/* Payments unique index */
+IF OBJECT_ID(N'Finance.Payments', N'U') IS NOT NULL
+   AND NOT EXISTS
+   (
+       SELECT 1
+       FROM sys.indexes
+       WHERE object_id = OBJECT_ID(N'Finance.Payments')
+         AND name = N'IX_Finance_Payments_PaymentId_Link'
+   )
+BEGIN
+    CREATE UNIQUE INDEX IX_Finance_Payments_PaymentId_Link
+        ON Finance.Payments (PaymentId, Link);
+END
+GO
+
+
+/* Rate */
+IF OBJECT_ID(N'Finance.Rate', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.Rate
+    (
+        RateId BIGINT IDENTITY(1,1) NOT NULL
+            CONSTRAINT PK_Finance_Rate PRIMARY KEY,
+
+        RateDate       DATE     NOT NULL,
+        MainCurrencyId TINYINT  NOT NULL,
+
+        IsDeleted BIT NOT NULL
+            CONSTRAINT DF_Finance_Rate_IsDeleted DEFAULT (0),
+
+        CreatedDate SMALLDATETIME NOT NULL
+            CONSTRAINT DF_Finance_Rate_CreatedDate DEFAULT (GETDATE()),
+
+        CreatedById  BIGINT        NULL,
+        ModifiedDate SMALLDATETIME NULL,
+        ModifiedById BIGINT        NULL,
+        DeletedDate  SMALLDATETIME NULL,
+        DeletedById  BIGINT        NULL
+    );
+END
+GO
+
+
+/* RateDetail */
+IF OBJECT_ID(N'Finance.RateDetail', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.RateDetail
+    (
+        RateDetailId BIGINT IDENTITY(1,1) NOT NULL
+            CONSTRAINT PK_Finance_RateDetail PRIMARY KEY,
+
+        RateId BIGINT NOT NULL,
+
+        FromCurrencyId TINYINT NOT NULL
+            CONSTRAINT FK_Finance_RateDetail_FromCurrency
+                REFERENCES Finance.Currency (CurrencyId),
+
+        ToCurrencyId TINYINT NOT NULL
+            CONSTRAINT FK_Finance_RateDetail_ToCurrency
+                REFERENCES Finance.Currency (CurrencyId),
+
+        Buy DECIMAL(18,6) NOT NULL
+    );
+END
+GO
+
+
+/* RateDetail index */
+IF OBJECT_ID(N'Finance.RateDetail', N'U') IS NOT NULL
+   AND NOT EXISTS
+   (
+       SELECT 1
+       FROM sys.indexes
+       WHERE object_id = OBJECT_ID(N'Finance.RateDetail')
+         AND name = N'IX_Finance_RateDetail_RateId_ToCurrencyId'
+   )
+BEGIN
+    CREATE INDEX IX_Finance_RateDetail_RateId_ToCurrencyId
+        ON Finance.RateDetail (RateId, ToCurrencyId)
+        INCLUDE (FromCurrencyId);
+END
+GO
+
+
+/* VirtualPos */
+IF OBJECT_ID(N'Finance.VirtualPos', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.VirtualPos
+    (
+        Id   INT           NOT NULL,
+        Name NVARCHAR(100) NULL
+    );
+END
+GO
+
+
+/* VirtualPosResponses */
+IF OBJECT_ID(N'Finance.VirtualPosResponses', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.VirtualPosResponses
+    (
+        Id INT IDENTITY(1,1) NOT NULL
+            CONSTRAINT PK_Finance_VirtualPosResponses PRIMARY KEY,
+
+        VirtualPosId   INT            NULL,
+        Response       NVARCHAR(MAX)  NULL,
+        CreatedOn      DATETIME       NULL
+            CONSTRAINT DF_Finance_VirtualPosResponses_CreatedOn
+                DEFAULT (GETDATE()),
+        kayitlarId     INT            NULL,
+        conversationId NVARCHAR(100)  NULL,
+        Data           NVARCHAR(MAX)  NULL,
+        PaymentId      INT            NULL
+    );
+END
+GO
+
+
+/* VirtualPosSettings */
+IF OBJECT_ID(N'Finance.VirtualPosSettings', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.VirtualPosSettings
+    (
+        Name         NVARCHAR(255) NULL,
+        Value        NVARCHAR(500) NULL,
+        VirtualPosId INT           NULL
+    );
+END
+GO
 IF OBJECT_ID(N'[dbo].[defter]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[defter]', N'id') IS NULL
 BEGIN
@@ -1507,6 +1784,20 @@ ALTER TABLE [dbo].[dolu] ADD [IsExternal] bit NULL CONSTRAINT DF_dolu_IsExternal
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[dolu_fake]', N'U') IS NULL
+BEGIN
+CREATE TABLE [dbo].[dolu_fake]
+(
+    [id] int IDENTITY(1,1) NOT NULL,
+    [emlak] int NULL,
+    [tarih] date NULL,
+    [tarih2] date NULL,
+    [durum] int NULL,
+    CONSTRAINT [PK_dolu_fake] PRIMARY KEY ([id])
+);
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[dolu_fake]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[dolu_fake]', N'id') IS NULL
 BEGIN
@@ -1532,6 +1823,13 @@ IF OBJECT_ID(N'[dbo].[dolu_fake]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[dolu_fake]', N'tarih') IS NULL
 BEGIN
 ALTER TABLE [dbo].[dolu_fake] ADD [tarih] date NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[dolu_fake]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[dolu_fake]', N'durum') IS NULL
+BEGIN
+ALTER TABLE [dbo].[dolu_fake] ADD [durum] int NULL;
 END;
 GO
 
@@ -2424,6 +2722,26 @@ ALTER TABLE [dbo].[homes] ADD [sitemap] bit NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[HomesExtraPayments]', N'U') IS NULL
+BEGIN
+CREATE TABLE [dbo].[HomesExtraPayments]
+(
+    [id] int IDENTITY(1,1) NOT NULL,
+    [amount] int NULL,
+    [start_date] date NULL,
+    [end_date] date NULL,
+    [price] int NULL,
+    [homesId] int NULL,
+    [title] nvarchar(150) NULL,
+    [CurrencyId] tinyint NULL,
+    [title_s2] nvarchar(150) NULL,
+    [Type] tinyint NULL,
+    [IsOptional] bit NULL CONSTRAINT [DF_HomesExtraPayments_IsOptional] DEFAULT 1,
+    CONSTRAINT [PK_HomesExtraPayments] PRIMARY KEY ([id])
+);
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[HomesExtraPayments]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[HomesExtraPayments]', N'id') IS NULL
 BEGIN
@@ -2746,6 +3064,31 @@ UPDATE SET Name = source.Name, HomeColumnBase = source.HomeColumnBase, IsInclude
     WHEN NOT MATCHED THEN
 INSERT (Code, Name, HomeColumnBase, IsIncluded)
 VALUES (source.Code, source.Name, source.HomeColumnBase, source.IsIncluded);
+GO
+
+IF OBJECT_ID(N'[dbo].[Natsisa_Fn_aratarihler2]', N'FN') IS NOT NULL
+    DROP FUNCTION [dbo].[Natsisa_Fn_aratarihler2];
+GO
+
+CREATE FUNCTION [dbo].[Natsisa_Fn_aratarihler2](
+    @tarih1 DATE,
+    @tarih2 DATE
+)
+    RETURNS NVARCHAR(MAX)
+AS
+BEGIN
+    DECLARE @tarihler NVARCHAR(MAX) = '';
+
+    SET @tarih1 = DATEADD(DAY, 1, @tarih1);
+    WHILE @tarih1 < @tarih2
+BEGIN
+            SET @tarihler += (CASE WHEN @tarihler = '' THEN '' ELSE ',' END) +
+                             CONCAT(YEAR(@tarih1), '-', FORMAT(@tarih1, 'MM'), '-', FORMAT(@tarih1, 'dd'));
+            SET @tarih1 = DATEADD(DAY, 1, @tarih1);
+END;
+
+    RETURN @tarihler;
+END
 GO
 
 IF OBJECT_ID(N'[dbo].[Natsisa_Fn_yenifiyathesapla_tablo]', N'TF') IS NOT NULL
