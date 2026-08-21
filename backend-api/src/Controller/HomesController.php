@@ -4,7 +4,7 @@
 declare(strict_types=1);
 
 namespace App\Controller;
-error_reporting(E_ALL);
+
 use DateTime;
 use PDO;
 
@@ -37,8 +37,8 @@ final class HomesController extends Controller
         $pdo = $this->db->pdo();
         $now = new DateTime();
 
-        $siteId = $this->pInt('site', 1);
-        $dbt = ''; // Çok-dilli tablo son eki (varsayılan site için boş)
+        $siteId = $this->siteId();
+        $dbt = $this->siteSuffix($siteId);
 
         $startRaw = $this->p('start') !== '' ? $this->p('start') : $this->p('searchdate1');
         $endRaw   = $this->p('end') !== '' ? $this->p('end') : $this->p('searchdate2');
@@ -255,7 +255,8 @@ final class HomesController extends Controller
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $total = $rows ? (int) $rows[0]['totalCount'] : 0;
-        $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
+        $siteDomain = $this->siteDomain($pdo, $siteId);
+        $cdnBase = $this->cdnBase($siteDomain);
 
         foreach ($rows as &$row) {
             unset($row['totalCount']);
@@ -270,7 +271,7 @@ final class HomesController extends Controller
             }
 
             if (isset($row['url'])) {
-                $row['url'] = $this->fullHomeUrl((string) $row['url']);
+                $row['url'] = $this->fullHomeUrl((string) $row['url'], $siteDomain);
             }
 
             $resimStr = isset($row['resim']) ? (string) $row['resim'] : '';
@@ -323,7 +324,7 @@ SELECT
     h.baslik{$c['dbt']} AS baslik,
     h.baslik AS basliko,
     h.icerik{$c['dbt']},
-    h.enlem, h.boylam, h.resim,
+    h.enlem, h.boylam, h.resim{$c['dbt']} AS resim,
     h.ribbon{$c['dbt']} AS ribbon,
     h.ribbon2{$c['dbt']} AS ribbon2,
     h.yuzme_havuzu, h.kisi, h.oda_sayisi,
@@ -548,6 +549,35 @@ WHERE h.aktif{$c['dbt']} = 1
         return is_numeric($v) ? (int) $v : $default;
     }
 
+    private function siteId(): int
+    {
+        foreach (['site', 'site_id', 'siteId', 'currentSite', 'currentSiteId'] as $key) {
+            $value = $this->p($key);
+            if (is_numeric($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        return defined('PRICE_SITE') ? max(1, (int) constant('PRICE_SITE')) : 1;
+    }
+
+    private function siteSuffix(int $siteId): string
+    {
+        if ($siteId <= 1) {
+            return '';
+        }
+
+        $suffixes = $this->app['site_column_suffixes'] ?? [];
+        if (is_array($suffixes)) {
+            $suffix = $suffixes[$siteId] ?? ($suffixes[(string) $siteId] ?? null);
+            if ($suffix !== null) {
+                return $this->safeSuffix((string) $suffix);
+            }
+        }
+
+        return '_s' . $siteId;
+    }
+
     /**
      * tip=7&tip=12 gibi tekrarlı parametreleri virgülle birleştirir.
      */
@@ -610,15 +640,70 @@ WHERE h.aktif{$c['dbt']} = 1
         return $valid ? implode(',', $valid) : '';
     }
 
-    private function fullHomeUrl(string $url): string
+    private function fullHomeUrl(string $url, string $domain = ''): string
     {
         $url = trim($url);
         if ($url === '' || preg_match('#^https?://#i', $url) === 1) {
             return $url;
         }
 
-        $domain = defined('Domain') ? rtrim((string) constant('Domain'), '/') : '';
+        $domain = $domain !== '' ? $domain : (defined('Domain') ? (string) constant('Domain') : '');
+        $domain = $this->normalizeDomain($domain);
 
         return $domain !== '' ? $domain . '/' . ltrim($url, '/') : $url;
+    }
+
+    private function cdnBase(string $siteDomain): string
+    {
+        $domain = $siteDomain !== '' ? $siteDomain : (defined('Cdn') ? (string) constant('Cdn') : '');
+        $domain = $this->normalizeDomain($domain);
+
+        return $domain !== '' ? $domain . '/uploads/small/' : '/uploads/small/';
+    }
+
+    private function siteDomain(PDO $pdo, int $siteId): string
+    {
+        if ($siteId <= 1) {
+            return defined('Domain') ? $this->normalizeDomain((string) constant('Domain')) : '';
+        }
+
+        $queries = $this->app['homes_site_domain_queries'] ?? [];
+        $query = is_array($queries)
+            ? (string) ($queries[$siteId] ?? ($queries[(string) $siteId] ?? ''))
+            : '';
+        if (trim($query) === '') {
+            return defined('Domain') ? $this->normalizeDomain((string) constant('Domain')) : '';
+        }
+
+        try {
+            $row = $pdo->query($query)->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            return defined('Domain') ? $this->normalizeDomain((string) constant('Domain')) : '';
+        }
+
+        if (!is_array($row)) {
+            return defined('Domain') ? $this->normalizeDomain((string) constant('Domain')) : '';
+        }
+
+        $domain = trim((string) ($row['domain'] ?? reset($row)));
+
+        return $domain !== ''
+            ? $this->normalizeDomain($domain)
+            : (defined('Domain') ? $this->normalizeDomain((string) constant('Domain')) : '');
+    }
+
+    private function normalizeDomain(string $domain): string
+    {
+        $domain = rtrim(trim($domain), '/');
+        if ($domain !== '' && preg_match('#^https?://#i', $domain) !== 1) {
+            $domain = 'https://' . $domain;
+        }
+
+        return $domain;
+    }
+
+    private function safeSuffix(string $suffix): string
+    {
+        return $suffix === '' || preg_match('/^_[A-Za-z0-9]+$/', $suffix) === 1 ? $suffix : '';
     }
 }

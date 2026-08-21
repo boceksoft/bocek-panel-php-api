@@ -24,6 +24,7 @@ final class CalculateController extends Controller
      * @query PromotionCode string Promosyon kodu
      * @query pool_fee bool Havuz isitma ucreti eklensin mi
      * @query selectedServices string Secili ekstra servis id listesi
+     * @query site int Site kimligi
      */
     public function index(): void
     {
@@ -42,6 +43,7 @@ final class CalculateController extends Controller
         }
 
         $pdo = $this->db->pdo();
+        $site = $this->siteId();
         $calendarHome = $this->calendarHome($pdo, $entityId);
         $availability = $this->localAvailability($pdo, $entityId, $start, $end, $calendarHome);
 
@@ -59,7 +61,8 @@ final class CalculateController extends Controller
             $end,
             $entityId,
             (string) $this->param('PromotionCode', ''),
-            $calendarHome
+            $calendarHome,
+            $site
         );
 
         if (!empty($json['success'])) {
@@ -92,6 +95,7 @@ final class CalculateController extends Controller
      * @query pool_fee bool Havuz isitma ucreti eklensin mi
      * @query selectedServices string Secili ekstra servis id listesi
      * @query format string png veya jpg
+     * @query site int Site kimligi
      */
     public function image(): void
     {
@@ -105,6 +109,7 @@ final class CalculateController extends Controller
         }
 
         $pdo = $this->db->pdo();
+        $site = $this->siteId();
         $calendarHome = $this->calendarHome($pdo, $entityId);
         $availability = $this->localAvailability($pdo, $entityId, $start, $end, $calendarHome);
         $json = $this->calculatePrice(
@@ -113,7 +118,8 @@ final class CalculateController extends Controller
             $end,
             $entityId,
             (string) $this->param('PromotionCode', ''),
-            $calendarHome
+            $calendarHome,
+            $site
         );
 
         if (empty($json['success']) || empty($json['result'])) {
@@ -148,6 +154,18 @@ final class CalculateController extends Controller
         }
 
         return $this->request->input($key, $default);
+    }
+
+    private function siteId(): int
+    {
+        foreach (['site', 'site_id', 'siteId', 'currentSite', 'currentSiteId'] as $key) {
+            $value = $this->param($key);
+            if (is_numeric($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        return defined('PRICE_SITE') ? max(1, (int) constant('PRICE_SITE')) : 1;
     }
 
     /**
@@ -290,7 +308,8 @@ final class CalculateController extends Controller
         string $end,
         int $entityId,
         string $promotionCode,
-        $calendarHome
+        $calendarHome,
+        int $site
     ): array {
         $json = ['AvailableExtraServices' => []];
         $night = (int) date_diff(date_create($end), date_create($start))->days;
@@ -299,7 +318,6 @@ final class CalculateController extends Controller
             return ['error' => 'Gecersiz tarih araligi.'];
         }
 
-        $site = defined('PRICE_SITE') ? (int) constant('PRICE_SITE') : 1;
         $defaultCurrencyId = defined('DEFAULT_CURRENCY_ID') ? (int) constant('DEFAULT_CURRENCY_ID') : 1;
         $rateId = $this->lastRateId($pdo);
         $uzanti = $this->fieldSuffix($site);
@@ -345,10 +363,10 @@ SELECT
     ), 0) * COALESCE(RD2.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS temizlikFiyat,
     CASE WHEN h.kur{$uzanti} > 0 THEN h.kur{$uzanti} ELSE 0 END AS kur,
     h.depozito{$depozitoSuffix} AS depozito,
-    dbo.FnRandomSplit(h.resim, ',') AS resim,
+    dbo.FnRandomSplit(h.resim{$uzanti}, ',') AS resim,
     h.baslik{$uzanti} AS baslik,
-    h.hasar,
-    h.kazancorani,
+    h.hasar{$uzanti} AS hasar,
+    h.kazancorani{$uzanti} AS kazancorani,
     ISNULL(ToC.CurrencyName, h.doviz{$uzanti}) AS CurrencyName,
     ISNULL(ToC.CurrencyCode, h.doviz{$uzanti}) AS CurrencyCode,
     h.id,
@@ -679,13 +697,11 @@ WHERE h.id = {$entityId}";
             return [];
         }
 
-        $site = defined('PRICE_SITE') ? (int) constant('PRICE_SITE') : 1;
-        $uzanti = $this->fieldSuffix($site);
         $fallbackBuySql = $fallbackBuy > 0 ? (string) $fallbackBuy : '1';
 
         $stmt = $pdo->prepare(
             "SELECT EP.*,
-                    EP.title{$uzanti} AS title,
+                    EP.title AS title,
                     CAST(EP.amount * COALESCE(RD.Buy, {$fallbackBuySql}, 1) AS decimal(18, 0)) AS amount
              FROM dbo.HomesExtraPayments EP
              LEFT JOIN Finance.Currency FromC ON FromC.CurrencyId = EP.CurrencyId

@@ -88,6 +88,20 @@ return [
         'date_format' => 'd.m.Y',
     ],
 
+    // Link olusturma endpoint'inin redirectTo query parametreleri.
+    // Sayfa yolu links_search_page_query ile DB'den gelir; burada path yoktur.
+    'links_reservation_url' => [
+        'params' => [
+            'entity_id' => 'ids',
+            'start' => 'start',
+            'end' => 'end',
+        ],
+        'date_format' => 'Y-m-d',
+    ],
+    'links_site_domain_queries' => [
+        2 => 'SELECT TOP 1 domain FROM genel_s2',
+    ],
+
     // HTML'i PNG/JPG image'a cevirmek icin wkhtmltoimage binary yolu.
     // Sunucuya gore app.local.php icinde override edilmelidir.
     // Proje ici Windows: backend-api/bin/wkhtmltoimage.exe
@@ -109,6 +123,12 @@ return [
         3 => [
             'depozito' => '',
         ],
+    ],
+
+    // Homes endpoint'inde siteye gore URL/foto domain'i.
+    // Sorgu ilk satirda "domain" alias'i dondurmelidir.
+    'homes_site_domain_queries' => [
+        2 => 'SELECT TOP 1 domain FROM genel_s2',
     ],
 
     // IP beyaz liste. Boş bırakılırsa IP kontrolü KAPALI olur.
