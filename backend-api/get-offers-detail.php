@@ -19,6 +19,13 @@ if (!isset($_GET['id']) || empty($_GET['id'])) {
 }
 
 $offerId = (int)$_GET['id'];
+$siteId = null;
+foreach (array('site', 'Site', 'site_id', 'SiteId', 'siteId', 'currentSite', 'currentSiteId') as $siteKey) {
+    if (isset($_GET[$siteKey]) && is_numeric($_GET[$siteKey]) && (int)$_GET[$siteKey] > 0) {
+        $siteId = (int)$_GET[$siteKey];
+        break;
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Veritabanı İşlemleri
@@ -36,9 +43,15 @@ try {
                 link 
             FROM dbo.teklifler 
             WHERE id = :id";
+    if ($siteId !== null) {
+        $sql .= " AND site = :site";
+    }
 
     $stmt = $pdo->prepare($sql);
     $stmt->bindParam(':id', $offerId, PDO::PARAM_INT);
+    if ($siteId !== null) {
+        $stmt->bindParam(':site', $siteId, PDO::PARAM_INT);
+    }
     $stmt->execute();
 
     $offer = $stmt->fetch();

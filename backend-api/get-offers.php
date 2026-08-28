@@ -12,7 +12,13 @@ try {
     http_response_code(200);
 
     // 2. Parametre Kontrolleri: Site, Sayfa (page) ve Sayfa Başına Kayıt (per_page)
-    $siteId  = isset($_GET['site']) ? (int)$_GET['site'] : 1;
+    $siteId = defined('PRICE_SITE') ? max(1, (int)PRICE_SITE) : 1;
+    foreach (array('site', 'Site', 'site_id', 'SiteId', 'siteId', 'currentSite', 'currentSiteId') as $siteKey) {
+        if (isset($_GET[$siteKey]) && is_numeric($_GET[$siteKey]) && (int)$_GET[$siteKey] > 0) {
+            $siteId = (int)$_GET[$siteKey];
+            break;
+        }
+    }
     $page    = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
     $perPage = isset($_GET['per_page']) ? max(1, (int)$_GET['per_page']) : 50;
 

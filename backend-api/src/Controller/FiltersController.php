@@ -18,25 +18,36 @@ final class FiltersController extends Controller
     public function index(): void
     {
         $pdo = $this->db->pdo();
+        $siteId = $this->siteId();
+        $siteName = $this->siteName($siteId);
+        $activeSite = [
+            'id' => $siteId,
+            'siteadi' => $siteName,
+        ];
+        $titleColumn = $this->titleColumn($siteId);
 
         // Villa tipleri
         $types = $pdo->query(
-            "SELECT id, baslik FROM tip WHERE aktif=1 AND search=1 AND cat != 0 ORDER BY siralama ASC"
+            "SELECT id, {$titleColumn} AS baslik FROM tip WHERE aktif=1 AND search=1 AND cat != 0 ORDER BY siralama ASC"
         )->fetchAll();
 
         // Özellikler
         $features = $pdo->query(
-            "SELECT id, baslik FROM ozellikler WHERE aktif=1 ORDER BY siralama ASC"
+            "SELECT id, {$titleColumn} AS baslik FROM ozellikler WHERE aktif=1 ORDER BY siralama ASC"
         )->fetchAll();
 
         // Bölgeler (hiyerarşik ağaç)
         $allDestinations = $pdo->query(
-            "SELECT id, baslik, cat FROM destinations WHERE aktif=1 ORDER BY siralama ASC"
+            "SELECT id, {$titleColumn} AS baslik, cat FROM destinations WHERE aktif=1 ORDER BY siralama ASC"
         )->fetchAll();
 
         $regions = $this->buildRegionTree($allDestinations);
 
         $this->response->success([
+            'site' => $activeSite,
+            'active_site' => $activeSite,
+            'sites' => $this->sites(),
+            'siteadi' => $siteName,
             'types'    => $types,
             'features' => $features,
             'regions'  => $regions,
@@ -507,5 +518,143 @@ final class FiltersController extends Controller
         unset($dest);
 
         return $regions;
+    }
+
+    private function siteId(): int
+    {
+        foreach (['site', 'Site', 'site_id', 'SiteId', 'siteId', 'currentSite', 'currentSiteId'] as $key) {
+            $value = $this->request->query($key);
+            if ($value === null) {
+                $value = $this->request->input($key);
+            }
+            if (is_numeric($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        foreach (['X-Site', 'X-Site-Id', 'X-Current-Site', 'X-Current-Site-Id'] as $header) {
+            $value = $this->request->header($header);
+            if (is_numeric($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        $detectedSite = $this->siteIdFromRequestHost();
+        if ($detectedSite > 0) {
+            return $detectedSite;
+        }
+
+        return defined('PRICE_SITE') ? max(1, (int) constant('PRICE_SITE')) : 1;
+    }
+
+    private function siteName(int $siteId): string
+    {
+        $table = $siteId === 2 ? 'genel_s2' : 'genel';
+
+        try {
+            $row = $this->db->pdo()->query("SELECT TOP 1 siteadi FROM {$table}")->fetch(\PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            return '';
+        }
+
+        return is_array($row) ? trim((string) ($row['siteadi'] ?? '')) : '';
+    }
+
+    /**
+     * @return array<int,array{id:int,siteadi:string}>
+     */
+    private function sites(): array
+    {
+        return [
+            [
+                'id' => 1,
+                'siteadi' => $this->siteName(1),
+            ],
+            [
+                'id' => 2,
+                'siteadi' => $this->siteName(2),
+            ],
+        ];
+    }
+
+    private function titleColumn(int $siteId): string
+    {
+        return 'baslik' . $this->siteSuffix($siteId);
+    }
+
+    private function siteSuffix(int $siteId): string
+    {
+        if ($siteId <= 1) {
+            return '';
+        }
+
+        $suffixes = $this->app['site_column_suffixes'] ?? [];
+        $suffix = is_array($suffixes)
+            ? (string) ($suffixes[$siteId] ?? ($suffixes[(string) $siteId] ?? ('_s' . $siteId)))
+            : '_s' . $siteId;
+
+        return preg_match('/^_[A-Za-z0-9]+$/', $suffix) === 1 ? $suffix : '';
+    }
+
+    private function siteIdFromRequestHost(): int
+    {
+        $requestHosts = array_filter([
+            $this->hostFromUrl($_SERVER['HTTP_ORIGIN'] ?? ''),
+            $this->hostFromUrl($_SERVER['HTTP_REFERER'] ?? ''),
+            $this->hostFromUrl($_SERVER['HTTP_HOST'] ?? ''),
+        ]);
+        if ($requestHosts === []) {
+            return 0;
+        }
+
+        $site2Host = $this->siteDomainHost(2);
+        if ($site2Host === '') {
+            return 0;
+        }
+
+        foreach ($requestHosts as $host) {
+            if ($host === $site2Host) {
+                return 2;
+            }
+        }
+
+        return 0;
+    }
+
+    private function siteDomainHost(int $siteId): string
+    {
+        $queries = $this->app['homes_site_domain_queries'] ?? [];
+        $query = is_array($queries)
+            ? (string) ($queries[$siteId] ?? ($queries[(string) $siteId] ?? ''))
+            : '';
+        if (trim($query) === '' && $siteId === 2) {
+            $query = 'SELECT TOP 1 domain FROM genel_s2';
+        }
+
+        try {
+            $row = $this->db->pdo()->query($query)->fetch(\PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            return '';
+        }
+
+        return is_array($row) ? $this->hostFromUrl((string) ($row['domain'] ?? reset($row))) : '';
+    }
+
+    private function hostFromUrl(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+        if (preg_match('#^https?://#i', $value) !== 1) {
+            $value = 'https://' . $value;
+        }
+
+        $host = parse_url($value, PHP_URL_HOST);
+        if (!is_string($host) || $host === '') {
+            return '';
+        }
+
+        return preg_replace('/^www\./i', '', strtolower($host)) ?: '';
     }
 }

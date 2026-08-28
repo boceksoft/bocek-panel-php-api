@@ -53,6 +53,13 @@ $ids      = isset($input['ids']) && is_array($input['ids']) ? $input['ids'] : ar
 $start    = isset($input['start']) ? trim($input['start']) : '';
 $end      = isset($input['end']) ? trim($input['end']) : '';
 $sure     = isset($input['sure']) ? (int)$input['sure'] : 0;
+$siteId   = 1;
+foreach (array('site', 'site_id', 'siteId', 'currentSite', 'currentSiteId') as $siteKey) {
+    if (isset($input[$siteKey]) && is_numeric($input[$siteKey]) && (int)$input[$siteKey] > 0) {
+        $siteId = (int)$input[$siteKey];
+        break;
+    }
+}
 
 // C# veya Frontend'den gelen teklifId değerini alıyoruz
 $teklifId = !empty($input['teklifId']) ? (int)$input['teklifId'] : null;
@@ -74,7 +81,7 @@ try {
     $originalLink = generateRandomString(4) . $nextId;
 
     // Domain config.php dosyasındaki sabitten çekiliyor
-    $domain = Domain;
+    $domain = linkSiteDomain($pdo, $backendApiAppConfig, $siteId);
 
     // Arama sayfasını veritabanından çekme sorgusu
     $aramaSayfasi = $aramaSayfasiUrl;
@@ -123,7 +130,8 @@ try {
     $stmtInsert = $pdo->prepare($sqlInsert);
     $stmtInsert->execute($insertParams);
 
-    $finalLink = str_replace("www.", "", $domain) . "/" . $originalLink . "?v";
+    $finalDomain = $siteId > 1 ? $domain : str_replace("www.", "", $domain);
+    $finalLink = $finalDomain . "/" . $originalLink . "?v";
 
     echo $finalLink;
 

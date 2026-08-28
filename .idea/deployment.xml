@@ -1,11 +1,46 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="villakilavuzu" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="villavillam" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false">
+    <option name="confirmBeforeUploading" value="false" />
     <serverData>
+      <paths name="RisusVillaTatili">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="kayakoyvillas">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="villaciniz">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/villaciniz.com.tr/httpdocs/backend-api" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath path="/villaciniz.com.tr/httpdocs/backend-api" />
+          </excludedPaths>
+        </serverdata>
+      </paths>
       <paths name="villakilavuzu">
         <serverdata>
           <mappings>
-            <mapping deploy="/villakilavuzu.com/web.villakilavuzu.com/backend-api" local="$PROJECT_DIR$/backend-api" web="/" />
+            <mapping deploy="/" local="$PROJECT_DIR$/backend-api" web="/" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath path="/" />
+          </excludedPaths>
+        </serverdata>
+      </paths>
+      <paths name="villavillam">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/villavillam.com.tr/web.villavillam.com.tr/backend-api" local="$PROJECT_DIR$/backend-api" web="/" />
           </mappings>
         </serverdata>
       </paths>

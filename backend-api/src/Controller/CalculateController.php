@@ -158,7 +158,7 @@ final class CalculateController extends Controller
 
     private function siteId(): int
     {
-        foreach (['site', 'site_id', 'siteId', 'currentSite', 'currentSiteId'] as $key) {
+        foreach (['site', 'Site', 'site_id', 'SiteId', 'siteId', 'currentSite', 'currentSiteId'] as $key) {
             $value = $this->param($key);
             if (is_numeric($value) && (int) $value > 0) {
                 return (int) $value;
@@ -166,6 +166,11 @@ final class CalculateController extends Controller
         }
 
         return defined('PRICE_SITE') ? max(1, (int) constant('PRICE_SITE')) : 1;
+    }
+
+    private function priceSiteId(int $site): int
+    {
+        return !empty($this->app['calculate_prices_same_across_sites']) ? 1 : $site;
     }
 
     /**
@@ -322,6 +327,7 @@ final class CalculateController extends Controller
         $rateId = $this->lastRateId($pdo);
         $uzanti = $this->fieldSuffix($site);
         $depozitoSuffix = $this->fieldSuffix($site, 'depozito');
+        $priceSite = $this->priceSiteId($site);
 
         $sql = " 
 SELECT
@@ -329,6 +335,14 @@ SELECT
     FiyatTablosu.IndirimTutari * COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS indirimTutari,
     COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS Buy,
     FiyatTablosu.SahteIndirimTutari * COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS SahteIndirimTutari,
+    CASE WHEN EXISTS (
+        SELECT 1
+        FROM sonDakika
+        WHERE site = {$priceSite}
+          AND islem_id = {$entityId}
+          AND CONVERT(date, tarih1, 104) <= CONVERT(date, '{$start}', 23)
+          AND CONVERT(date, tarih2, 104) >= CONVERT(date, '{$end}', 23)
+    ) THEN 1 ELSE 0 END AS sonDakikaVar,
     (
         SELECT TOP 1
             CASE
@@ -337,7 +351,7 @@ SELECT
                 ELSE gece
             END
         FROM sezonlar
-        WHERE site = {$site}
+        WHERE site = {$priceSite}
           AND islem_id = {$entityId}
           AND islem = 'emlak'
           AND '{$start}' BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)
@@ -346,7 +360,7 @@ SELECT
     ISNULL((
         SELECT TOP 1 temizlikgece
         FROM sezonlar
-        WHERE site = {$site}
+        WHERE site = {$priceSite}
           AND islem_id = {$entityId}
           AND islem = 'emlak'
           AND '{$start}' BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)
@@ -355,7 +369,7 @@ SELECT
     ISNULL((
         SELECT TOP 1 temizlikFiyat
         FROM sezonlar
-        WHERE site = {$site}
+        WHERE site = {$priceSite}
           AND islem_id = {$entityId}
           AND islem = 'emlak'
           AND '{$start}' BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)
@@ -377,7 +391,7 @@ SELECT
 FROM homes h
 LEFT JOIN Finance.Currency FromC ON FromC.CurrencyName = h.doviz{$uzanti}
 CROSS APPLY (
-    SELECT * FROM dbo.Natsisa_Fn_yenifiyathesapla_tablo('{$start}', '{$end}', {$entityId}, {$site})
+    SELECT * FROM dbo.Natsisa_Fn_yenifiyathesapla_tablo('{$start}', '{$end}', {$entityId}, {$priceSite})
 ) AS FiyatTablosu
 LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
 LEFT JOIN Finance.Currency BaseCurrency ON BaseCurrency.CurrencyId = 1
@@ -407,8 +421,10 @@ WHERE h.id = {$entityId}";
             return ['error' => 'Villa aktif degil.'];
         }
 
-        $state = $this->collectDailyState($pdo, $start, $end, $entityId, $home, $calendarHome, $rateId, $defaultCurrencyId, $site);
-        $shortStay = $this->isShortStay($pdo, $start, $end, $entityId, $night, (int) $home['mingece'], $calendarHome);
+        $state = $this->collectDailyState($pdo, $start, $end, $entityId, $home, $calendarHome, $rateId, $defaultCurrencyId, $priceSite);
+        $shortStay = (int) $home['sonDakikaVar'] === 1
+            ? false
+            : $this->isShortStay($pdo, $start, $end, $entityId, $night, (int) $home['mingece'], $calendarHome);
         $price = (int) $home['fyt'];
         $oldPrice = 0;
         $promotionDiscountPrice = 0;
@@ -490,7 +506,7 @@ WHERE h.id = {$entityId}";
         $json['result']['daily_price'] = (int) ($price / $night);
         $json['result']['night'] = $night;
         $json['result']['home_title'] = (string) $home['baslik'];
-        $json['result']['reservation_url'] = $this->reservationUrl($entityId, $start, $end);
+        $json['result']['reservation_url'] = $this->reservationUrl($entityId, $start, $end, $site);
 
         $this->applyExtraServicePrices($json);
 
@@ -985,9 +1001,9 @@ WHERE h.id = {$entityId}";
         return escapeshellarg($binary);
     }
 
-    private function reservationUrl(int $entityId, string $start, string $end): string
+    private function reservationUrl(int $entityId, string $start, string $end, int $site): string
     {
-        $domain = defined('Domain') ? (string) constant('Domain') : '';
+        $domain = $this->siteDomain($site);
         $domain = rtrim(trim($domain), '/');
         if ($domain === '') {
             return '';
@@ -1007,12 +1023,42 @@ WHERE h.id = {$entityId}";
             $this->queryParamName($params, 'start', 'start') => $this->formatDate($start, $dateFormat),
             $this->queryParamName($params, 'end', 'end') => $this->formatDate($end, $dateFormat),
         ];
+        if ($site > 1) {
+            $query[$this->queryParamName($params, 'site', 'site')] = $site;
+        }
 
         if ((string) $this->param('pool_fee', '') === '1') {
             $query[$this->queryParamName($params, 'pool_fee', 'buyPool')] = 1;
         }
 
         return $domain . $path . '?' . http_build_query($query, '', '&');
+    }
+
+    private function siteDomain(int $site): string
+    {
+        if ($site <= 1) {
+            return defined('Domain') ? (string) constant('Domain') : '';
+        }
+
+        $queries = $this->app['links_site_domain_queries'] ?? ($this->app['homes_site_domain_queries'] ?? []);
+        $query = is_array($queries)
+            ? (string) ($queries[$site] ?? ($queries[(string) $site] ?? ''))
+            : '';
+        if (trim($query) === '') {
+            return defined('Domain') ? (string) constant('Domain') : '';
+        }
+
+        try {
+            $row = $this->db->pdo()->query($query)->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            return defined('Domain') ? (string) constant('Domain') : '';
+        }
+
+        if (!is_array($row)) {
+            return defined('Domain') ? (string) constant('Domain') : '';
+        }
+
+        return trim((string) ($row['domain'] ?? reset($row)));
     }
 
     /**

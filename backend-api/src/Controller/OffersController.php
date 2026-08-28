@@ -27,7 +27,7 @@ final class OffersController extends Controller
      */
     public function index(): void
     {
-        $siteId  = (int) $this->request->query('site', 1);
+        $siteId  = $this->siteId();
         $page    = max(1, (int) $this->request->query('page', 1));
         $perPage = max(1, (int) $this->request->query('per_page', self::DEFAULT_PER_PAGE));
         $offset  = ($page - 1) * $perPage;
@@ -199,5 +199,17 @@ final class OffersController extends Controller
         }
 
         return null;
+    }
+
+    private function siteId(): int
+    {
+        foreach (['site', 'Site', 'site_id', 'SiteId', 'siteId', 'currentSite', 'currentSiteId'] as $key) {
+            $value = $this->request->query($key);
+            if (is_numeric($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        return defined('PRICE_SITE') ? max(1, (int) constant('PRICE_SITE')) : 1;
     }
 }

@@ -309,7 +309,7 @@ final class HomesController extends Controller
      */
     private function buildSql(array $c): string
     {
-        $homeRate = "TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), h.kur{$c['dbt']}), ''))";
+        $homeRate = "TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), h.kur), ''))";
         $currencyRate = 'rate_num.rate';
         $price = 'fiyatlar_num.sqfiyat';
 
@@ -324,7 +324,7 @@ SELECT
     h.baslik{$c['dbt']} AS baslik,
     h.baslik AS basliko,
     h.icerik{$c['dbt']},
-    h.enlem, h.boylam, h.resim{$c['dbt']} AS resim,
+    h.enlem, h.boylam, h.resim AS resim,
     h.ribbon{$c['dbt']} AS ribbon,
     h.ribbon2{$c['dbt']} AS ribbon2,
     h.yuzme_havuzu, h.kisi, h.oda_sayisi,
@@ -333,8 +333,8 @@ SELECT
     {$c['takvimSelect']}
     CAST(ROUND(
         (CASE
-            WHEN h.doviz{$c['dbt']} = '{$c['doviz']}' THEN {$price}
-            WHEN h.doviz{$c['dbt']} = 'tl' THEN ({$price} / NULLIF({$c['hedefKur']}, 0))
+            WHEN h.doviz = '{$c['doviz']}' THEN {$price}
+            WHEN h.doviz = 'tl' THEN ({$price} / NULLIF({$c['hedefKur']}, 0))
             WHEN '{$c['doviz']}' = 'tl' THEN ({$price} * (CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE {$currencyRate} END))
             ELSE ({$price} * (CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE {$currencyRate} END) / NULLIF({$c['hedefKur']}, 0))
         END), 0
@@ -345,7 +345,7 @@ SELECT
     mm.val AS mm,
     bosluklar.girisbosluk, bosluklar.cikisbosluk
 FROM homes AS h
-INNER JOIN rate ON rate.CurrencyName = h.doviz{$c['dbt']}
+INNER JOIN rate ON rate.CurrencyName = h.doviz
 {$c['ksql']}
 {$c['nettarihSql']}
 {$c['takvimCross']}
@@ -400,7 +400,7 @@ WHERE h.aktif{$c['dbt']} = 1
 
         if (!$hasDate) {
             return [$select, $cross, $where];
-        }
+        } 
 
         if ($takvimKuraliReq === '1') {
             $select = '0 AS gecemax, sezon.gece AS sezongece,';
@@ -655,7 +655,10 @@ WHERE h.aktif{$c['dbt']} = 1
 
     private function cdnBase(string $siteDomain): string
     {
-        $domain = $siteDomain !== '' ? $siteDomain : (defined('Cdn') ? (string) constant('Cdn') : '');
+        $domain = defined('Cdn') ? (string) constant('Cdn') : '';
+        if (trim($domain) === '') {
+            $domain = defined('Domain') ? (string) constant('Domain') : $siteDomain;
+        }
         $domain = $this->normalizeDomain($domain);
 
         return $domain !== '' ? $domain . '/uploads/small/' : '/uploads/small/';

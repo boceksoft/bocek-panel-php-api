@@ -125,6 +125,10 @@ return [
         ],
     ],
 
+    // true ise fiyat/sezon/indirim/son dakika hesaplari her site icin site=1 uzerinden yapilir.
+    // false ise hesaplama istekte gelen site id ile yapilir.
+    'calculate_prices_same_across_sites' => true,
+
     // Homes endpoint'inde siteye gore URL/foto domain'i.
     // Sorgu ilk satirda "domain" alias'i dondurmelidir.
     'homes_site_domain_queries' => [

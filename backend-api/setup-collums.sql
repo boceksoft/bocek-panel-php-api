@@ -1264,6 +1264,23 @@ CREATE UNIQUE INDEX [UX_GuestWelcomeMessages_rezid]
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[islem_kaydi]', N'U') IS NULL
+BEGIN
+CREATE TABLE [dbo].[islem_kaydi]
+(
+    [id] int IDENTITY(1,1) NOT NULL
+    CONSTRAINT [PK_islem_kaydi] PRIMARY KEY,
+    [userName] nvarchar(250) NULL,
+    [name] nvarchar(150) NULL,
+    [createdDate] datetime NULL
+    CONSTRAINT [DF_islem_kaydi_createdDate] DEFAULT GETDATE(),
+    [cat] int NULL,
+    [description] nvarchar(250) NULL,
+    [d_id] int NULL
+);
+END;
+GO
+
 IF OBJECT_ID('dbo.HomesExtraPaymentTypes', 'U') IS NULL
 BEGIN
 CREATE TABLE dbo.HomesExtraPaymentTypes

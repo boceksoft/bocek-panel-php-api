@@ -11,3 +11,5 @@ tokens 1
 reservationsCreate 2
 reservationdetail 12
 setup 1
+guest-movements 1
+guestMovements 1

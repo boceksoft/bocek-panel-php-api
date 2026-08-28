@@ -10,16 +10,17 @@ use PDO;
 
 /*
  * Gunluk misafir hareketleri.
- *   GET|POST /backend-api/guest-movements?date=17.08.2026&type=all
+ *   GET|POST /backend-api/guest-movements?startDate=2026-08-17&endDate=2026-08-18&type=all
  */
 final class GuestMovementsController extends Controller
 {
     /**
-     * Secilen tarihe gore giris, cikis ve icerdeki misafirleri listeler.
+     * Secilen tarih araligina gore giris, cikis ve icerdeki misafirleri listeler.
      *
      * @Get
      * @Post
-     * @query date string required Tarih (YYYY-MM-DD, DD.MM.YYYY veya DD/MM/YYYY)
+     * @query startDate string required Baslangic tarihi (YYYY-MM-DD, DD.MM.YYYY veya DD/MM/YYYY)
+     * @query endDate string required Bitis tarihi, haric tutulur (YYYY-MM-DD, DD.MM.YYYY veya DD/MM/YYYY)
      * @query type string all|giris|cikis|icerde
      * @query mode string all|giris|cikis|icerde
      * @query kelime string Villa, musteri veya telefon aramasi
@@ -27,9 +28,17 @@ final class GuestMovementsController extends Controller
      */
     public function index(): void
     {
-        $date = $this->parseDate((string) ($this->request->query('date', $this->request->input('date', ''))));
-        if ($date === '') {
-            throw new HttpException('date parametresi zorunlu. Ornek: 2026-08-17', 'VALIDATION_ERROR', 422);
+        $startDate = $this->parseDate($this->firstRequestValue(['startDate', 'start_date', 'date'], ''));
+        if ($startDate === '') {
+            $startDate = (new DateTime('today'))->format('Y-m-d');
+        }
+
+        $endDate = $this->parseDate($this->firstRequestValue(['endDate', 'end_date'], ''));
+        if ($endDate === '') {
+            $endDate = $this->nextDate($startDate);
+        }
+        if ($endDate <= $startDate) {
+            throw new HttpException('endDate startDate tarihinden sonra olmali.', 'VALIDATION_ERROR', 422);
         }
 
         $type = strtolower(trim((string) $this->firstRequestValue(['type', 'mode', 'tur'], 'all')));
@@ -44,9 +53,9 @@ final class GuestMovementsController extends Controller
         $perPage = max(1, (int) $this->firstRequestValue(['per_page', 'limit'], '50'));
         $search = $this->firstRequestValue(['kelime', 'search', 'q'], '');
 
-        $girisRows = $this->fetchRows('giris', $date);
-        $cikisRows = $this->fetchRows('cikis', $date);
-        $icerdeRows = $this->fetchRows('icerde', $date);
+        $girisRows = $this->fetchRows('giris', $startDate, $endDate);
+        $cikisRows = $this->fetchRows('cikis', $startDate, $endDate);
+        $icerdeRows = $this->fetchRows('icerde', $startDate, $endDate);
 
         if ($search !== '') {
             $girisRows = $this->filterRowsBySearch($girisRows, $search);
@@ -84,7 +93,9 @@ final class GuestMovementsController extends Controller
         unset($row);
 
         $payload = [
-            'date' => $date,
+            'date' => $startDate,
+            'startDate' => $startDate,
+            'endDate' => $endDate,
             'type' => $type,
             'total' => $totals['total'],
             'giris_count' => $totals['giris'],
@@ -169,7 +180,7 @@ final class GuestMovementsController extends Controller
     /**
      * @return array<int,array<string,mixed>>
      */
-    private function fetchRows(string $type, string $date): array
+    private function fetchRows(string $type, string $startDate, string $endDate): array
     {
         $reservationIdSql = $this->doluReservationIdSql();
         $whereSql = $this->dateWhere($type);
@@ -226,7 +237,7 @@ ORDER BY
     k.musteri ASC";
 
         $stmt = $this->db->pdo()->prepare($sql);
-        $this->bindDateWhereValues($stmt, $type, $date);
+        $this->bindDateWhereValues($stmt, $startDate, $endDate);
         $stmt->execute();
 
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -248,22 +259,27 @@ ORDER BY
     private function dateWhere(string $type): string
     {
         if ($type === 'giris') {
-            return 'CONVERT(date, d.tarih, 103) = CONVERT(date, :date, 23)';
+            return 'CONVERT(date, d.tarih, 103) >= CONVERT(date, :startDate, 23)
+                AND CONVERT(date, d.tarih, 103) < CONVERT(date, :endDate, 23)';
         }
         if ($type === 'cikis') {
-            return 'CONVERT(date, d.tarih2, 103) = CONVERT(date, :date, 23)';
+            return 'CONVERT(date, d.tarih2, 103) >= CONVERT(date, :startDate, 23)
+                AND CONVERT(date, d.tarih2, 103) < CONVERT(date, :endDate, 23)';
         }
 
-        return 'CONVERT(date, d.tarih, 103) < CONVERT(date, :date, 23)
-            AND CONVERT(date, d.tarih2, 103) > CONVERT(date, :date2, 23)';
+        return 'CONVERT(date, d.tarih, 103) < CONVERT(date, :startDate, 23)
+            AND CONVERT(date, d.tarih2, 103) >= CONVERT(date, :endDate, 23)';
     }
 
-    private function bindDateWhereValues(\PDOStatement $stmt, string $type, string $date): void
+    private function bindDateWhereValues(\PDOStatement $stmt, string $startDate, string $endDate): void
     {
-        $stmt->bindValue(':date', $date);
-        if ($type !== 'giris' && $type !== 'cikis') {
-            $stmt->bindValue(':date2', $date);
-        }
+        $stmt->bindValue(':startDate', $startDate);
+        $stmt->bindValue(':endDate', $endDate);
+    }
+
+    private function nextDate(string $date): string
+    {
+        return (new DateTime($date))->modify('+1 day')->format('Y-m-d');
     }
 
     private function movementStatusLabel(string $type): string
@@ -334,6 +350,6 @@ ORDER BY
             }
         }
 
-        throw new HttpException('date formati gecersiz. Ornek: 2026-08-17', 'VALIDATION_ERROR', 422);
+        throw new HttpException('tarih formati gecersiz. Ornek: 2026-08-17', 'VALIDATION_ERROR', 422);
     }
 }

@@ -9,6 +9,34 @@
           </advancedOptions>
         </fileTransfer>
       </webServer>
+      <webServer id="00add9b3-9c7c-4115-a7bb-5d520e63b8a4" name="villaciniz" url="http://10.105.20.12">
+        <fileTransfer host="10.105.20.12" port="21">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="9f2a3c5b-b78e-4cb9-b3e8-c61cf3191070" name="villavillam" url="http://172.30.1.14">
+        <fileTransfer host="172.30.1.14" port="21">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="7d07dcbb-17d9-4824-b2c2-0424c3d17918" name="kayakoyvillas" url="http://10.104.40.14">
+        <fileTransfer host="10.104.40.14" port="21">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="9f05bbb9-f683-47e9-9d50-54a75a62a6e7" name="RisusVillaTatili" url="http://10.105.10.23">
+        <fileTransfer host="10.105.10.23" port="21">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
     </option>
   </component>
 </project>
