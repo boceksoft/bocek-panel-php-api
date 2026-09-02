@@ -205,6 +205,7 @@ SELECT
     CONVERT(varchar(10), {$orderDateSql}, 23) AS hareket_tarihi,
     h.id AS villa_id,
     ISNULL(h.baslik, k.adi) AS villa_ismi,
+    h.url AS villa_url,
     LTRIM(RTRIM(CONCAT(ISNULL(es.ad, ''), ' ', ISNULL(es.soyad, '')))) AS villa_sahibi_ismi,
     REPLACE(ISNULL(es.tel, ''), ' ', '') AS villa_sahibi_teli,
     k.musteri AS musteri_adi,
@@ -249,6 +250,9 @@ ORDER BY
             }
             if (array_key_exists('hareket_sira', $row)) {
                 $row['hareket_sira'] = (int) $row['hareket_sira'];
+            }
+            if (array_key_exists('villa_url', $row)) {
+                $row['villa_url'] = $this->fullHomeUrl((string) $row['villa_url']);
             }
         }
         unset($row);
@@ -333,6 +337,28 @@ ORDER BY
         $stmt->execute();
 
         return (int) $stmt->fetchColumn() === 1;
+    }
+
+    private function fullHomeUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || preg_match('#^https?://#i', $url) === 1) {
+            return $url;
+        }
+
+        $domain = defined('Domain') ? $this->normalizeDomain((string) constant('Domain')) : '';
+
+        return $domain !== '' ? $domain . '/' . ltrim($url, '/') : $url;
+    }
+
+    private function normalizeDomain(string $domain): string
+    {
+        $domain = rtrim(trim($domain), '/');
+        if ($domain !== '' && preg_match('#^https?://#i', $domain) !== 1) {
+            $domain = 'https://' . $domain;
+        }
+
+        return $domain;
     }
 
     private function parseDate(string $value): string

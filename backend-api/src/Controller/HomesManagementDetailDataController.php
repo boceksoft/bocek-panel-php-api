@@ -32,7 +32,9 @@ final class HomesManagementDetailDataController extends Controller
         $home = $this->home($pdo, (int) $this->request->query('id', 0));
         $selectableData = $this->selectableData($pdo, $home, $sites);
         $bolgelerTree = $this->buildTree($selectableData['bolgeler']);
+        $ozelliklerTree = $this->buildTree($selectableData['ozellikler']);
         $selectableData['bolgeler_tree'] = $bolgelerTree;
+        $selectableData['ozellikler'] = $ozelliklerTree;
         $selectedValues = $this->selectedValues($home, $sites);
 
         $this->response->success([

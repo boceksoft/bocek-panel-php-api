@@ -10,9 +10,15 @@ use PDO;
 /*
  * Emlak fiyatlandirma iliskili kayitlari.
  * Sezonlar, ekstra ucretler ve indirimler detail update akisi disinda ayri endpoint'lerden yonetilir.
+ *
+ * Endpointler:
+ *   POST|PUT /backend-api/homes-management-prices/sezonlar?id={emlakId}&site={siteId}
+ *   POST|PUT /backend-api/homes-management-prices/ekstra-ucretler?id={emlakId}
+ *   POST|PUT /backend-api/homes-management-prices/indirimler?id={emlakId}&site={siteId}
+ *   POST     /backend-api/homes-management-prices/indirimler?delete=1&indirimId={indirimId}
  */
 final class HomesManagementPricesController extends Controller
-{ 
+{
     /**
      * Emlak sezonlarini ekler veya gunceller.
      *
@@ -27,6 +33,13 @@ final class HomesManagementPricesController extends Controller
     {
         $payload = $this->payload();
         $id = $this->resolveId($payload);
+        $delete = $this->boolPayloadValue($payload, ['delete']);
+
+        if ($delete) {
+            $this->deleteSeasonFromPayload($payload);
+
+            return;
+        }
 
         if ($id <= 0) {
             throw new HttpException('Lutfen gecerli bir emlak ID gonderin.', 'VALIDATION', 422);
@@ -59,6 +72,52 @@ final class HomesManagementPricesController extends Controller
                 'sezonlar' => $result['updated'],
             ],
             'skipped_related_rows' => $result['skipped'],
+        ]);
+    }
+
+    /**
+     * Emlak sezon satirini siler.
+     *
+     * @Delete("sezonlar")
+     * @Post("sezonlar-sil")
+     * @Post("sezonlar/delete")
+     * @query sezonId int required Sezon ID
+     * @body sezonId int required Sezon ID
+     */
+    public function deleteSeason(): void
+    {
+        $payload = $this->payload();
+        $this->deleteSeasonFromPayload($payload);
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private function deleteSeasonFromPayload(array $payload): void
+    {
+        $seasonId = $this->numericValue($payload, ['sezonId', 'seasonId']);
+
+        if ($seasonId <= 0) {
+            throw new HttpException('Lutfen gecerli bir sezon ID gonderin.', 'VALIDATION', 422);
+        }
+
+        $pdo = $this->db->pdo();
+
+        $stmt = $pdo->prepare('DELETE FROM sezonlar WHERE id = :seasonId');
+        $stmt->execute([
+            ':seasonId' => $seasonId,
+        ]);
+
+        if ($stmt->rowCount() <= 0) {
+            throw new HttpException('Secilen sezon bulunamadi.', 'NOT_FOUND', 404);
+        }
+
+        $this->response->success([
+            'id' => $seasonId,
+            'deleted' => true,
+            'deleted_related_sections' => [
+                'sezonlar' => 1,
+            ],
         ]);
     }
 
@@ -128,6 +187,13 @@ final class HomesManagementPricesController extends Controller
     {
         $payload = $this->payload();
         $id = $this->resolveId($payload);
+        $delete = $this->boolPayloadValue($payload, ['delete']);
+
+        if ($delete) {
+            $this->deleteDiscountFromPayload($payload);
+
+            return;
+        }
 
         if ($id <= 0) {
             throw new HttpException('Lutfen gecerli bir emlak ID gonderin.', 'VALIDATION', 422);
@@ -160,6 +226,37 @@ final class HomesManagementPricesController extends Controller
                 'indirimler' => $result['updated'],
             ],
             'skipped_related_rows' => $result['skipped'],
+        ]);
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private function deleteDiscountFromPayload(array $payload): void
+    {
+        $discountId = $this->numericValue($payload, ['indirimId', 'discountId']);
+
+        if ($discountId <= 0) {
+            throw new HttpException('Lutfen gecerli bir indirim ID gonderin.', 'VALIDATION', 422);
+        }
+
+        $pdo = $this->db->pdo();
+
+        $stmt = $pdo->prepare('DELETE FROM indirimler WHERE id = :discountId');
+        $stmt->execute([
+            ':discountId' => $discountId,
+        ]);
+
+        if ($stmt->rowCount() <= 0) {
+            throw new HttpException('Secilen indirim bulunamadi.', 'NOT_FOUND', 404);
+        }
+
+        $this->response->success([
+            'id' => $discountId,
+            'deleted' => true,
+            'deleted_related_sections' => [
+                'indirimler' => 1,
+            ],
         ]);
     }
 
@@ -375,10 +472,28 @@ final class HomesManagementPricesController extends Controller
         $skipped = [];
 
         foreach ($rows as $index => $row) {
+            $seasonId = $this->numericValue($row, ['id', 'seasonId', 'sezonId']);
+            $existingSeason = $seasonId > 0 ? $this->seasonRow($pdo, $homeId, $seasonId) : [];
+            if ($seasonId > 0 && $existingSeason === []) {
+                $skipped[] = [
+                    'section' => 'sezonlar',
+                    'index' => (string) $index,
+                    'reason' => 'Secilen sezon bulunamadi: ' . $seasonId,
+                ];
+                continue;
+            }
+
             $startDate = $this->normalizeDate($this->firstPayloadValue($row, ['tarih1', 'baslangicTarihi', 'startDate', 'start_date']));
             $endDate = $this->normalizeDate($this->firstPayloadValue($row, ['tarih2', 'bitisTarihi', 'endDate', 'end_date']));
             $price = $this->priceValue($row);
             $minStay = $this->numericValue($row, ['minKonaklama', 'mingece', 'min_gece', 'gece']);
+
+            if ($existingSeason !== []) {
+                $startDate = $startDate !== '' ? $startDate : $this->normalizeDate($existingSeason['tarih1'] ?? '');
+                $endDate = $endDate !== '' ? $endDate : $this->normalizeDate($existingSeason['tarih2'] ?? '');
+                $price = $price > 0 ? $price : (float) ($existingSeason['fiyat'] ?? 0);
+                $minStay = $minStay > 0 ? $minStay : (int) ($existingSeason['gece'] ?? 0);
+            }
 
             if ($startDate === '' || $endDate === '' || $price <= 0 || $minStay <= 0) {
                 $skipped[] = [
@@ -389,8 +504,10 @@ final class HomesManagementPricesController extends Controller
                 continue;
             }
 
-            $seasonId = $this->numericValue($row, ['id', 'seasonId', 'sezonId']);
             $seasonTitle = $this->normalizeScalar($this->firstPayloadValue($row, ['aciklama', 'sezon', 'title', 'baslik']));
+            if ($existingSeason !== [] && $seasonTitle === '') {
+                $seasonTitle = $this->normalizeScalar($existingSeason['sezon'] ?? '');
+            }
 
             if ($seasonId > 0) {
                 $stmt = $pdo->prepare(
@@ -746,7 +863,7 @@ final class HomesManagementPricesController extends Controller
     private function seasonRow(PDO $pdo, int $homeId, int $seasonId): array
     {
         $stmt = $pdo->prepare(
-            "SELECT id, tarih1, tarih2
+            "SELECT id, tarih1, tarih2, fiyat, gece, sezon
              FROM sezonlar
              WHERE id = :id AND islem_id = :homeId AND islem = 'emlak'"
         );
@@ -907,6 +1024,22 @@ final class HomesManagementPricesController extends Controller
         $value = $this->firstPayloadValue($row, $keys);
 
         return is_numeric($value) ? (int) $value : 0;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @param array<int,string> $keys
+     */
+    private function boolPayloadValue(array $row, array $keys): bool
+    {
+        $value = $this->firstPayloadValue($row, $keys);
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        $value = strtolower(trim((string) $value));
+
+        return in_array($value, ['1', 'true', 'yes', 'on', 'evet'], true);
     }
 
     /**

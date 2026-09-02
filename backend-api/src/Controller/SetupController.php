@@ -31,12 +31,16 @@ final class SetupController extends Controller
 
         try {
             $this->execSqlBatches($sql);
+            $this->execSqlBatches($this->extraPaymentsSql());
+            $this->assertExtraPaymentTablesExist();
         } catch (\PDOException $e) {
             throw new HttpException('Kolon setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
         }
 
         $this->response->success([
             'setup' => 'collums',
+            'database' => $this->databaseName(),
+            'verified_tables' => $this->extraPaymentTableStatus(),
             'included_setups' => [
                 'extra-payments',
             ],
@@ -83,12 +87,15 @@ final class SetupController extends Controller
     {
         try {
             $this->execSqlBatches($this->extraPaymentsSql());
+            $this->assertExtraPaymentTablesExist();
         } catch (\PDOException $e) {
             throw new HttpException('Ekstra ucret tablolari setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
         }
 
         $this->response->success([
             'setup' => 'extra-payments',
+            'database' => $this->databaseName(),
+            'verified_tables' => $this->extraPaymentTableStatus(),
             'tables' => [
                 'dbo.HomesExtraPaymentTypes',
                 'dbo.HomesExtraPaymentPrices',
@@ -213,5 +220,50 @@ GO
 
             $this->db->pdo()->exec($batch);
         }
+    }
+
+    private function assertExtraPaymentTablesExist(): void
+    {
+        foreach ($this->extraPaymentTableStatus() as $table => $exists) {
+            if (!$exists) {
+                throw new HttpException('Ekstra ucret setup tamamlanmadi. Tablo bulunamadi: dbo.' . $table, 'SETUP_VERIFY_FAILED', 500);
+            }
+        }
+    }
+
+    /**
+     * @return array<string,bool>
+     */
+    private function extraPaymentTableStatus(): array
+    {
+        return [
+            'HomesExtraPaymentTypes' => $this->tableExists('dbo', 'HomesExtraPaymentTypes'),
+            'HomesExtraPaymentPrices' => $this->tableExists('dbo', 'HomesExtraPaymentPrices'),
+        ];
+    }
+
+    private function tableExists(string $schema, string $table): bool
+    {
+        $stmt = $this->db->pdo()->prepare(
+            'SELECT COUNT(*)
+             FROM INFORMATION_SCHEMA.TABLES
+             WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table'
+        );
+        $stmt->execute([
+            ':schema' => $schema,
+            ':table' => $table,
+        ]);
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function databaseName(): string
+    {
+        $stmt = $this->db->pdo()->query('SELECT DB_NAME()');
+        if ($stmt === false) {
+            return '';
+        }
+
+        return (string) $stmt->fetchColumn();
     }
 }

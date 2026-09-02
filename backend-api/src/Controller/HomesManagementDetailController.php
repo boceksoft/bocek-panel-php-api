@@ -339,7 +339,39 @@ final class HomesManagementDetailController extends Controller
             ];
         }
 
-        return $features;
+        return $this->buildOzellikTree($features);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $rows
+     * @return array<int,array<string,mixed>>
+     */
+    private function buildOzellikTree(array $rows): array
+    {
+        $items = [];
+        foreach ($rows as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            if ($id <= 0) {
+                continue;
+            }
+
+            $row['children'] = [];
+            $items[$id] = $row;
+        }
+
+        $tree = [];
+        foreach ($items as $id => &$item) {
+            $parentId = (int) ($item['cat'] ?? 0);
+            if ($parentId > 0 && isset($items[$parentId])) {
+                $items[$parentId]['children'][] = &$item;
+                continue;
+            }
+
+            $tree[] = &$item;
+        }
+        unset($item);
+
+        return $tree;
     }
 
     /**
