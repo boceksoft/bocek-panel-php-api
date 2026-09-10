@@ -277,8 +277,8 @@ final class ReservationdetailController extends Controller
                 'satisKanali' => $this->firstValueFrom([$reservation], ['satiskanali', 'satis_kanali', 'satisKanali']) ?: 'site',
                 'siteDil' => $this->firstValueFrom([$reservation], ['site_dil', 'siteDil', 'dil', 'lang', 'language']) ?: 'tr',
                 'durum' => [
-                    'id' => $this->intValue($this->firstValueFrom([$dolu, $reservation], ['durum'])),
-                    'text' => $this->reservationStatusText($this->intValue($this->firstValueFrom([$dolu, $reservation], ['durum']))),
+                    'id' => $this->intValue($this->firstValueFrom([$dolu, $reservation], ['durum', 'Durum'])),
+                    'text' => $this->reservationStatusText($this->intValue($this->firstValueFrom([$dolu, $reservation], ['durum', 'Durum']))),
                 ],
             ],
             'rezervasyonDetaylari' => [

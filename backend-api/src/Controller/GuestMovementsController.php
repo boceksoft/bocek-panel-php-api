@@ -205,8 +205,12 @@ SELECT
     CONVERT(varchar(10), {$orderDateSql}, 23) AS hareket_tarihi,
     h.id AS villa_id,
     ISNULL(h.baslik, k.adi) AS villa_ismi,
+    h.url AS full_villa_url,
     h.url AS villa_url,
-    LTRIM(RTRIM(CONCAT(ISNULL(es.ad, ''), ' ', ISNULL(es.soyad, '')))) AS villa_sahibi_ismi,
+	CONCAT(h.enlem, ',', h.boylam, '/@', h.enlem, ',', h.boylam, ',17z') AS konum,
+	CONCAT(k.id, ISNULL(REPLACE(CONVERT(varchar(5), k.islem_tarihi, 108), ':', ''), '0000')) AS giris_bilgilendirme_kodu,
+    CONCAT(k.id, ISNULL(REPLACE(CONVERT(varchar(5), k.islem_tarihi, 108), ':', ''), '0000'), '/evsahibi') AS giris_bilgilendirme_evsahibi_kodu,
+	LTRIM(RTRIM(CONCAT(ISNULL(es.ad, ''), ' ', ISNULL(es.soyad, '')))) AS villa_sahibi_ismi,
     REPLACE(ISNULL(es.tel, ''), ' ', '') AS villa_sahibi_teli,
     k.musteri AS musteri_adi,
     LTRIM(RTRIM(CONCAT(ISNULL('+' + CONVERT(nvarchar(20), k.ulkekodu), ''), ' ', ISNULL(k.telefon, '')))) AS musteri_teli,
@@ -251,8 +255,8 @@ ORDER BY
             if (array_key_exists('hareket_sira', $row)) {
                 $row['hareket_sira'] = (int) $row['hareket_sira'];
             }
-            if (array_key_exists('villa_url', $row)) {
-                $row['villa_url'] = $this->fullHomeUrl((string) $row['villa_url']);
+            if (array_key_exists('full_villa_url', $row)) {
+                $row['full_villa_url'] = $this->fullHomeUrl((string) $row['full_villa_url']);
             }
         }
         unset($row);
