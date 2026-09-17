@@ -109,7 +109,7 @@ final class LinksController extends Controller
         $stmt->execute($insertParams);
 
         // 7) Standart başarı zarfı
-        $finalDomain = $siteId > 1 ? $domain : str_replace('www.', '', $domain);
+        $finalDomain = $domain;
         $finalLink = $finalDomain . '/' . $originalLink . '?v';
 
         $this->response->success([
@@ -163,7 +163,15 @@ final class LinksController extends Controller
 
     private function siteId(): int
     {
-        foreach (['site', 'site_id', 'siteId', 'currentSite', 'currentSiteId'] as $key) {
+        $keys = ['site', 'Site', 'site_id', 'SiteId', 'siteId', 'currentSite', 'currentSiteId'];
+        foreach ($keys as $key) {
+            $value = $this->request->query($key, '');
+            if (is_numeric($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        foreach ($keys as $key) {
             $value = $this->request->input($key, '');
             if (is_numeric($value) && (int) $value > 0) {
                 return (int) $value;
@@ -175,6 +183,10 @@ final class LinksController extends Controller
 
     private function siteDomain(\PDO $pdo, int $siteId): string
     {
+        if ($siteId === 2) {
+            return $this->domainFromQuery($pdo, 'SELECT TOP 1 domain FROM genel_s2', $siteId);
+        }
+
         if ($siteId <= 1) {
             return defined('Domain') ? $this->normalizeDomain((string) constant('Domain')) : '';
         }
@@ -187,6 +199,11 @@ final class LinksController extends Controller
             throw new HttpException('Site domain sorgusu tanımlı değil. Site: ' . $siteId, 'CONFIG_ERROR', 500);
         }
 
+        return $this->domainFromQuery($pdo, $query, $siteId);
+    }
+
+    private function domainFromQuery(\PDO $pdo, string $query, int $siteId): string
+    {
         try {
             $row = $pdo->query($query)->fetch(\PDO::FETCH_ASSOC);
         } catch (\PDOException $e) {
@@ -213,7 +230,25 @@ final class LinksController extends Controller
             $domain = 'https://' . $domain;
         }
 
-        return $domain;
+        $parts = parse_url($domain);
+        if (!is_array($parts) || empty($parts['host'])) {
+            return $domain;
+        }
+
+        $host = (string) $parts['host'];
+        if (stripos($host, 'www.') !== 0) {
+            $host = 'www.' . $host;
+        }
+
+        $normalized = ($parts['scheme'] ?? 'https') . '://' . $host;
+        if (!empty($parts['port'])) {
+            $normalized .= ':' . $parts['port'];
+        }
+        if (!empty($parts['path'])) {
+            $normalized .= rtrim($parts['path'], '/');
+        }
+
+        return $normalized;
     }
 
     /**

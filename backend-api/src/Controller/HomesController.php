@@ -23,7 +23,7 @@ final class HomesController extends Controller
      * @query site int Site kimliği
      * @query start string Giriş tarihi (Y-m-d / d.m.Y)
      * @query end string Çıkış tarihi
-     * @query kisi int Minimum kişi
+     * @query kisi int Kişi sayısı (ASP kapasite aralığı filtresi)
      * @query tip string Tip kimlik(ler)i (virgüllü ya da tekrarlı)
      * @query bolge string Bölge kimlik(ler)i
      * @query ozellik string Özellik kimlik(ler)i
@@ -195,7 +195,18 @@ final class HomesController extends Controller
         $orderByEk = '';
         if ($kisi > 0) {
             $orderByEk = ' h.kisi ASC, ';
-            $sql .= " AND h.kisi >= {$kisi}";
+
+            // Kişi sayısı aralığı (ASP ile aynı mantık).
+            if ($kisi === 1) {
+                $sql .= " AND (h.kisi = 1 OR h.kisi = 2)";
+            } elseif ($kisi % 2 === 0) {
+                $kisiMax = $kisi + 2;
+                $sql .= " AND h.kisi BETWEEN {$kisi} AND {$kisiMax}";
+            } else {
+                $kisiMin = $kisi - 1;
+                $kisiMax = $kisi + 1;
+                $sql .= " AND h.kisi BETWEEN {$kisiMin} AND {$kisiMax}";
+            }
         }
 
         if ($tipx !== '' && $tipx !== '0') {
@@ -400,7 +411,7 @@ WHERE h.aktif{$c['dbt']} = 1
 
         if (!$hasDate) {
             return [$select, $cross, $where];
-        } 
+        }
 
         if ($takvimKuraliReq === '1') {
             $select = '0 AS gecemax, sezon.gece AS sezongece,';
