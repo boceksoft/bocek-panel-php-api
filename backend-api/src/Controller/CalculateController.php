@@ -326,6 +326,7 @@ final class CalculateController extends Controller
         $defaultCurrencyId = defined('DEFAULT_CURRENCY_ID') ? (int) constant('DEFAULT_CURRENCY_ID') : 1;
         $rateId = $this->lastRateId($pdo);
         $uzanti = $this->fieldSuffix($site);
+        $depozitoSuffix = $this->fieldSuffix($site, 'depozito');
         $priceSite = $this->priceSiteId($site);
 
         $sql = " 
@@ -370,6 +371,7 @@ SELECT
         ORDER BY id DESC
     ), 0) * COALESCE(RD2.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS temizlikFiyat,
     CASE WHEN h.kur{$uzanti} > 0 THEN h.kur{$uzanti} ELSE 0 END AS kur,
+    h.depozito{$depozitoSuffix} AS depozito,
     dbo.FnRandomSplit(h.resim{$uzanti}, ',') AS resim,
     h.baslik{$uzanti} AS baslik,
     h.hasar{$uzanti} AS hasar,
@@ -422,6 +424,7 @@ WHERE h.id = {$entityId}";
         $price = (int) $home['fyt'];
         $oldPrice = 0;
         $promotionDiscountPrice = 0;
+        $depozitodanDus = 0;
 
         if ($promotionCode !== '') {
             $code = $this->promotionCode($pdo, $promotionCode);
@@ -432,6 +435,7 @@ WHERE h.id = {$entityId}";
                     : (int) ($price / 100 * (float) $code['value']);
                 $price -= $promotionDiscountPrice;
                 if ($promotionCode === 'MobilApp.1000') {
+                    $depozitodanDus = $promotionDiscountPrice;
                     $json['MobileOzel'] = true;
                 }
             }
@@ -447,7 +451,13 @@ WHERE h.id = {$entityId}";
             $oldPrice += (int) $home['indirimTutari'];
         }
 
-        $deposit = !empty($home['hasar']) ? (float) $home['hasar'] : 0.0;
+        $depositRate = !empty($home['depozito']) ? (float) $home['depozito'] : 0.0;
+        $deposit = $depositRate > 0
+            ? (($price + $depozitodanDus) / 100 * $depositRate) - $depozitodanDus
+            : -$depozitodanDus;
+        if ($deposit < 0) {
+            $deposit = 0;
+        }
         $remainingWithoutFees = $price - $deposit;
         $remaining = $remainingWithoutFees;
 
@@ -481,7 +491,7 @@ WHERE h.id = {$entityId}";
         }
 
         $pool = $this->poolFees($state['heatingFees']);
-        if ((string) $this->param('pool_fee', '') === '1' && $pool['outOfService'] !== 1) {
+        if ($this->wantsPoolFee() && $pool['outOfService'] !== 1) {
             $json['result']['pool_fee'] = $pool['total'];
             $json['result']['total_price'] += $pool['total'];
             $remaining += $pool['total'];
@@ -490,6 +500,7 @@ WHERE h.id = {$entityId}";
         $json['result']['remaining_price'] = (int) $remaining;
         $json['result']['remaining_price2'] = (int) $remainingWithoutFees;
         $json['result']['deposit_price'] = (int) $deposit;
+        $json['result']['damage_deposit'] = !empty($home['hasar']) ? (int) $home['hasar'] : 0;
         $json['result']['isitmaHizmetDisi'] = $pool['outOfService'];
         $json['result']['isitmaUcretleri'] = $state['heatingFees'];
         $json['result']['symbol'] = $home['Symbol'];
@@ -712,15 +723,30 @@ WHERE h.id = {$entityId}";
         $outOfService = 1;
 
         foreach ($heatingFees as $fee) {
-            if ((string) $fee['isitmaHizmetDisi'] !== '1') {
-                $total += (int) $fee['isitmaFiyat'];
+            $feeAmount = (int) $fee['isitmaFiyat'];
+            $isOutOfService = (string) ($fee['isitmaHizmetDisi'] ?? '') === '1';
+
+            if (!$isOutOfService) {
+                $total += $feeAmount;
             }
-            if ($outOfService === 1 && (string) $fee['isitmaHizmetDisi'] === '0') {
+            if ($outOfService === 1 && !$isOutOfService && $feeAmount > 0) {
                 $outOfService = 0;
             }
         }
 
         return ['total' => $total, 'outOfService' => $outOfService];
+    }
+
+    private function wantsPoolFee(): bool
+    {
+        foreach (['pool_fee', 'buyPool'] as $key) {
+            $value = $this->param($key, '');
+            if ((string) $value === '1') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -958,7 +984,7 @@ WHERE h.id = {$entityId}";
             $query[$this->queryParamName($params, 'site', 'site')] = $site;
         }
 
-        if ((string) $this->param('pool_fee', '') === '1') {
+        if ($this->wantsPoolFee()) {
             $query[$this->queryParamName($params, 'pool_fee', 'buyPool')] = 1;
         }
 
