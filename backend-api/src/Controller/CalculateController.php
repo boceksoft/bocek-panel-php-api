@@ -326,7 +326,6 @@ final class CalculateController extends Controller
         $defaultCurrencyId = defined('DEFAULT_CURRENCY_ID') ? (int) constant('DEFAULT_CURRENCY_ID') : 1;
         $rateId = $this->lastRateId($pdo);
         $uzanti = $this->fieldSuffix($site);
-        $depozitoSuffix = $this->fieldSuffix($site, 'depozito');
         $priceSite = $this->priceSiteId($site);
 
         $sql = " 
@@ -343,13 +342,8 @@ SELECT
           AND CONVERT(date, tarih1, 104) <= CONVERT(date, '{$start}', 23)
           AND CONVERT(date, tarih2, 104) >= CONVERT(date, '{$end}', 23)
     ) THEN 1 ELSE 0 END AS sonDakikaVar,
-    (
-        SELECT TOP 1
-            CASE
-                WHEN ISNULL(temizlikgece, 0) = 0 THEN gece
-                WHEN gece > temizlikgece THEN temizlikgece
-                ELSE gece
-            END
+    ( 
+        SELECT TOP 1 ISNULL(gece, 0)
         FROM sezonlar
         WHERE site = {$priceSite}
           AND islem_id = {$entityId}
@@ -376,7 +370,6 @@ SELECT
         ORDER BY id DESC
     ), 0) * COALESCE(RD2.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS temizlikFiyat,
     CASE WHEN h.kur{$uzanti} > 0 THEN h.kur{$uzanti} ELSE 0 END AS kur,
-    h.depozito{$depozitoSuffix} AS depozito,
     dbo.FnRandomSplit(h.resim{$uzanti}, ',') AS resim,
     h.baslik{$uzanti} AS baslik,
     h.hasar{$uzanti} AS hasar,
@@ -421,14 +414,14 @@ WHERE h.id = {$entityId}";
             return ['error' => 'Villa aktif degil.'];
         }
 
+        $minNight = (int) $home['mingece'];
         $state = $this->collectDailyState($pdo, $start, $end, $entityId, $home, $calendarHome, $rateId, $defaultCurrencyId, $priceSite);
         $shortStay = (int) $home['sonDakikaVar'] === 1
             ? false
-            : $this->isShortStay($pdo, $start, $end, $entityId, $night, (int) $home['mingece'], $calendarHome);
+            : $this->isShortStay($pdo, $start, $end, $entityId, $night, $minNight, $calendarHome);
         $price = (int) $home['fyt'];
         $oldPrice = 0;
         $promotionDiscountPrice = 0;
-        $depozitodanDus = 0;
 
         if ($promotionCode !== '') {
             $code = $this->promotionCode($pdo, $promotionCode);
@@ -439,7 +432,6 @@ WHERE h.id = {$entityId}";
                     : (int) ($price / 100 * (float) $code['value']);
                 $price -= $promotionDiscountPrice;
                 if ($promotionCode === 'MobilApp.1000') {
-                    $depozitodanDus = $promotionDiscountPrice;
                     $json['MobileOzel'] = true;
                 }
             }
@@ -455,22 +447,20 @@ WHERE h.id = {$entityId}";
             $oldPrice += (int) $home['indirimTutari'];
         }
 
-        $deposit = !empty($home['depozito'])
-            ? (($price + $depozitodanDus) / 100 * (float) $home['depozito']) - $depozitodanDus
-            : -$depozitodanDus;
+        $deposit = !empty($home['hasar']) ? (float) $home['hasar'] : 0.0;
         $remainingWithoutFees = $price - $deposit;
         $remaining = $remainingWithoutFees;
 
         if ($state['occupied']) {
             return ['error' => 'Secilen tarihler musait degil.'];
         }
-        if ($shortStay) {
-            return ['error' => 'Minimum konaklama suresi saglanmiyor.'];
-        }
         if ($price <= 0) {
             return ['error' => 'Fiyat bulunamadi.'];
         }
 
+        if ($shortStay) {
+            $json['error'] = 'Minimum konaklama suresi saglanmiyor.';
+        }
         if ($state['paymentWaiting']) {
             $json['error'] = 'Secilen tarihlerde odeme bekleyen opsiyon var.';
         }
@@ -642,66 +632,7 @@ WHERE h.id = {$entityId}";
             return true;
         }
 
-        return $this->createsShortReservationGap($pdo, $entityId, $start, $end, $minNight);
-    }
-
-    private function createsShortReservationGap(PDO $pdo, int $entityId, string $start, string $end, int $minNight): bool
-    {
-        $previous = $this->adjacentReservationDate($pdo, $entityId, $start, 'previous');
-        $previousGap = $previous !== null ? $this->gapNights($previous, $start) : 0;
-        if ($previousGap > 0 && $previousGap < $minNight) {
-            return true;
-        }
-
-        $next = $this->adjacentReservationDate($pdo, $entityId, $end, 'next');
-        $nextGap = $next !== null ? $this->gapNights($end, $next) : 0;
-        if ($nextGap > 0 && $nextGap < $minNight) {
-            return true;
-        }
-
         return false;
-    }
-
-    /**
-     * @return string|null Y-m-d
-     */
-    private function adjacentReservationDate(PDO $pdo, int $entityId, string $date, string $direction)
-    {
-        if ($direction === 'previous') {
-            $sql = 'SELECT TOP 1 CONVERT(char(10), CONVERT(date, tarih2, 104), 23) AS reservation_date
-                    FROM dolu
-                    WHERE emlak = :entityId
-                      AND Durum IN (1, 3)
-                      AND CONVERT(date, tarih2, 104) <= CONVERT(date, :date, 23)
-                    ORDER BY CONVERT(date, tarih2, 104) DESC';
-        } else {
-            $sql = 'SELECT TOP 1 CONVERT(char(10), CONVERT(date, tarih, 104), 23) AS reservation_date
-                    FROM dolu
-                    WHERE emlak = :entityId
-                      AND Durum IN (1, 3)
-                      AND CONVERT(date, tarih, 104) >= CONVERT(date, :date, 23)
-                    ORDER BY CONVERT(date, tarih, 104)';
-        }
-
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([
-            'entityId' => $entityId,
-            'date' => $date,
-        ]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        return $row && !empty($row['reservation_date']) ? (string) $row['reservation_date'] : null;
-    }
-
-    private function gapNights(string $from, string $to): int
-    {
-        $fromDate = date_create($from);
-        $toDate = date_create($to);
-        if (!$fromDate || !$toDate || $toDate <= $fromDate) {
-            return 0;
-        }
-
-        return (int) $fromDate->diff($toDate)->days;
     }
 
     /**

@@ -86,6 +86,7 @@ final class HomesManagementDetailController extends Controller
         );
         $konum = $this->konumHiyerarsi($pdo, (int) ($rs['emlak_bolgesi'] ?? 0), $this->firstValueFrom($rs, ['emlak_bolgesi_baslik']));
         $nKonum = $this->konumHiyerarsi($pdo, (int) ($rs['n_emlak_bolgesi'] ?? 0), $this->firstValueFrom($rs, ['n_emlak_bolgesi_baslik']));
+        $selectedBakimci = $this->selectedBakimci($pdo, $rs);
         $this->response->success([
             'genelBilgiler' => [
                 'temelBilgiler' => [
@@ -110,8 +111,15 @@ final class HomesManagementDetailController extends Controller
                 ],
                 'iletisimBilgileri' => [
                     'bakimciBilgisi' => [
-                        'ad_soyad' => $this->firstValueFrom($rs, ['bakimciad']),
-                        'telefon' => $this->firstValueFrom($rs, ['bakimcitel']),
+                        'id' => (int) ($selectedBakimci['id'] ?? 0),
+                        'ad_soyad' => $this->firstValueFrom($rs, ['bakimciad']) !== ''
+                            ? $this->firstValueFrom($rs, ['bakimciad'])
+                            : (string) ($selectedBakimci['name'] ?? ''),
+                        'telefon' => $this->firstValueFrom($rs, ['bakimcitel']) !== ''
+                            ? $this->firstValueFrom($rs, ['bakimcitel'])
+                            : (string) ($selectedBakimci['phone'] ?? ''),
+                        'eposta' => (string) ($selectedBakimci['email'] ?? ''),
+                        'adres' => (string) ($selectedBakimci['address'] ?? ''),
                     ],
                     'evSahibiBilgisi' => [
                         'ad_soyad' => $this->ownerFullName($evSahibi, $rs),
@@ -482,6 +490,72 @@ final class HomesManagementDetailController extends Controller
     }
 
     /**
+     * @param array<string,mixed> $rs
+     * @return array<string,mixed>
+     */
+    private function selectedBakimci(PDO $pdo, array $rs): array
+    {
+        $homeId = (int) ($rs['id'] ?? 0);
+        $name = trim($this->firstValueFrom($rs, ['bakimciad']));
+        $phone = trim($this->firstValueFrom($rs, ['bakimcitel']));
+        if ($homeId <= 0 && $name === '' && $phone === '') {
+            return [];
+        }
+
+        try {
+            if (!$this->tableExists($pdo, 'dbo', 'bakimcilar')) {
+                return [];
+            }
+
+            $row = $this->fetchOne(
+                $pdo,
+                "SELECT TOP 1
+                        id,
+                        bakimciAdi AS title,
+                        bakimciAdi AS name,
+                        bakimcitel AS phone,
+                        bakimciEmail AS email,
+                        bakimciAdres AS address,
+                        homesId AS homes_id
+                 FROM dbo.bakimcilar
+                 WHERE (:home_id > 0 AND homesId = :home_id_match)
+                    OR (:phone <> '' AND bakimcitel = :phone_match)
+                    OR (:name <> '' AND bakimciAdi = :name_match)
+                 ORDER BY
+                    CASE WHEN homesId = :home_id_order THEN 0 ELSE 1 END,
+                    CASE WHEN bakimcitel = :phone_order THEN 0 ELSE 1 END,
+                    id ASC",
+                [
+                    ':home_id' => $homeId,
+                    ':home_id_match' => $homeId,
+                    ':home_id_order' => $homeId,
+                    ':phone' => $phone,
+                    ':phone_match' => $phone,
+                    ':name' => $name,
+                    ':name_match' => $name,
+                    ':phone_order' => $phone,
+                ]
+            );
+        } catch (\PDOException $e) {
+            return [];
+        }
+
+        if (!is_array($row)) {
+            return [];
+        }
+
+        return [
+            'id' => (int) ($row['id'] ?? 0),
+            'title' => (string) ($row['title'] ?? ''),
+            'name' => (string) ($row['name'] ?? ''),
+            'phone' => (string) ($row['phone'] ?? ''),
+            'email' => (string) ($row['email'] ?? ''),
+            'address' => (string) ($row['address'] ?? ''),
+            'homes_id' => (int) ($row['homes_id'] ?? 0),
+        ];
+    }
+
+    /**
      * @return array<string,mixed>
      */
     private function donemselFiyatlandirma(PDO $pdo, int $homeId, int $siteId): array
@@ -764,6 +838,9 @@ final class HomesManagementDetailController extends Controller
      */
     private function havuzlar(PDO $pdo, int $homeId): array
     {
+        $isitmaSelect = $this->columnExists($pdo, 'dbo', 'havuztanimlamari', 'isitma')
+            ? 'ht.isitma'
+            : 'CAST(NULL AS bit) AS isitma';
         $rows = $this->fetchAll(
             $pdo,
             "SELECT
@@ -773,12 +850,15 @@ final class HomesManagementDetailController extends Controller
                 htip.baslik AS tipBaslik,
                 ht.deger,
                 ht.havuzTipiId,
+                hvt.baslik AS havuzTipiBaslik,
                 ht.uzunluk,
                 ht.genislik,
                 ht.derinlik,
-                ht.tamKorunakli
+                ht.tamKorunakli,
+                {$isitmaSelect}
              FROM dbo.havuztanimlamari ht
              INNER JOIN dbo.havuztipitanimlari htip ON htip.id = ht.tipId
+             LEFT JOIN dbo.havuz_tipi hvt ON hvt.id = ht.havuzTipiId
              WHERE ht.homesId = :homeId
              ORDER BY ht.tipId ASC",
             [':homeId' => $homeId]
@@ -786,22 +866,23 @@ final class HomesManagementDetailController extends Controller
 
         $pools = [];
         foreach ($rows as $row) {
-            $havuzTipiId = isset($row['havuzTipiId']) && $row['havuzTipiId'] !== null
-                ? (int) $row['havuzTipiId']
-                : null;
+            $deger = $this->firstNonEmptyValue($row, ['deger']);
+            if ($deger === '') {
+                continue;
+            }
 
             $pools[] = [
                 'id' => (int) ($row['id'] ?? 0),
                 'homesId' => (int) ($row['homesId'] ?? 0),
                 'tipId' => (int) ($row['tipId'] ?? 0),
                 'tip' => $this->firstNonEmptyValue($row, ['tipBaslik']),
-                'deger' => $this->firstNonEmptyValue($row, ['deger']),
-                'havuzTipiId' => $havuzTipiId,
-                'havuzTipi' => $havuzTipiId,
+                'deger' => $deger,
+                'havuzTipi' => $this->firstNonEmptyValue($row, ['havuzTipiBaslik']),
                 'uzunluk' => $this->firstNonEmptyValue($row, ['uzunluk']),
                 'genislik' => $this->firstNonEmptyValue($row, ['genislik']),
                 'derinlik' => $this->firstNonEmptyValue($row, ['derinlik']),
                 'tamKorunakli' => $this->firstNonEmptyValue($row, ['tamKorunakli']),
+                'isitma' => isset($row['isitma']) && $row['isitma'] !== null ? (int) $row['isitma'] : 0,
             ];
         }
 
@@ -851,6 +932,10 @@ final class HomesManagementDetailController extends Controller
                 }
 
                 $deger = $values[$yatakId] ?? '';
+                if (trim((string) $deger) === '') {
+                    continue;
+                }
+
                 $yataklar[] = [
                     'id' => $yatakId,
                     'name' => $yatakTipi['baslik'] ?? '',
@@ -885,6 +970,10 @@ final class HomesManagementDetailController extends Controller
 
             $pieces = explode(';/', $part, 2);
             if (count($pieces) !== 2 || !is_numeric(trim($pieces[0]))) {
+                continue;
+            }
+
+            if (trim((string) $pieces[1]) === '') {
                 continue;
             }
 

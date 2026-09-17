@@ -23,14 +23,23 @@ final class SetupController extends Controller
         if (!is_file($sqlPath)) {
             throw new HttpException('Kolon setup SQL dosyasi bulunamadi.', 'SETUP_SQL_NOT_FOUND', 500);
         }
+        $poolSqlPath = dirname(__DIR__, 2) . '/setup-havuztanimlamari.sql';
+        if (!is_file($poolSqlPath)) {
+            throw new HttpException('Havuz setup SQL dosyasi bulunamadi.', 'SETUP_SQL_NOT_FOUND', 500);
+        }
 
         $sql = file_get_contents($sqlPath);
         if (!is_string($sql) || trim($sql) === '') {
             throw new HttpException('Kolon setup SQL dosyasi bos.', 'SETUP_SQL_EMPTY', 500);
         }
+        $poolSql = file_get_contents($poolSqlPath);
+        if (!is_string($poolSql) || trim($poolSql) === '') {
+            throw new HttpException('Havuz setup SQL dosyasi bos.', 'SETUP_SQL_EMPTY', 500);
+        }
 
         try {
             $this->execSqlBatches($sql);
+            $this->execSqlBatches($poolSql);
             $this->execSqlBatches($this->extraPaymentsSql());
             $this->assertExtraPaymentTablesExist();
         } catch (\PDOException $e) {
@@ -42,6 +51,7 @@ final class SetupController extends Controller
             'database' => $this->databaseName(),
             'verified_tables' => $this->extraPaymentTableStatus(),
             'included_setups' => [
+                'havuztanimlamari',
                 'extra-payments',
             ],
             'status' => 'completed',

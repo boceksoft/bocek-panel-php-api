@@ -76,6 +76,7 @@ BEGIN
         genislik         nvarchar(255) NULL,
         derinlik         nvarchar(255) NULL,
         tamKorunakli     nvarchar(255) NULL,
+        isitma           bit NULL,
         DateCreated      datetime NOT NULL
             CONSTRAINT DF_havuztanimlamari_DateCreated DEFAULT GETDATE(),
         DateModified     datetime NULL
@@ -96,6 +97,11 @@ END;
 IF COL_LENGTH('dbo.havuztanimlamari', 'tipId') IS NULL
 BEGIN
     ALTER TABLE dbo.havuztanimlamari ADD tipId int NULL;
+END;
+
+IF COL_LENGTH('dbo.havuztanimlamari', 'isitma') IS NULL
+BEGIN
+    ALTER TABLE dbo.havuztanimlamari ADD isitma bit NULL;
 END;
 
 IF COL_LENGTH('dbo.havuztanimlamari', 'tip') IS NOT NULL
@@ -156,7 +162,8 @@ END;
         NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.yuzme_havuzu_uzunluk))), '') AS uzunluk,
         NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.yuzme_havuzu_genislik))), '') AS genislik,
         NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.yuzme_havuzu_derinlik))), '') AS derinlik,
-        NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.tam_korunakli_havuz))), '') AS tamKorunakli
+        NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.tam_korunakli_havuz))), '') AS tamKorunakli,
+        CAST(NULL AS bit) AS isitma
     FROM dbo.homes h
     WHERE NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.yuzme_havuzu))), '') IS NOT NULL
        OR h.yuzme_havuzu_tipi IS NOT NULL
@@ -175,7 +182,8 @@ END;
         NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.cocuk_havuzu_uzunluk))), '') AS uzunluk,
         NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.cocuk_havuzu_genislik))), '') AS genislik,
         NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.cocuk_havuzu_derinlik))), '') AS derinlik,
-        NULL AS tamKorunakli
+        NULL AS tamKorunakli,
+        CAST(NULL AS bit) AS isitma
     FROM dbo.homes h
     WHERE NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.cocuk_havuzu))), '') IS NOT NULL
        OR NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.cocuk_havuzu_uzunluk))), '') IS NOT NULL
@@ -192,7 +200,8 @@ END;
         NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.kapali_havuz_uzunluk))), '') AS uzunluk,
         NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.kapali_havuz_genislik))), '') AS genislik,
         NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.kapali_havuz_derinlik))), '') AS derinlik,
-        NULL AS tamKorunakli
+        NULL AS tamKorunakli,
+        CAST(NULL AS bit) AS isitma
     FROM dbo.homes h
     WHERE NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.kapali_havuz))), '') IS NOT NULL
        OR NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), h.kapali_havuz_uzunluk))), '') IS NOT NULL
@@ -211,6 +220,7 @@ WHEN MATCHED THEN
         target.genislik = source.genislik,
         target.derinlik = source.derinlik,
         target.tamKorunakli = source.tamKorunakli,
+        target.isitma = COALESCE(target.isitma, source.isitma),
         target.DateModified = GETDATE()
 WHEN NOT MATCHED BY TARGET THEN
     INSERT
@@ -222,7 +232,8 @@ WHEN NOT MATCHED BY TARGET THEN
         uzunluk,
         genislik,
         derinlik,
-        tamKorunakli
+        tamKorunakli,
+        isitma
     )
     VALUES
     (
@@ -233,7 +244,8 @@ WHEN NOT MATCHED BY TARGET THEN
         source.uzunluk,
         source.genislik,
         source.derinlik,
-        source.tamKorunakli
+        source.tamKorunakli,
+        source.isitma
     );
 
 COMMIT TRANSACTION;

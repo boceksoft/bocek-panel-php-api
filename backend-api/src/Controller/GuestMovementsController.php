@@ -23,6 +23,7 @@ final class GuestMovementsController extends Controller
      * @query endDate string required Bitis tarihi, haric tutulur (YYYY-MM-DD, DD.MM.YYYY veya DD/MM/YYYY)
      * @query type string all|giris|cikis|icerde
      * @query mode string all|giris|cikis|icerde
+     * @query site int Site kimligi, varsayilan 1
      * @query kelime string Villa, musteri veya telefon aramasi
      * @query search string Villa, musteri veya telefon aramasi
      */
@@ -52,10 +53,11 @@ final class GuestMovementsController extends Controller
         $page = max(1, (int) $this->firstRequestValue(['page'], '1'));
         $perPage = max(1, (int) $this->firstRequestValue(['per_page', 'limit'], '50'));
         $search = $this->firstRequestValue(['kelime', 'search', 'q'], '');
+        $siteId = $this->siteId();
 
-        $girisRows = $this->fetchRows('giris', $startDate, $endDate);
-        $cikisRows = $this->fetchRows('cikis', $startDate, $endDate);
-        $icerdeRows = $this->fetchRows('icerde', $startDate, $endDate);
+        $girisRows = $this->fetchRows('giris', $startDate, $endDate, $siteId);
+        $cikisRows = $this->fetchRows('cikis', $startDate, $endDate, $siteId);
+        $icerdeRows = $this->fetchRows('icerde', $startDate, $endDate, $siteId);
 
         if ($search !== '') {
             $girisRows = $this->filterRowsBySearch($girisRows, $search);
@@ -97,6 +99,7 @@ final class GuestMovementsController extends Controller
             'startDate' => $startDate,
             'endDate' => $endDate,
             'type' => $type,
+            'site' => $siteId,
             'total' => $totals['total'],
             'giris_count' => $totals['giris'],
             'cikis_count' => $totals['cikis'],
@@ -131,6 +134,16 @@ final class GuestMovementsController extends Controller
         }
 
         return $default;
+    }
+
+    private function siteId(): int
+    {
+        $value = $this->firstRequestValue(['site', 'Site', 'site_id', 'SiteId', 'siteId', 'currentSite', 'currentSiteId'], '1');
+        if (!is_numeric($value) || (int) $value < 1) {
+            throw new HttpException('site pozitif sayi olmali.', 'VALIDATION_ERROR', 422);
+        }
+
+        return (int) $value;
     }
 
     /**
@@ -180,7 +193,7 @@ final class GuestMovementsController extends Controller
     /**
      * @return array<int,array<string,mixed>>
      */
-    private function fetchRows(string $type, string $startDate, string $endDate): array
+    private function fetchRows(string $type, string $startDate, string $endDate, int $siteId): array
     {
         $reservationIdSql = $this->doluReservationIdSql();
         $whereSql = $this->dateWhere($type);
@@ -193,56 +206,111 @@ final class GuestMovementsController extends Controller
             : 'CONVERT(date, d.tarih, 103)';
         $movementStatusLabel = $this->movementStatusLabel($type);
         $movementSortValue = $this->movementSortValue($type);
+        $ownerNameSql = $this->ownerNameSql();
+        $ownerPhoneSql = $this->ownerPhoneSql();
 
         $sql = "  
+
 SELECT
+
     d.id AS dolu_id,
+
     {$reservationIdSql} AS rezid,
+
     N'{$movementStatusLabel}' AS durum,
+
     N'{$movementStatusLabel}' AS hareket_durumu,
+
     '{$type}' AS hareket_tipi,
+
     {$movementSortValue} AS hareket_sira,
+
     CONVERT(varchar(10), {$orderDateSql}, 23) AS hareket_tarihi,
+
     h.id AS villa_id,
+
     ISNULL(h.baslik, k.adi) AS villa_ismi,
+
     h.url AS full_villa_url,
+
     h.url AS villa_url,
-	CONCAT(h.enlem, ',', h.boylam, '/@', h.enlem, ',', h.boylam, ',17z') AS konum,
-	CONCAT(k.id, ISNULL(REPLACE(CONVERT(varchar(5), k.islem_tarihi, 108), ':', ''), '0000')) AS giris_bilgilendirme_kodu,
+
+CONCAT(h.enlem, ',', h.boylam, '/@', h.enlem, ',', h.boylam, ',17z') AS konum,
+
+CONCAT(k.id, ISNULL(REPLACE(CONVERT(varchar(5), k.islem_tarihi, 108), ':', ''), '0000')) AS giris_bilgilendirme_kodu,
+
     CONCAT(k.id, ISNULL(REPLACE(CONVERT(varchar(5), k.islem_tarihi, 108), ':', ''), '0000'), '/evsahibi') AS giris_bilgilendirme_evsahibi_kodu,
-	LTRIM(RTRIM(CONCAT(ISNULL(es.ad, ''), ' ', ISNULL(es.soyad, '')))) AS villa_sahibi_ismi,
+
+LTRIM(RTRIM(CONCAT(ISNULL(es.ad, ''), ' ', ISNULL(es.soyad, '')))) AS villa_sahibi_ismi,
+
     REPLACE(ISNULL(es.tel, ''), ' ', '') AS villa_sahibi_teli,
+
     k.musteri AS musteri_adi,
-    LTRIM(RTRIM(CONCAT(ISNULL('+' + CONVERT(nvarchar(20), k.ulkekodu), ''), ' ', ISNULL(k.telefon, '')))) AS musteri_teli,
+
+    LTRIM(RTRIM(ISNULL(k.telefon, ''))) AS musteri_teli,
+
     CONVERT(varchar(10), d.tarih, 104) AS giris_tarihi,
+
     CONVERT(varchar(10), d.tarih2, 104) AS cikis_tarihi,
+	
+	CONCAT(CONVERT(varchar(10), d.tarih, 104), ' - ', CONVERT(varchar(10), d.tarih2, 104)) AS konaklama_tarih_araligi,
+	
+	CONCAT(h.url, '?rez=', k.id) AS villa_yorum_url,
+
     d.durum AS rezervasyon_durum,
+
     CASE d.durum
+
         WHEN 0 THEN N'Onay Bekliyor'
+
         WHEN 1 THEN N'Odeme Bekliyor'
+
         WHEN 2 THEN N'Sure Doldu'
+
         WHEN 3 THEN N'Onaylandi'
+
         WHEN 4 THEN N'Iptal Edildi'
+
         WHEN 5 THEN N'Silindi'
+
         WHEN 6 THEN N'Acik Rezervasyon'
+
         ELSE N'-'
+
     END AS rezervasyon_durum_text
+
 FROM dolu d
+
 INNER JOIN kayitlar k ON k.id = {$reservationIdSql}
+
 LEFT JOIN homes h ON h.id = d.emlak
+
 LEFT JOIN kullanici es ON es.id = h.evsahibi
+
 WHERE {$whereSql}
+
   AND d.durum = 3
+
   AND ISNULL(k.musteri, '') <> ''
+
   AND {$reservationIdSql} IS NOT NULL
+
   {$externalFilterSql}
+
 ORDER BY
+
     {$orderDateSql} ASC,
+
     h.baslik ASC,
+
     k.musteri ASC";
 
+
+
         $stmt = $this->db->pdo()->prepare($sql);
+
         $this->bindDateWhereValues($stmt, $startDate, $endDate);
+
         $stmt->execute();
 
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -262,6 +330,26 @@ ORDER BY
         unset($row);
 
         return $rows;
+    }
+
+    private function ownerNameSql(): string
+    {
+        $ownerNameSql = "LTRIM(RTRIM(CONCAT(ISNULL(es.ad, ''), ' ', ISNULL(es.soyad, ''))))";
+        if (empty($this->app['guest_movements_use_caretaker_owner_fallback'])) {
+            return $ownerNameSql;
+        }
+
+        return "COALESCE(NULLIF({$ownerNameSql}, ''), NULLIF(LTRIM(RTRIM(ISNULL(h.BakimciAd, ''))), ''), '')";
+    }
+
+    private function ownerPhoneSql(): string
+    {
+        $ownerPhoneSql = "REPLACE(ISNULL(es.tel, ''), ' ', '')";
+        if (empty($this->app['guest_movements_use_caretaker_owner_fallback'])) {
+            return $ownerPhoneSql;
+        }
+
+        return "COALESCE(NULLIF({$ownerPhoneSql}, ''), NULLIF(REPLACE(ISNULL(h.BakimciTel, ''), ' ', ''), ''), '')";
     }
 
     private function dateWhere(string $type): string

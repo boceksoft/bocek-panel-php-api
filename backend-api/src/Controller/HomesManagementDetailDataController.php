@@ -53,6 +53,7 @@ final class HomesManagementDetailDataController extends Controller
             'kurallar' => $selectableData['kurallar'],
             'dahil_hizmetler' => $selectableData['dahil_hizmetler'],
             'ev_sahipleri' => $selectableData['ev_sahipleri'],
+            'bakimcilar' => $selectableData['bakimcilar'],
             'on_odeme_yontemleri' => $selectableData['on_odeme_yontemleri'],
             'havuz_tipleri' => $selectableData['havuz_tipleri'],
             'oda_yatak_tipleri' => $selectableData['oda_yatak_tipleri'],
@@ -104,7 +105,7 @@ final class HomesManagementDetailDataController extends Controller
             $this->field('iptalpolitikasi', 'integer', 'iptal_sartlari'),
             $this->field('iptal_politikasi', 'integer', 'iptal_sartlari'),
             $this->field('iptalsarti', 'string'),
-            $this->field('bakimciadi', 'string'),
+            $this->field('bakimciadi', 'string', 'bakimcilar'),
             $this->field('bakimcitel', 'string'),
             $this->field('evsahibi', 'integer', 'ev_sahipleri'),
             $this->field('whatsappgrupadi', 'string'),
@@ -232,6 +233,7 @@ final class HomesManagementDetailDataController extends Controller
                  ORDER BY siralama ASC, baslik ASC"
             ),
             'ev_sahipleri' => $this->evSahipleri($pdo),
+            'bakimcilar' => $this->bakimcilar($pdo),
             'on_odeme_yontemleri' => $this->fetchOptions(
                 $pdo,
                 "SELECT Id AS id, Title AS title
@@ -330,6 +332,28 @@ final class HomesManagementDetailDataController extends Controller
         }
 
         return $items;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function bakimcilar(PDO $pdo): array
+    {
+        return $this->fetchOptions(
+            $pdo,
+            "SELECT
+                    id,
+                    bakimciAdi AS title,
+                    bakimciAdi AS name,
+                    bakimcitel AS phone,
+                    bakimciAdres AS address,
+                    bakimciEmail AS email,
+                    homesId AS homes_id
+             FROM dbo.bakimcilar
+             WHERE bakimciAdi IS NOT NULL
+               AND LTRIM(RTRIM(bakimciAdi)) <> ''
+             ORDER BY bakimciAdi ASC"
+        );
     }
 
     /**

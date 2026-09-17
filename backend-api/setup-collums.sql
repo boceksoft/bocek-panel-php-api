@@ -971,6 +971,13 @@ ALTER TABLE [dbo].[havuztanimlamari] ADD [tamKorunakli] nvarchar(255) NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[havuztanimlamari]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[havuztanimlamari]', N'isitma') IS NULL
+BEGIN
+ALTER TABLE [dbo].[havuztanimlamari] ADD [isitma] bit NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[havuztipitanimlari]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[havuztipitanimlari]', N'id') IS NULL
 BEGIN
@@ -1505,6 +1512,523 @@ VALUES (@fyt, @indirimToplam, @sahteIndirimToplam);
 
 RETURN;
 END
+GO
+
+
+/* Bakimci kolonlari ve dbo.bakimcilar backfill */
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'bakimciad') IS NULL
+BEGIN
+ALTER TABLE [dbo].[homes] ADD [bakimciad] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'bakimcitel') IS NULL
+BEGIN
+ALTER TABLE [dbo].[homes] ADD [bakimcitel] varchar(20) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NULL
+BEGIN
+CREATE TABLE [dbo].[bakimcilar]
+(
+    [id] int IDENTITY(1,1) NOT NULL,
+    [homesId] int NULL,
+    [bakimciAdi] nvarchar(255) NULL,
+    [bakimcitel] varchar(20) NULL,
+    [bakimciAdres] nvarchar(500) NULL,
+    [bakimciEmail] nvarchar(255) NULL
+);
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'id') IS NOT NULL
+    AND COLUMNPROPERTY(OBJECT_ID(N'[dbo].[bakimcilar]'), N'id', 'AllowsNull') = 0
+    AND NOT EXISTS (
+        SELECT 1
+        FROM sys.key_constraints
+        WHERE [type] = N'PK'
+          AND parent_object_id = OBJECT_ID(N'[dbo].[bakimcilar]')
+    )
+BEGIN
+ALTER TABLE [dbo].[bakimcilar]
+ADD PRIMARY KEY ([id]);
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'homesId') IS NULL
+BEGIN
+ALTER TABLE [dbo].[bakimcilar] ADD [homesId] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'bakimciAdi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[bakimcilar] ADD [bakimciAdi] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'bakimcitel') IS NULL
+BEGIN
+ALTER TABLE [dbo].[bakimcilar] ADD [bakimcitel] varchar(20) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'bakimciAdres') IS NULL
+BEGIN
+ALTER TABLE [dbo].[bakimcilar] ADD [bakimciAdres] nvarchar(500) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'bakimciEmail') IS NULL
+BEGIN
+ALTER TABLE [dbo].[bakimcilar] ADD [bakimciEmail] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'bakimciAdi') IS NOT NULL
+BEGIN
+DELETE b
+FROM [dbo].[bakimcilar] b
+CROSS APPLY
+(
+    SELECT NULLIF(
+        LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(CONVERT(nvarchar(255), b.bakimciAdi), N',', N''), N':', N''), N';', N''), N'.', N''))),
+        N''
+    ) AS cleanName
+) c
+WHERE NULLIF(REPLACE(REPLACE(c.cleanName, N' ', N''), NCHAR(9), N''), N'') IS NULL
+   OR PATINDEX(N'%[A-Za-zÇĞİÖŞÜçğıöşü]%', c.cleanName) = 0;
+
+UPDATE b
+SET b.bakimciAdi = c.cleanName
+FROM [dbo].[bakimcilar] b
+CROSS APPLY
+(
+    SELECT NULLIF(
+        LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(CONVERT(nvarchar(255), b.bakimciAdi), N',', N''), N':', N''), N';', N''), N'.', N''))),
+        N''
+    ) AS cleanName
+) c
+WHERE c.cleanName IS NOT NULL
+  AND PATINDEX(N'%[A-Za-zÇĞİÖŞÜçğıöşü]%', c.cleanName) > 0
+  AND b.bakimciAdi <> c.cleanName;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'id') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'bakimcitel') IS NOT NULL
+BEGIN
+;WITH ExistingBakimci AS
+(
+    SELECT
+        b.id,
+        CASE
+            WHEN LEFT(p.cleanTel, 4) = '0090' AND LEN(p.cleanTel) = 14 THEN '90' + SUBSTRING(p.cleanTel, 5, 10)
+            WHEN LEFT(p.cleanTel, 2) = '90' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+            WHEN LEFT(p.cleanTel, 1) = '0' AND LEN(p.cleanTel) = 11 THEN '90' + SUBSTRING(p.cleanTel, 2, 10)
+            WHEN LEN(p.cleanTel) = 10 THEN '90' + p.cleanTel
+            ELSE p.cleanTel
+        END AS normalizedTel
+    FROM [dbo].[bakimcilar] b
+    CROSS APPLY
+    (
+        SELECT NULLIF(
+            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                LTRIM(RTRIM(CONVERT(varchar(50), b.bakimcitel))),
+                '+', ''), ' ', ''), '(', ''), ')', ''), '-', ''), '.', ''), '/', ''), ',', ''), CHAR(9), ''), CHAR(10), ''), CHAR(13), ''),
+            ''
+        ) AS cleanTel
+    ) p
+    WHERE NULLIF(LTRIM(RTRIM(CONVERT(varchar(50), b.bakimcitel))), '') IS NOT NULL
+)
+UPDATE b
+SET b.bakimcitel = LEFT(e.normalizedTel, 20)
+FROM [dbo].[bakimcilar] b
+INNER JOIN ExistingBakimci e ON e.id = b.id
+WHERE b.bakimcitel <> LEFT(e.normalizedTel, 20)
+   OR (b.bakimcitel IS NULL AND e.normalizedTel IS NOT NULL)
+   OR (b.bakimcitel IS NOT NULL AND e.normalizedTel IS NULL);
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'id') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'homesId') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'bakimcitel') IS NOT NULL
+BEGIN
+;WITH DuplicateBakimci AS
+(
+    SELECT
+        id,
+        ROW_NUMBER() OVER (
+            PARTITION BY bakimcitel
+            ORDER BY
+                CASE WHEN homesId IS NULL THEN 1 ELSE 0 END ASC,
+                homesId ASC,
+                id ASC
+        ) AS rn
+    FROM [dbo].[bakimcilar]
+    WHERE bakimcitel IS NOT NULL
+)
+DELETE b
+FROM [dbo].[bakimcilar] b
+INNER JOIN DuplicateBakimci d ON d.id = b.id
+WHERE d.rn > 1;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND NOT EXISTS (
+        SELECT 1
+        FROM sys.indexes
+        WHERE name = N'UX_bakimcilar_bakimcitel'
+          AND object_id = OBJECT_ID(N'[dbo].[bakimcilar]')
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM [dbo].[bakimcilar]
+        WHERE [bakimcitel] IS NOT NULL
+        GROUP BY [bakimcitel]
+        HAVING COUNT(*) > 1
+    )
+BEGIN
+CREATE UNIQUE INDEX [UX_bakimcilar_bakimcitel]
+    ON [dbo].[bakimcilar] ([bakimcitel])
+    WHERE [bakimcitel] IS NOT NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'id') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'bakimciad') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'bakimcitel') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'homesId') IS NOT NULL
+BEGIN
+;WITH BakimciSource AS
+(
+    SELECT
+        h.id AS homesId,
+        n.cleanName AS bakimciAdi,
+        LEFT(
+            CASE
+                WHEN LEFT(p.cleanTel, 4) = '0090' AND LEN(p.cleanTel) = 14 THEN '90' + SUBSTRING(p.cleanTel, 5, 10)
+                WHEN LEFT(p.cleanTel, 2) = '90' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+                WHEN LEFT(p.cleanTel, 1) = '0' AND LEN(p.cleanTel) = 11 THEN '90' + SUBSTRING(p.cleanTel, 2, 10)
+                WHEN LEN(p.cleanTel) = 10 THEN '90' + p.cleanTel
+                ELSE p.cleanTel
+            END,
+            20
+        ) AS bakimcitel,
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                CASE
+                    WHEN LEFT(p.cleanTel, 4) = '0090' AND LEN(p.cleanTel) = 14 THEN '90' + SUBSTRING(p.cleanTel, 5, 10)
+                    WHEN LEFT(p.cleanTel, 2) = '90' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+                    WHEN LEFT(p.cleanTel, 1) = '0' AND LEN(p.cleanTel) = 11 THEN '90' + SUBSTRING(p.cleanTel, 2, 10)
+                    WHEN LEN(p.cleanTel) = 10 THEN '90' + p.cleanTel
+                    ELSE p.cleanTel
+                END
+            ORDER BY h.id ASC
+        ) AS rn
+    FROM [dbo].[homes] h
+    CROSS APPLY
+    (
+        SELECT NULLIF(
+            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                LTRIM(RTRIM(CONVERT(varchar(50), h.bakimcitel))),
+                '+', ''), ' ', ''), '(', ''), ')', ''), '-', ''), '.', ''), '/', ''), ',', ''), CHAR(9), ''), CHAR(10), ''), CHAR(13), ''),
+            ''
+        ) AS cleanTel
+    ) p
+    CROSS APPLY
+    (
+        SELECT NULLIF(
+            LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(CONVERT(nvarchar(255), h.bakimciad), N',', N''), N':', N''), N';', N''), N'.', N''))),
+            N''
+        ) AS cleanName
+    ) n
+    WHERE p.cleanTel IS NOT NULL
+      AND PATINDEX('%[0-9]%', p.cleanTel) > 0
+      AND NULLIF(REPLACE(REPLACE(n.cleanName, N' ', N''), NCHAR(9), N''), N'') IS NOT NULL
+      AND PATINDEX(N'%[A-Za-zÇĞİÖŞÜçğıöşü]%', n.cleanName) > 0
+)
+MERGE [dbo].[bakimcilar] AS target
+USING
+(
+    SELECT homesId, bakimciAdi, bakimcitel
+    FROM BakimciSource
+    WHERE rn = 1
+) AS source
+ON target.bakimcitel = source.bakimcitel
+WHEN MATCHED AND (
+    target.homesId IS NULL
+    OR source.homesId = target.homesId
+    OR source.homesId < target.homesId
+) THEN
+    UPDATE SET
+        target.homesId = source.homesId,
+        target.bakimciAdi = source.bakimciAdi
+WHEN NOT MATCHED BY TARGET THEN
+    INSERT (homesId, bakimciAdi, bakimcitel)
+    VALUES (source.homesId, source.bakimciAdi, source.bakimcitel);
+
+;WITH HomeCaretaker AS
+(
+    SELECT
+        h.id AS homesId,
+        CASE
+            WHEN LEFT(p.cleanTel, 4) = '0090' AND LEN(p.cleanTel) = 14 THEN '90' + SUBSTRING(p.cleanTel, 5, 10)
+            WHEN LEFT(p.cleanTel, 2) = '90' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+            WHEN LEFT(p.cleanTel, 1) = '0' AND LEN(p.cleanTel) = 11 THEN '90' + SUBSTRING(p.cleanTel, 2, 10)
+            WHEN LEN(p.cleanTel) = 10 THEN '90' + p.cleanTel
+            ELSE p.cleanTel
+        END AS normalizedTel
+    FROM [dbo].[homes] h
+    CROSS APPLY
+    (
+        SELECT NULLIF(
+            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                LTRIM(RTRIM(CONVERT(varchar(50), h.bakimcitel))),
+                '+', ''), ' ', ''), '(', ''), ')', ''), '-', ''), '.', ''), '/', ''), ',', ''), CHAR(9), ''), CHAR(10), ''), CHAR(13), ''),
+            ''
+        ) AS cleanTel
+    ) p
+),
+RankedBakimci AS
+(
+    SELECT
+        b.id,
+        ROW_NUMBER() OVER (
+            PARTITION BY b.homesId
+            ORDER BY
+                CASE WHEN b.bakimcitel = h.normalizedTel THEN 0 ELSE 1 END,
+                b.id DESC
+        ) AS rn
+    FROM [dbo].[bakimcilar] b
+    LEFT JOIN HomeCaretaker h ON h.homesId = b.homesId
+    WHERE b.homesId IS NOT NULL
+)
+UPDATE b
+SET b.homesId = NULL
+FROM [dbo].[bakimcilar] b
+INNER JOIN RankedBakimci r ON r.id = b.id
+WHERE r.rn > 1;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[TR_homes_bakimcilar_upsert]', N'TR') IS NOT NULL
+BEGIN
+DROP TRIGGER [dbo].[TR_homes_bakimcilar_upsert];
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'id') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'bakimciad') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'bakimcitel') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'homesId') IS NOT NULL
+BEGIN
+EXEC(N'
+CREATE TRIGGER [dbo].[TR_homes_bakimcilar_upsert]
+ON [dbo].[homes]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT (UPDATE(bakimciad) OR UPDATE(bakimcitel))
+        RETURN;
+
+    ;WITH BakimciSource AS
+    (
+        SELECT
+            i.id AS homesId,
+            cn.cleanName AS bakimciAdi,
+            LEFT(
+                CASE
+                    WHEN LEFT(p.cleanTel, 4) = ''0090'' AND LEN(p.cleanTel) = 14 THEN ''90'' + SUBSTRING(p.cleanTel, 5, 10)
+                    WHEN LEFT(p.cleanTel, 2) = ''90'' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+                    WHEN LEFT(p.cleanTel, 1) = ''0'' AND LEN(p.cleanTel) = 11 THEN ''90'' + SUBSTRING(p.cleanTel, 2, 10)
+                    WHEN LEN(p.cleanTel) = 10 THEN ''90'' + p.cleanTel
+                    ELSE p.cleanTel
+                END,
+                20
+            ) AS bakimcitel,
+            ROW_NUMBER() OVER (
+                PARTITION BY
+                    CASE
+                        WHEN LEFT(p.cleanTel, 4) = ''0090'' AND LEN(p.cleanTel) = 14 THEN ''90'' + SUBSTRING(p.cleanTel, 5, 10)
+                        WHEN LEFT(p.cleanTel, 2) = ''90'' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+                        WHEN LEFT(p.cleanTel, 1) = ''0'' AND LEN(p.cleanTel) = 11 THEN ''90'' + SUBSTRING(p.cleanTel, 2, 10)
+                        WHEN LEN(p.cleanTel) = 10 THEN ''90'' + p.cleanTel
+                        ELSE p.cleanTel
+                    END
+                ORDER BY i.id ASC
+            ) AS rn
+        FROM inserted i
+        CROSS APPLY
+        (
+            SELECT NULLIF(
+                REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                    LTRIM(RTRIM(CONVERT(varchar(50), i.bakimcitel))),
+                    ''+'', ''''), '' '', ''''), ''('', ''''), '')'', ''''), ''-'', ''''), ''.'', ''''), ''/'', ''''), '','', ''''), CHAR(9), ''''), CHAR(10), ''''), CHAR(13), ''''),
+                ''''
+            ) AS cleanTel
+        ) p
+        CROSS APPLY
+        (
+            SELECT NULLIF(
+                CASE
+                    WHEN LEFT(p.cleanTel, 4) = ''0090'' AND LEN(p.cleanTel) = 14 THEN ''90'' + SUBSTRING(p.cleanTel, 5, 10)
+                    WHEN LEFT(p.cleanTel, 2) = ''90'' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+                    WHEN LEFT(p.cleanTel, 1) = ''0'' AND LEN(p.cleanTel) = 11 THEN ''90'' + SUBSTRING(p.cleanTel, 2, 10)
+                    WHEN LEN(p.cleanTel) = 10 THEN ''90'' + p.cleanTel
+                    ELSE p.cleanTel
+                END,
+                ''''
+            ) AS normalizedTel
+        ) n
+        CROSS APPLY
+        (
+            SELECT NULLIF(
+                LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(CONVERT(nvarchar(255), i.bakimciad), N'','', N''''), N'':'', N''''), N'';'', N''''), N''.'', N''''))),
+                N''''
+            ) AS cleanName
+        ) cn
+        WHERE n.normalizedTel IS NOT NULL
+          AND PATINDEX(''%[0-9]%'', n.normalizedTel) > 0
+          AND NULLIF(REPLACE(REPLACE(cn.cleanName, N'' '', N''''), NCHAR(9), N''''), N'''') IS NOT NULL
+          AND PATINDEX(N''%[A-Za-zÇĞİÖŞÜçğıöşü]%'', cn.cleanName) > 0
+    )
+    MERGE [dbo].[bakimcilar] WITH (HOLDLOCK) AS target
+    USING
+    (
+        SELECT homesId, bakimciAdi, bakimcitel
+        FROM BakimciSource
+        WHERE rn = 1
+    ) AS source
+    ON target.bakimcitel = source.bakimcitel
+    WHEN MATCHED AND (
+        target.homesId IS NULL
+        OR source.homesId = target.homesId
+        OR source.homesId < target.homesId
+    ) THEN
+        UPDATE SET
+            target.homesId = source.homesId,
+            target.bakimciAdi = source.bakimciAdi
+    WHEN NOT MATCHED BY TARGET THEN
+        INSERT (homesId, bakimciAdi, bakimcitel)
+        VALUES (source.homesId, source.bakimciAdi, source.bakimcitel);
+
+    ;WITH HomeCaretaker AS
+    (
+        SELECT
+            h.id AS homesId,
+            CASE
+                WHEN LEFT(p.cleanTel, 4) = ''0090'' AND LEN(p.cleanTel) = 14 THEN ''90'' + SUBSTRING(p.cleanTel, 5, 10)
+                WHEN LEFT(p.cleanTel, 2) = ''90'' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+                WHEN LEFT(p.cleanTel, 1) = ''0'' AND LEN(p.cleanTel) = 11 THEN ''90'' + SUBSTRING(p.cleanTel, 2, 10)
+                WHEN LEN(p.cleanTel) = 10 THEN ''90'' + p.cleanTel
+                ELSE p.cleanTel
+            END AS normalizedTel
+        FROM [dbo].[homes] h
+        CROSS APPLY
+        (
+            SELECT NULLIF(
+                REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                    LTRIM(RTRIM(CONVERT(varchar(50), h.bakimcitel))),
+                    ''+'', ''''), '' '', ''''), ''('', ''''), '')'', ''''), ''-'', ''''), ''.'', ''''), ''/'', ''''), '','', ''''), CHAR(9), ''''), CHAR(10), ''''), CHAR(13), ''''),
+                ''''
+            ) AS cleanTel
+        ) p
+    ),
+    RankedBakimci AS
+    (
+        SELECT
+            b.id,
+            ROW_NUMBER() OVER (
+                PARTITION BY b.homesId
+                ORDER BY
+                    CASE WHEN b.bakimcitel = h.normalizedTel THEN 0 ELSE 1 END,
+                    b.id DESC
+            ) AS rn
+        FROM [dbo].[bakimcilar] b
+        LEFT JOIN HomeCaretaker h ON h.homesId = b.homesId
+        WHERE b.homesId IS NOT NULL
+    )
+    UPDATE b
+    SET b.homesId = NULL
+    FROM [dbo].[bakimcilar] b
+    INNER JOIN RankedBakimci r ON r.id = b.id
+    WHERE r.rn > 1;
+END;
+');
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[TR_bakimcilar_single_home_assignment]', N'TR') IS NOT NULL
+BEGIN
+DROP TRIGGER [dbo].[TR_bakimcilar_single_home_assignment];
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[bakimcilar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'id') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[bakimcilar]', N'homesId') IS NOT NULL
+BEGIN
+EXEC(N'
+CREATE TRIGGER [dbo].[TR_bakimcilar_single_home_assignment]
+ON [dbo].[bakimcilar]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT UPDATE(homesId)
+        RETURN;
+
+    ;WITH AffectedHomes AS
+    (
+        SELECT DISTINCT homesId
+        FROM inserted
+        WHERE homesId IS NOT NULL
+    ),
+    RankedBakimci AS
+    (
+        SELECT
+            b.id,
+            ROW_NUMBER() OVER (
+                PARTITION BY b.homesId
+                ORDER BY
+                    CASE WHEN i.id IS NOT NULL THEN 0 ELSE 1 END,
+                    b.id DESC
+            ) AS rn
+        FROM [dbo].[bakimcilar] b
+        INNER JOIN AffectedHomes h ON h.homesId = b.homesId
+        LEFT JOIN inserted i ON i.id = b.id
+        WHERE b.homesId IS NOT NULL
+    )
+    UPDATE b
+    SET b.homesId = NULL
+    FROM [dbo].[bakimcilar] b
+    INNER JOIN RankedBakimci r ON r.id = b.id
+    WHERE r.rn > 1;
+END;
+');
+END;
 GO
 
 
@@ -2687,6 +3211,13 @@ IF OBJECT_ID(N'[dbo].[havuztanimlamari]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[havuztanimlamari]', N'tamKorunakli') IS NULL
 BEGIN
 ALTER TABLE [dbo].[havuztanimlamari] ADD [tamKorunakli] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[havuztanimlamari]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[havuztanimlamari]', N'isitma') IS NULL
+BEGIN
+ALTER TABLE [dbo].[havuztanimlamari] ADD [isitma] bit NULL;
 END;
 GO
 

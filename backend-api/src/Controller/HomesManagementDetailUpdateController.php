@@ -39,7 +39,8 @@ final class HomesManagementDetailUpdateController extends Controller
 
         $updates = $this->homesUpdates($payload);
         $mesafeler = $this->mesafelerPayload($payload);
-        if ($updates === [] && $mesafeler === []) {
+        $hasBakimciContactPayload = $this->hasBakimciContactPayload($payload);
+        if ($updates === [] && $mesafeler === [] && !$hasBakimciContactPayload) {
             throw new HttpException('Guncellenecek alan bulunamadi.', 'VALIDATION', 422);
         }
 
@@ -49,6 +50,8 @@ final class HomesManagementDetailUpdateController extends Controller
                 ? $this->updateHomes($pdo, $id, $updates)
                 : ['updated_columns' => [], 'skipped_columns' => []];
             $mesafelerResult = $this->updateMesafeler($pdo, $id, $mesafeler);
+            $bakimciAssignmentResult = $this->syncBakimciAssignment($pdo, $id, $updates);
+            $bakimciResult = $this->updateBakimciContact($pdo, $id, $payload);
             $pdo->commit();
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) {
@@ -60,13 +63,22 @@ final class HomesManagementDetailUpdateController extends Controller
 
         $this->response->success([
             'id' => $id,
-            'updated' => count($updateResult['updated_columns']) > 0 || $mesafelerResult['updated'] > 0,
+            'updated' => count($updateResult['updated_columns']) > 0
+                || $mesafelerResult['updated'] > 0
+                || $bakimciAssignmentResult['updated'] > 0
+                || $bakimciResult['updated'] > 0,
             'updated_columns' => $updateResult['updated_columns'],
             'skipped_columns' => $updateResult['skipped_columns'],
             'updated_related_sections' => [
                 'mesafeler' => $mesafelerResult['updated'],
+                'bakimci_assignment' => $bakimciAssignmentResult['updated'],
+                'bakimci' => $bakimciResult['updated'],
             ],
-            'skipped_related_rows' => $mesafelerResult['skipped'],
+            'skipped_related_rows' => array_merge(
+                $mesafelerResult['skipped'],
+                $bakimciAssignmentResult['skipped'],
+                $bakimciResult['skipped']
+            ),
             'skipped_related_sections' => $this->skippedRelatedSections($payload),
         ]);
     }
@@ -441,6 +453,290 @@ final class HomesManagementDetailUpdateController extends Controller
 
     /**
      * @param array<string,mixed> $payload
+     * @return array{updated:int,skipped:array<int,array<string,string>>}
+     */
+    private function updateBakimciContact(PDO $pdo, int $homeId, array $payload): array
+    {
+        $addressValue = $this->firstExistingPath($payload, [
+            'bakimciAdres',
+            'bakimciadres',
+            'address',
+            'adres',
+            'genelBilgiler.iletisimBilgileri.bakimciBilgisi.adres',
+            'genelBilgiler.iletisimBilgileri.bakimciBilgisi.address',
+        ]);
+        $emailValue = $this->firstExistingPath($payload, [
+            'bakimciEmail',
+            'bakimciemail',
+            'email',
+            'eposta',
+            'genelBilgiler.iletisimBilgileri.bakimciBilgisi.eposta',
+            'genelBilgiler.iletisimBilgileri.bakimciBilgisi.email',
+        ]);
+
+        if (!$addressValue['exists'] && !$emailValue['exists']) {
+            return ['updated' => 0, 'skipped' => []];
+        }
+
+        $skipped = [];
+        if (!$this->tableExists($pdo, 'dbo', 'bakimcilar')) {
+            return [
+                'updated' => 0,
+                'skipped' => [[
+                    'section' => 'bakimci',
+                    'reason' => 'bakimcilar tablosu bulunamadi.',
+                ]],
+            ];
+        }
+
+        $home = $this->fetchHomeCaretaker($pdo, $homeId);
+        $phone = $this->normalizePhone($this->firstNonEmptyPayloadValue($payload, [
+            'bakimcitel',
+            'genelBilgiler.iletisimBilgileri.bakimciBilgisi.telefon',
+        ], $home['bakimcitel'] ?? ''));
+
+        if ($phone === '') {
+            return [
+                'updated' => 0,
+                'skipped' => [[
+                    'section' => 'bakimci',
+                    'reason' => 'Bakimci telefonu bulunamadigi icin adres/e-posta eslestirilemedi.',
+                ]],
+            ];
+        }
+
+        $set = [];
+        $params = [
+            ':homeId' => $homeId,
+            ':phone' => $phone,
+        ];
+
+        if ($addressValue['exists']) {
+            $set[] = 'bakimciAdres = :bakimciAdres';
+            $params[':bakimciAdres'] = $this->normalizeScalar($addressValue['value']);
+        }
+
+        if ($emailValue['exists']) {
+            $set[] = 'bakimciEmail = :bakimciEmail';
+            $params[':bakimciEmail'] = $this->normalizeScalar($emailValue['value']);
+        }
+
+        if ($set === []) {
+            return ['updated' => 0, 'skipped' => $skipped];
+        }
+
+        $stmt = $pdo->prepare(
+            ";WITH MatchedBakimci AS
+             (
+                SELECT TOP 1 id
+                FROM dbo.bakimcilar
+                CROSS APPLY
+                (
+                    SELECT NULLIF(
+                        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                            LTRIM(RTRIM(CONVERT(varchar(50), bakimcitel))),
+                            '+', ''), ' ', ''), '(', ''), ')', ''), '-', ''), '.', ''), '/', ''), ',', ''), CHAR(9), ''), CHAR(10), ''), CHAR(13), ''),
+                        ''
+                    ) AS cleanTel
+                ) p
+                CROSS APPLY
+                (
+                    SELECT NULLIF(
+                        CASE
+                            WHEN LEFT(p.cleanTel, 4) = '0090' AND LEN(p.cleanTel) = 14 THEN '90' + SUBSTRING(p.cleanTel, 5, 10)
+                            WHEN LEFT(p.cleanTel, 2) = '90' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+                            WHEN LEFT(p.cleanTel, 1) = '0' AND LEN(p.cleanTel) = 11 THEN '90' + SUBSTRING(p.cleanTel, 2, 10)
+                            WHEN LEN(p.cleanTel) = 10 THEN '90' + p.cleanTel
+                            ELSE p.cleanTel
+                        END,
+                        ''
+                    ) AS normalizedTel
+                ) n
+                WHERE homesId = :homeId
+                  AND n.normalizedTel = :phone
+                ORDER BY id ASC
+             )
+             UPDATE b
+             SET " . implode(', ', $set) . "
+             FROM dbo.bakimcilar b
+             INNER JOIN MatchedBakimci m ON m.id = b.id"
+        );
+
+        foreach ($params as $key => $value) {
+            $stmt->bindValue($key, $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmt->execute();
+
+        if ($stmt->rowCount() === 0) {
+            $skipped[] = [
+                'section' => 'bakimci',
+                'reason' => 'homesId ve telefon ile eslesen bakimci bulunamadi.',
+            ];
+        }
+
+        return ['updated' => $stmt->rowCount(), 'skipped' => $skipped];
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function fetchHomeCaretaker(PDO $pdo, int $homeId): array
+    {
+        $stmt = $pdo->prepare('SELECT bakimciad, bakimcitel FROM homes WHERE id = :id');
+        $stmt->bindValue(':id', $homeId, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!is_array($row)) {
+            return [];
+        }
+
+        return [
+            'bakimciad' => (string) ($row['bakimciad'] ?? ''),
+            'bakimcitel' => (string) ($row['bakimcitel'] ?? ''),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $updates
+     * @return array{updated:int,skipped:array<int,array<string,string>>}
+     */
+    private function syncBakimciAssignment(PDO $pdo, int $homeId, array $updates): array
+    {
+        if (!array_key_exists('bakimciad', $updates) && !array_key_exists('bakimcitel', $updates)) {
+            return ['updated' => 0, 'skipped' => []];
+        }
+
+        if (!$this->tableExists($pdo, 'dbo', 'bakimcilar')) {
+            return [
+                'updated' => 0,
+                'skipped' => [[
+                    'section' => 'bakimci_assignment',
+                    'reason' => 'bakimcilar tablosu bulunamadi.',
+                ]],
+            ];
+        }
+
+        $home = $this->fetchHomeCaretaker($pdo, $homeId);
+        $name = $this->cleanBakimciName((string) ($home['bakimciad'] ?? ''));
+        $phone = $this->normalizePhone((string) ($home['bakimcitel'] ?? ''));
+
+        if ($name === '' || !$this->hasLetter($name) || $phone === '') {
+            return [
+                'updated' => 0,
+                'skipped' => [[
+                    'section' => 'bakimci_assignment',
+                    'reason' => 'Bakimci adi veya telefonu uygun olmadigi icin bakimcilar eslestirilemedi.',
+                ]],
+            ];
+        }
+
+        $caretakerId = $this->findBakimciIdByPhone($pdo, $phone);
+        if ($caretakerId > 0) {
+            $this->clearOtherHomeCaretakers($pdo, $homeId, $caretakerId);
+
+            $stmt = $pdo->prepare(
+                'UPDATE dbo.bakimcilar
+                 SET homesId = :homesId,
+                     bakimciAdi = :bakimciAdi,
+                     bakimcitel = :bakimcitel
+                 WHERE id = :id'
+            );
+            $stmt->execute([
+                ':homesId' => $homeId,
+                ':bakimciAdi' => $name,
+                ':bakimcitel' => $phone,
+                ':id' => $caretakerId,
+            ]);
+
+            return ['updated' => 1, 'skipped' => []];
+        }
+
+        $this->clearOtherHomeCaretakers($pdo, $homeId);
+
+        $stmt = $pdo->prepare(
+            'INSERT INTO dbo.bakimcilar (homesId, bakimciAdi, bakimcitel)
+             VALUES (:homesId, :bakimciAdi, :bakimcitel)'
+        );
+        $stmt->execute([
+            ':homesId' => $homeId,
+            ':bakimciAdi' => $name,
+            ':bakimcitel' => $phone,
+        ]);
+
+        return ['updated' => 1, 'skipped' => []];
+    }
+
+    private function findBakimciIdByPhone(PDO $pdo, string $phone): int
+    {
+        $stmt = $pdo->prepare(
+            "SELECT TOP 1 id
+             FROM dbo.bakimcilar
+             CROSS APPLY
+             (
+                SELECT NULLIF(
+                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                        LTRIM(RTRIM(CONVERT(varchar(50), bakimcitel))),
+                        '+', ''), ' ', ''), '(', ''), ')', ''), '-', ''), '.', ''), '/', ''), ',', ''), CHAR(9), ''), CHAR(10), ''), CHAR(13), ''),
+                    ''
+                ) AS cleanTel
+             ) p
+             CROSS APPLY
+             (
+                SELECT NULLIF(
+                    CASE
+                        WHEN LEFT(p.cleanTel, 4) = '0090' AND LEN(p.cleanTel) = 14 THEN '90' + SUBSTRING(p.cleanTel, 5, 10)
+                        WHEN LEFT(p.cleanTel, 2) = '90' AND LEN(p.cleanTel) = 12 THEN p.cleanTel
+                        WHEN LEFT(p.cleanTel, 1) = '0' AND LEN(p.cleanTel) = 11 THEN '90' + SUBSTRING(p.cleanTel, 2, 10)
+                        WHEN LEN(p.cleanTel) = 10 THEN '90' + p.cleanTel
+                        ELSE p.cleanTel
+                    END,
+                    ''
+                ) AS normalizedTel
+             ) n
+             WHERE n.normalizedTel = :phone
+             ORDER BY CASE WHEN homesId IS NULL THEN 1 ELSE 0 END ASC, id ASC"
+        );
+        $stmt->bindValue(':phone', $phone);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function clearOtherHomeCaretakers(PDO $pdo, int $homeId, int $exceptId = 0): void
+    {
+        if ($homeId <= 0) {
+            return;
+        }
+
+        $sql = 'UPDATE dbo.bakimcilar SET homesId = NULL WHERE homesId = :homesId';
+        $params = [':homesId' => $homeId];
+
+        if ($exceptId > 0) {
+            $sql .= ' AND id <> :exceptId';
+            $params[':exceptId'] = $exceptId;
+        }
+
+        $stmt = $pdo->prepare($sql);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue($key, $value, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+    }
+
+    private function cleanBakimciName(string $name): string
+    {
+        $name = str_replace([',', ':', ';', '.'], '', $name);
+
+        return trim($name);
+    }
+
+    private function hasLetter(string $value): bool
+    {
+        return preg_match('/[A-Za-zÇĞİÖŞÜçğıöşü]/u', $value) === 1;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
      * @return array<int,array<string,mixed>>
      */
     private function mesafelerPayload(array $payload): array
@@ -688,6 +984,33 @@ final class HomesManagementDetailUpdateController extends Controller
     /**
      * @param array<string,mixed> $payload
      */
+    private function hasBakimciContactPayload(array $payload): bool
+    {
+        foreach ([
+                     'bakimciAdres',
+                     'bakimciadres',
+                     'address',
+                     'adres',
+                     'bakimciEmail',
+                     'bakimciemail',
+                     'email',
+                     'eposta',
+                     'genelBilgiler.iletisimBilgileri.bakimciBilgisi.adres',
+                     'genelBilgiler.iletisimBilgileri.bakimciBilgisi.address',
+                     'genelBilgiler.iletisimBilgileri.bakimciBilgisi.eposta',
+                     'genelBilgiler.iletisimBilgileri.bakimciBilgisi.email',
+                 ] as $path) {
+            if ($this->hasPath($payload, $path)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
     private function hasPath(array $payload, string $path): bool
     {
         $current = $payload;
@@ -714,6 +1037,90 @@ final class HomesManagementDetailUpdateController extends Controller
         }
 
         return $current;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @param array<int,string> $paths
+     * @return array{exists:bool,value:mixed}
+     */
+    private function firstExistingPath(array $payload, array $paths): array
+    {
+        foreach ($paths as $path) {
+            if ($this->hasPath($payload, $path)) {
+                return [
+                    'exists' => true,
+                    'value' => $this->getPath($payload, $path),
+                ];
+            }
+        }
+
+        return [
+            'exists' => false,
+            'value' => '',
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @param array<int,string> $paths
+     * @param mixed $fallback
+     */
+    private function firstNonEmptyPayloadValue(array $payload, array $paths, $fallback): string
+    {
+        foreach ($paths as $path) {
+            if (!$this->hasPath($payload, $path)) {
+                continue;
+            }
+
+            $value = $this->normalizeScalar($this->getPath($payload, $path));
+            if ($value !== '') {
+                return (string) $value;
+            }
+        }
+
+        return (string) $fallback;
+    }
+
+    private function normalizePhone(string $phone): string
+    {
+        $phone = str_replace(['+', ' ', '(', ')', '-', '.', '/', ',', "\t", "\n", "\r"], '', trim($phone));
+        if ($phone === '') {
+            return '';
+        }
+
+        if (strpos($phone, '0090') === 0 && strlen($phone) === 14) {
+            return '90' . substr($phone, 4, 10);
+        }
+
+        if (strpos($phone, '90') === 0 && strlen($phone) === 12) {
+            return substr($phone, 0, 20);
+        }
+
+        if (strpos($phone, '0') === 0 && strlen($phone) === 11) {
+            return '90' . substr($phone, 1, 10);
+        }
+
+        if (strlen($phone) === 10) {
+            return '90' . $phone;
+        }
+
+        return substr($phone, 0, 20);
+    }
+
+    private function tableExists(PDO $pdo, string $schema, string $table): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT COUNT(*)
+             FROM INFORMATION_SCHEMA.TABLES
+             WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table'
+        );
+        $stmt->execute([
+            ':schema' => $schema,
+            ':table' => $table,
+        ]);
+
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     /**

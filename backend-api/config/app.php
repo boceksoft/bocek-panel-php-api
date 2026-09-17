@@ -32,6 +32,10 @@ return [
     // app.local.php icinde 'k.evid' olarak override edilebilir.
     'guest_movements_home_id_column' => 'd.emlak',
 
+    // true ise Guest movements listesinde ev sahibi adi/teli bos geldiginde
+    // homes.BakimciAd ve homes.BakimciTel fallback olarak kullanilir.
+    'guest_movements_use_caretaker_owner_fallback' => false,
+
     // ruleshomes tablosunda rules.id ile eslesen kolon adi.
     'ruleshomes_rules_id_column' => 'rulesId',
 
@@ -96,7 +100,7 @@ return [
             'start' => 'start',
             'end' => 'end',
         ],
-        'date_format' => 'Y-m-d',
+        'date_format' => 'd-m-y',
     ],
     'links_site_domain_queries' => [
         2 => 'SELECT TOP 1 domain FROM genel_s2',
