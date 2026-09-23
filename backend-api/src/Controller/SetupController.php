@@ -212,6 +212,58 @@ WHEN NOT MATCHED THEN
     INSERT (Code, Name, HomeColumnBase, IsIncluded)
     VALUES (source.Code, source.Name, source.HomeColumnBase, source.IsIncluded);
 GO
+
+IF OBJECT_ID('dbo.HomesExtraPayments', 'U') IS NOT NULL
+BEGIN
+    INSERT INTO dbo.HomesExtraPaymentTypes (Code, Name, HomeColumnBase, IsIncluded)
+    SELECT source.Code, source.Name, N'', CONVERT(bit, 0)
+    FROM (
+        SELECT DISTINCT
+            N'legacy_' + LOWER(CONVERT(varchar(40), HASHBYTES('SHA1', LOWER(LTRIM(RTRIM(CAST(title AS nvarchar(255)))))), 2)) AS Code,
+            LTRIM(RTRIM(CAST(title AS nvarchar(255)))) AS Name
+        FROM dbo.HomesExtraPayments
+        WHERE title IS NOT NULL
+          AND LTRIM(RTRIM(CAST(title AS nvarchar(255)))) <> N''
+    ) AS source
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM dbo.HomesExtraPaymentTypes target
+        WHERE target.IsDeleted = 0
+          AND (target.Name = source.Name OR target.Code = source.Code)
+    );
+END;
+GO
+
+IF OBJECT_ID('dbo.HomesExtraPayments', 'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+CREATE OR ALTER TRIGGER dbo.trg_HomesExtraPayments_InsertType
+ON dbo.HomesExtraPayments
+AFTER INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    INSERT INTO dbo.HomesExtraPaymentTypes (Code, Name, HomeColumnBase, IsIncluded)
+    SELECT source.Code, source.Name, N'''', CONVERT(bit, 0)
+    FROM (
+        SELECT DISTINCT
+            N''legacy_'' + LOWER(CONVERT(varchar(40), HASHBYTES(''SHA1'', LOWER(LTRIM(RTRIM(CAST(title AS nvarchar(255)))))), 2)) AS Code,
+            LTRIM(RTRIM(CAST(title AS nvarchar(255)))) AS Name
+        FROM inserted
+        WHERE title IS NOT NULL
+          AND LTRIM(RTRIM(CAST(title AS nvarchar(255)))) <> N''''
+    ) AS source
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM dbo.HomesExtraPaymentTypes target
+        WHERE target.IsDeleted = 0
+          AND (target.Name = source.Name OR target.Code = source.Code)
+    );
+END;
+');
+END;
+GO
 ";
     }
 

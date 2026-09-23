@@ -78,10 +78,16 @@ final class HomesManagementDetailController extends Controller
         );
         $mesafelerValues = $this->fetchAll(
             $pdo,
-            "SELECT me.id AS meid, me.baslik, m.*
+            "SELECT
+                m.id,
+                m.mesafelerId,
+                me.baslik AS Baslik,
+                m.aciklama AS Aciklama,
+                m.deger AS Mesafe
              FROM mesafelerValues m
              INNER JOIN mesafeler me ON me.id = m.mesafelerId
-             WHERE m.homesId = :id",
+             WHERE m.homesId = :id
+             ORDER BY me.siralama ASC",
             [':id' => $id]
         );
         $konum = $this->konumHiyerarsi($pdo, (int) ($rs['emlak_bolgesi'] ?? 0), $this->firstValueFrom($rs, ['emlak_bolgesi_baslik']));
@@ -149,6 +155,7 @@ final class HomesManagementDetailController extends Controller
             'fiyatlandirmaVeKurallar' => [
                 'donemselFiyatlandirma' => $this->donemselFiyatlandirma($pdo, $id, $siteId),
                 'para_birimi' => $this->currencyCode($rs['doviz'] ?? ''),
+                'currency' => $this->currencies($pdo),
                 'sabitEkstraUcretler' => $this->sabitEkstraUcretler($rawRs, $siteId),
                 'odemeAyarlari' => [
                     'depozito' => [
@@ -158,6 +165,8 @@ final class HomesManagementDetailController extends Controller
                     ],
                     'komisyonOrani' => (float) $this->firstValueFrom($rs, ['kazancorani']),
                     'izinVerilenOnOdemeYontemi' => $this->izinVerilenOnOdemeYontemi($pdo, (int) ($rs['FirstPaymentTypeId'] ?? 0)),
+                    'paymentType' => $this->paymentType($rs['paymentType'] ?? ''),
+                    'odemeTipi' => $this->selectedPaymentType($rs['paymentType'] ?? ''),
                 ],
                 'ekstraUcretler' => $this->ekstraUcretler($pdo, $id),
                 'indirimler' => $this->indirimler($pdo, $id, $siteId),
@@ -725,6 +734,22 @@ final class HomesManagementDetailController extends Controller
             return [];
         }
 
+        $legacyIdSelect = '';
+        $legacyIdJoin = '';
+        if ($this->tableExists($pdo, 'dbo', 'HomesExtraPayments')) {
+            $legacyIdSelect = ', legacy_ep.id AS legacy_extra_payment_id, legacy_ep.IsOptional AS legacy_is_optional';
+            $legacyIdJoin = "
+             OUTER APPLY (
+                 SELECT TOP 1 lep.id, lep.IsOptional
+                 FROM dbo.HomesExtraPayments lep
+                 WHERE lep.homesId = ep.HomesId
+                   AND lep.title = COALESCE(NULLIF(ep.Description, N''), ept.Name, ept.Code)
+                   AND CONVERT(varchar(10), lep.start_date, 104) = CONVERT(varchar(10), ep.StartDate, 104)
+                   AND CONVERT(varchar(10), lep.end_date, 104) = CONVERT(varchar(10), ep.EndDate, 104)
+                 ORDER BY lep.id ASC
+             ) legacy_ep";
+        }
+
         $rows = $this->fetchAll(
             $pdo,
             "SELECT ep.*,
@@ -733,8 +758,10 @@ final class HomesManagementDetailController extends Controller
                     ept.HomeColumnBase AS home_column_base,
                     CONVERT(varchar(10), ep.StartDate, 103) AS start_date_formatted,
                     CONVERT(varchar(10), ep.EndDate, 103) AS end_date_formatted
+                    {$legacyIdSelect}
              FROM dbo.HomesExtraPaymentPrices ep
              INNER JOIN dbo.HomesExtraPaymentTypes ept ON ept.ExtraPaymentTypeId = ep.ExtraPaymentTypeId
+             {$legacyIdJoin}
              WHERE ep.HomesId = :homeId
                AND ep.IsDeleted = 0
                AND ept.IsDeleted = 0
@@ -744,8 +771,13 @@ final class HomesManagementDetailController extends Controller
 
         $items = [];
         foreach ($rows as $row) {
+            $extraPaymentPriceId = (int) ($row['ExtraPaymentPriceId'] ?? 0);
+            $extraPaymentId = (int) ($row['legacy_extra_payment_id'] ?? 0);
+            $isOptional = (int) ($row['legacy_is_optional'] ?? 0);
             $items[] = [
-                'id' => (int) ($row['ExtraPaymentPriceId'] ?? 0),
+                'extraPaymentPriceId' => $extraPaymentPriceId,
+                'extraPaymentId' => $extraPaymentId,
+                'durum' => $isOptional === 1 ? 'zorunlu' : 'opsiyonel',
                 'season_id' => (int) ($row['SeasonId'] ?? 0),
                 'start_date' => $this->firstNonEmptyValue($row, ['start_date_formatted', 'StartDate']),
                 'end_date' => $this->firstNonEmptyValue($row, ['end_date_formatted', 'EndDate']),
@@ -756,7 +788,7 @@ final class HomesManagementDetailController extends Controller
                 'currency_id' => (int) ($row['CurrencyId'] ?? 0),
                 'fiyat_tipi' => $this->firstNonEmptyValue($row, ['PriceType']),
                 'amount' => $this->firstNonEmptyValue($row, ['Value']),
-                'description' => $this->firstNonEmptyValue($row, ['Description']),
+                'description' => $this->firstNonEmptyValue($row, ['Description', 'type_name']),
             ];
         }
 
@@ -992,11 +1024,13 @@ final class HomesManagementDetailController extends Controller
         return array_map(function (array $row): array {
             return [
                 'id' => (int) ($row['id'] ?? 0),
-                'mesafeler_id' => (int) ($row['mesafelerId'] ?? $row['meid'] ?? 0),
-                'tip' => $this->firstValueFrom($row, ['baslik']),
-                'mesafe' => $this->firstValueFrom($row, ['mesafe', 'deger', 'value']),
-                'birim' => $this->firstValueFrom($row, ['birim', 'unit']),
-                'aciklama' => $this->firstValueFrom($row, ['aciklama']),
+                'mesafeler_id' => (int) ($row['mesafelerId'] ?? 0),
+                'Baslik' => $this->firstValueFrom($row, ['Baslik']),
+                'Aciklama' => $this->firstValueFrom($row, ['Aciklama']),
+                'Mesafe' => $this->firstValueFrom($row, ['Mesafe']),
+                'tip' => $this->firstValueFrom($row, ['Baslik']),
+                'mesafe' => $this->firstValueFrom($row, ['Mesafe']),
+                'aciklama' => $this->firstValueFrom($row, ['Aciklama']),
             ];
         }, $rows);
     }
@@ -1189,6 +1223,71 @@ final class HomesManagementDetailController extends Controller
             default:
                 return $currency !== '' ? strtoupper($currency) : '';
         }
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function paymentType($value): string
+    {
+        $paymentType = strtolower(trim((string) $value));
+
+        return in_array($paymentType, ['advance', 'all'], true) ? $paymentType : 'default';
+    }
+
+    /**
+     * @param mixed $value
+     * @return array{id:string,title:string}
+     */
+    private function selectedPaymentType($value): array
+    {
+        $paymentType = $this->paymentType($value);
+        $titles = [
+            'default' => 'Normal',
+            'advance' => 'Ön Ödeme',
+            'all' => 'Tamamı',
+        ];
+
+        return [
+            'id' => $paymentType,
+            'title' => $titles[$paymentType],
+        ];
+    }
+
+    /**
+     * @return array<int,array{id:int,code:string}>
+     */
+    private function currencies(PDO $pdo): array
+    {
+        if ($this->tableExists($pdo, 'Finance', 'Currency')) {
+            $rows = $this->fetchAll(
+                $pdo,
+                "SELECT CurrencyId AS id,
+                        CurrencyCode AS code
+                 FROM Finance.Currency
+                 WHERE IsDeleted = 0
+                 ORDER BY SortOrder ASC, CurrencyId ASC"
+            );
+
+            $items = [];
+            foreach ($rows as $row) {
+                $items[] = [
+                    'id' => (int) ($row['id'] ?? 0),
+                    'code' => (string) ($row['code'] ?? ''),
+                ];
+            }
+
+            if ($items !== []) {
+                return $items;
+            }
+        }
+
+        return [
+            ['id' => 1, 'code' => 'TRY'],
+            ['id' => 2, 'code' => 'USD'],
+            ['id' => 3, 'code' => 'EUR'],
+            ['id' => 4, 'code' => 'GBP'],
+        ];
     }
 
     /**

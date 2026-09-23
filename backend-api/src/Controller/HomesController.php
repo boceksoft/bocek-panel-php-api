@@ -339,19 +339,27 @@ SELECT
     h.ribbon{$c['dbt']} AS ribbon,
     h.ribbon2{$c['dbt']} AS ribbon2,
     h.yuzme_havuzu, h.kisi, h.oda_sayisi,
+    CASE WHEN EXISTS (
+        SELECT 1
+        FROM sezonlar sz_isitma
+        WHERE sz_isitma.islem_id = h.id
+          AND sz_isitma.islem = 'emlak'
+          AND CONVERT(date, sz_isitma.tarih1, 104) > CONVERT(date, GETDATE(), 104)
+          AND ISNULL(sz_isitma.isitmaFiyat, 0) > 0
+    ) THEN 'var' ELSE 'yok' END AS havuzisitma,
     '{$c['doviz']}' AS doviz,
     d2.baslik{$c['dbt']} AS d2baslik,
     {$c['takvimSelect']}
-    CAST(ROUND(
+    CAST(ROUND( 
         (CASE
             WHEN h.doviz = '{$c['doviz']}' THEN {$price}
             WHEN h.doviz = 'tl' THEN ({$price} / NULLIF({$c['hedefKur']}, 0))
             WHEN '{$c['doviz']}' = 'tl' THEN ({$price} * (CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE {$currencyRate} END))
             ELSE ({$price} * (CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE {$currencyRate} END) / NULLIF({$c['hedefKur']}, 0))
         END), 0
-    ) AS INT) AS fiyat,
-    {$c['ksqlx']}
-    h.banyo,
+    ) AS INT) AS fiyat, 
+    {$c['ksqlx']}   
+    h.banyo, 
     d1.baslik{$c['dbt']} + ' / ' + d2.baslik{$c['dbt']} AS bolgebaslik,
     mm.val AS mm,
     bosluklar.girisbosluk, bosluklar.cikisbosluk

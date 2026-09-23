@@ -122,6 +122,109 @@ final class HomesManagementPricesController extends Controller
     }
 
     /**
+     * @param array<string,mixed> $payload
+     */
+    private function deleteExtraPaymentFromPayload(array $payload): void
+    {
+        $rowId = $this->numericValue($payload, ['extraId']);
+        $priceId = $this->numericValue($payload, ['extraPaymentPriceId']);
+        $legacyId = $this->numericValue($payload, ['extraPaymentId', 'legacyExtraPaymentId']);
+
+        if ($rowId <= 0 && $priceId <= 0 && $legacyId <= 0) {
+            throw new HttpException('Lutfen gecerli bir ekstra ucret ID gonderin.', 'VALIDATION', 422);
+        }
+
+        $pdo = $this->db->pdo();
+        if (($rowId > 0 || $priceId > 0) && !$this->tableExists($pdo, 'dbo', 'HomesExtraPaymentPrices')) {
+            throw new HttpException('Ekstra ucret tablolari kurulu degil.', 'SETUP_REQUIRED', 500);
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $priceDeleted = 0;
+            $legacyDeleted = 0;
+            $skipped = [];
+
+            if ($rowId > 0 || $priceId > 0) {
+                try {
+                    $conditions = [];
+                    $params = [];
+                    if ($rowId > 0) {
+                        if ($this->columnExists($pdo, 'dbo', 'HomesExtraPaymentPrices', 'id')) {
+                            $conditions[] = '[id] = :rowId';
+                            $params[':rowId'] = $rowId;
+                        } elseif ($priceId <= 0) {
+                            throw new HttpException('HomesExtraPaymentPrices tablosunda id kolonu bulunamadi.', 'VALIDATION', 422);
+                        }
+                    }
+                    if ($priceId > 0) {
+                        $conditions[] = 'ExtraPaymentPriceId = :priceId';
+                        $params[':priceId'] = $priceId;
+                    }
+
+                    $stmt = $pdo->prepare(
+                        'DELETE FROM dbo.HomesExtraPaymentPrices
+                         WHERE ' . implode(' OR ', $conditions)
+                    );
+                    $stmt->execute($params);
+                    $priceDeleted = $stmt->rowCount();
+                } catch (HttpException $e) {
+                    throw $e;
+                } catch (\Throwable $e) {
+                    $skipped[] = [
+                        'section' => 'ekstra_ucretler',
+                        'id' => $rowId > 0 ? (string) $rowId : (string) $priceId,
+                        'reason' => $e->getMessage(),
+                    ];
+                }
+            }
+
+            if ($legacyId > 0) {
+                try {
+                    $legacyDeleted += $this->deleteLegacyExtraPaymentById($pdo, $legacyId);
+                } catch (\Throwable $e) {
+                    $skipped[] = [
+                        'section' => 'legacy_ekstra_ucretler',
+                        'id' => (string) $legacyId,
+                        'reason' => $e->getMessage(),
+                    ];
+                }
+            }
+
+            if ($priceDeleted <= 0 && $legacyDeleted <= 0 && $skipped === []) {
+                throw new HttpException('Secilen ekstra ucret bulunamadi.', 'NOT_FOUND', 404);
+            }
+
+            $pdo->commit();
+        } catch (HttpException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw $e;
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw new HttpException('Ekstra ucret silinemedi.', 'DB_DELETE_FAILED', 500, $e);
+        }
+
+        $this->response->success([
+            'extraId' => $rowId,
+            'extraPaymentPriceId' => $priceId,
+            'extraPaymentId' => $legacyId,
+            'legacyExtraPaymentId' => $legacyId,
+            'deleted' => true,
+            'deleted_related_sections' => [
+                'ekstra_ucretler' => $priceDeleted,
+                'legacy_ekstra_ucretler' => $legacyDeleted,
+            ],
+            'skipped_related_rows' => $skipped,
+        ]);
+    }
+
+    /**
      * Emlak ekstra ucretlerini sezon veya tarih araligina gore ekler/gunceller.
      *
      * @Post("ekstra-ucretler")
@@ -135,6 +238,14 @@ final class HomesManagementPricesController extends Controller
     public function extraPayments(): void
     {
         $payload = $this->payload();
+        $delete = $this->boolPayloadValue($payload, ['delete']);
+
+        if ($delete) {
+            $this->deleteExtraPaymentFromPayload($payload);
+
+            return;
+        }
+
         $id = $this->resolveId($payload);
 
         if ($id <= 0) {
@@ -166,9 +277,30 @@ final class HomesManagementPricesController extends Controller
             'updated' => $result['updated'] > 0,
             'updated_related_sections' => [
                 'ekstra_ucretler' => $result['updated'],
+                'legacy_ekstra_ucretler' => $result['legacy_updated'],
             ],
+            'ekstra_ucretler' => $result['ekstra_ucretler'],
+            'legacy_ekstra_ucretler' => $result['legacy_ekstra_ucretler'],
             'skipped_related_rows' => $result['skipped'],
         ]);
+    }
+
+    /**
+     * Emlak ekstra ucret fiyat satirini siler.
+     *
+     * @Delete("ekstra-ucretler")
+     * @Delete("ekstraucretler")
+     * @Post("ekstra-ucretler-sil")
+     * @Post("ekstra-ucretler/delete")
+     * @Post("ekstraucretler-sil")
+     * @Post("ekstraucretler/delete")
+     * @query extraPaymentPriceId int required Ekstra ucret fiyat ID
+     * @body extraPaymentPriceId int required Ekstra ucret fiyat ID
+     */
+    public function deleteExtraPayment(): void
+    {
+        $payload = $this->payload();
+        $this->deleteExtraPaymentFromPayload($payload);
     }
 
     /**
@@ -369,6 +501,7 @@ final class HomesManagementPricesController extends Controller
         foreach ([
                      'extraPaymentTypeId',
                      'typeId',
+                     'typeid',
                      'tipId',
                      'typeCode',
                      'tip',
@@ -379,19 +512,40 @@ final class HomesManagementPricesController extends Controller
                      'sezonId',
                      'tarih1',
                      'tarih2',
+                     'startDate',
+                     'endDate',
+                     'start_date',
+                     'end_date',
                      'baslangicTarihi',
                      'bitisTarihi',
                      'fiyat',
                      'value',
                      'amount',
                      'currencyId',
+                     'currencyid',
                      'paraBirimi',
                      'currency_id',
                      'fiyatTipi',
+                     'fiyattipi',
                      'fiyat_tipi',
                      'priceType',
+                     'pricetype',
+                     'title',
+                     'baslik',
                      'description',
                      'aciklama',
+                     'included',
+                     'isIncluded',
+                     'IsIncluded',
+                     'isOptional',
+                     'IsOptional',
+                     'optional',
+                     'durum',
+                     'status',
+                     'Type',
+                     'type',
+                     'ChargeNightLimit',
+                     'chargeNightLimit',
                  ] as $key) {
             if (array_key_exists($key, $payload)) {
                 $single[$key] = $payload[$key];
@@ -549,7 +703,7 @@ final class HomesManagementPricesController extends Controller
 
     /**
      * @param array<int,array<string,mixed>> $rows
-     * @return array{updated:int,skipped:array<int,array<string,string>>}
+     * @return array{updated:int,legacy_updated:int,ekstra_ucretler:array<int,array<string,mixed>>,legacy_ekstra_ucretler:array<int,array<string,mixed>>,skipped:array<int,array<string,string>>}
      */
     private function updateExtraPayments(PDO $pdo, int $homeId, array $rows): array
     {
@@ -558,7 +712,11 @@ final class HomesManagementPricesController extends Controller
         }
 
         $updated = 0;
+        $legacyUpdated = 0;
+        $extraPaymentRows = [];
+        $legacyExtraPaymentRows = [];
         $skipped = [];
+        $hasLegacyTable = $this->tableExists($pdo, 'dbo', 'HomesExtraPayments');
 
         foreach ($rows as $index => $row) {
             $type = $this->extraPaymentType($pdo, $row);
@@ -568,7 +726,6 @@ final class HomesManagementPricesController extends Controller
             $seasonIds = $this->seasonIds($row);
             $startDate = $this->normalizeDate($this->firstPayloadValue($row, ['tarih1', 'baslangicTarihi', 'startDate', 'start_date']));
             $endDate = $this->normalizeDate($this->firstPayloadValue($row, ['tarih2', 'bitisTarihi', 'endDate', 'end_date']));
-            $description = $this->normalizeScalar($this->firstPayloadValue($row, ['description', 'aciklama']));
 
             if ($type === [] || $value <= 0) {
                 $skipped[] = [
@@ -578,9 +735,10 @@ final class HomesManagementPricesController extends Controller
                 ];
                 continue;
             }
+            $description = $this->extraPaymentDescription($row, $type);
 
-            if ($seasonIds === [] && $startDate !== '' && $endDate !== '') {
-                $seasonIds = $this->seasonIdsInRange($pdo, $homeId, $startDate, $endDate);
+            if ($startDate !== '' && $endDate !== '') {
+                $seasonIds = $this->prepareSeasonsForExtraPaymentRange($pdo, $homeId, $startDate, $endDate);
             }
 
             if ($seasonIds === []) {
@@ -590,6 +748,19 @@ final class HomesManagementPricesController extends Controller
                     'reason' => 'seasonIds veya tarih araligina denk gelen sezon zorunlu.',
                 ];
                 continue;
+            }
+
+            $rowUpdated = 0;
+            $legacyStartDate = '';
+            $legacyEndDate = '';
+            $usesSeasonColumn = $this->extraPaymentUsesSeasonColumn($type);
+            $singlePriceRowForRange = $startDate !== '' && $endDate !== '' && count($seasonIds) > 1;
+
+            if ($singlePriceRowForRange) {
+                $this->updateExtraPaymentTypeIncluded($pdo, (int) $type['id'], $row);
+                $this->deactivateSeasonExtraPaymentPrices($pdo, $homeId, (int) $type['id'], $startDate, $endDate);
+                $extraPaymentRows[] = $this->upsertExtraPaymentPrice($pdo, $homeId, 0, (int) $type['id'], $startDate, $endDate, $value, $currencyId, $priceType, $description, $usesSeasonColumn);
+                $updated++;
             }
 
             foreach ($seasonIds as $seasonId) {
@@ -605,17 +776,36 @@ final class HomesManagementPricesController extends Controller
 
                 $rowStart = $startDate !== '' ? $startDate : $this->normalizeDate($season['tarih1'] ?? '');
                 $rowEnd = $endDate !== '' ? $endDate : $this->normalizeDate($season['tarih2'] ?? '');
-                $this->upsertExtraPaymentPrice($pdo, $homeId, $seasonId, (int) $type['id'], $rowStart, $rowEnd, $value, $currencyId, $priceType, $description);
-
-                if ($type['code'] === 'temizlik') {
-                    $this->updateSeasonCleaningPrice($pdo, $homeId, $seasonId, $value);
+                if ($startDate !== '' && $endDate !== '') {
+                    $rowStart = $this->maxDate($startDate, $this->normalizeDate($season['tarih1'] ?? ''));
+                    $rowEnd = $this->minDate($endDate, $this->normalizeDate($season['tarih2'] ?? ''));
+                }
+                if (!$singlePriceRowForRange) {
+                    $this->updateExtraPaymentTypeIncluded($pdo, (int) $type['id'], $row);
+                    $extraPaymentRows[] = $this->upsertExtraPaymentPrice($pdo, $homeId, $seasonId, (int) $type['id'], $rowStart, $rowEnd, $value, $currencyId, $priceType, $description, $usesSeasonColumn);
+                    $updated++;
                 }
 
-                $updated++;
+                $this->updateSeasonExtraPaymentColumn($pdo, $homeId, $seasonId, $type, $value);
+
+                $rowUpdated++;
+                $legacyStartDate = $legacyStartDate === '' ? $rowStart : $this->minDate($legacyStartDate, $rowStart);
+                $legacyEndDate = $legacyEndDate === '' ? $rowEnd : $this->maxDate($legacyEndDate, $rowEnd);
+            }
+
+            if (!$usesSeasonColumn && $hasLegacyTable && $rowUpdated > 0 && $legacyStartDate !== '' && $legacyEndDate !== '') {
+                $legacyExtraPaymentRows[] = $this->upsertLegacyExtraPayment($pdo, $homeId, $row, $type, $legacyStartDate, $legacyEndDate, $value, $currencyId, $priceType, $description);
+                $legacyUpdated++;
             }
         }
 
-        return ['updated' => $updated, 'skipped' => $skipped];
+        return [
+            'updated' => $updated,
+            'legacy_updated' => $legacyUpdated,
+            'ekstra_ucretler' => array_values(array_filter($extraPaymentRows)),
+            'legacy_ekstra_ucretler' => array_values(array_filter($legacyExtraPaymentRows)),
+            'skipped' => $skipped,
+        ];
     }
 
     /**
@@ -768,14 +958,14 @@ final class HomesManagementPricesController extends Controller
 
     /**
      * @param array<string,mixed> $row
-     * @return array{id:int,code:string}
+     * @return array{id:int,code:string,name:string,home_column_base:string,is_included:int}
      */
     private function extraPaymentType(PDO $pdo, array $row): array
     {
-        $typeId = $this->numericValue($row, ['extraPaymentTypeId', 'typeId', 'tipId']);
+        $typeId = $this->numericValue($row, ['extraPaymentTypeId', 'typeId', 'typeid', 'tipId']);
         if ($typeId > 0) {
             $stmt = $pdo->prepare(
-                'SELECT ExtraPaymentTypeId, Code
+                'SELECT ExtraPaymentTypeId, Code, Name, HomeColumnBase, IsIncluded
                  FROM dbo.HomesExtraPaymentTypes
                  WHERE ExtraPaymentTypeId = :id AND IsDeleted = 0'
             );
@@ -795,7 +985,7 @@ final class HomesManagementPricesController extends Controller
             }
 
             $stmt = $pdo->prepare(
-                'SELECT ExtraPaymentTypeId, Code
+                'SELECT ExtraPaymentTypeId, Code, Name, HomeColumnBase, IsIncluded
                  FROM dbo.HomesExtraPaymentTypes
                  WHERE Code = :code AND IsDeleted = 0'
             );
@@ -810,7 +1000,34 @@ final class HomesManagementPricesController extends Controller
         return [
             'id' => (int) ($type['ExtraPaymentTypeId'] ?? 0),
             'code' => strtolower((string) ($type['Code'] ?? '')),
+            'name' => (string) ($type['Name'] ?? ''),
+            'home_column_base' => strtolower((string) ($type['HomeColumnBase'] ?? '')),
+            'is_included' => (int) ($type['IsIncluded'] ?? 0),
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function updateExtraPaymentTypeIncluded(PDO $pdo, int $typeId, array $row): void
+    {
+        foreach (['included', 'isIncluded', 'IsIncluded'] as $key) {
+            if (!array_key_exists($key, $row)) {
+                continue;
+            }
+
+            $stmt = $pdo->prepare(
+                'UPDATE dbo.HomesExtraPaymentTypes
+                 SET IsIncluded = :isIncluded
+                 WHERE ExtraPaymentTypeId = :typeId AND IsDeleted = 0'
+            );
+            $stmt->execute([
+                ':typeId' => $typeId,
+                ':isIncluded' => $this->boolPayloadValue($row, [$key]) ? 1 : 0,
+            ]);
+
+            return;
+        }
     }
 
     /**
@@ -838,15 +1055,18 @@ final class HomesManagementPricesController extends Controller
     /**
      * @return array<int,int>
      */
-    private function seasonIdsInRange(PDO $pdo, int $homeId, string $startDate, string $endDate): array
+    private function prepareSeasonsForExtraPaymentRange(PDO $pdo, int $homeId, string $startDate, string $endDate): array
     {
         $stmt = $pdo->prepare(
-            "SELECT id
+            "SELECT id,
+                    tarih1,
+                    tarih2
              FROM sezonlar
              WHERE islem_id = :homeId
                AND islem = 'emlak'
                AND CONVERT(date, tarih1, 104) <= CONVERT(date, :endDate, 104)
-               AND CONVERT(date, tarih2, 104) >= CONVERT(date, :startDate, 104)"
+               AND CONVERT(date, tarih2, 104) >= CONVERT(date, :startDate, 104)
+             ORDER BY CONVERT(date, tarih1, 104) ASC, id ASC"
         );
         $stmt->execute([
             ':homeId' => $homeId,
@@ -854,7 +1074,202 @@ final class HomesManagementPricesController extends Controller
             ':endDate' => $endDate,
         ]);
 
-        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $seasonIds = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $season) {
+            $seasonIds = array_merge($seasonIds, $this->splitSeasonForExtraPaymentRange($pdo, $season, $startDate, $endDate));
+        }
+
+        return array_values(array_unique(array_map('intval', $seasonIds)));
+    }
+
+    /**
+     * @param array<string,mixed> $season
+     * @return array<int,int>
+     */
+    private function splitSeasonForExtraPaymentRange(PDO $pdo, array $season, string $startDate, string $endDate): array
+    {
+        $seasonId = (int) ($season['id'] ?? 0);
+        $seasonStart = $this->normalizeDate($season['tarih1'] ?? '');
+        $seasonEnd = $this->normalizeDate($season['tarih2'] ?? '');
+        if ($seasonId <= 0 || $seasonStart === '' || $seasonEnd === '') {
+            return [];
+        }
+
+        $overlapStart = $this->maxDate($seasonStart, $startDate);
+        $overlapEnd = $this->minDate($seasonEnd, $endDate);
+        if ($this->compareDates($overlapStart, $overlapEnd) > 0) {
+            return [];
+        }
+
+        if ($overlapStart === $seasonStart && $overlapEnd === $seasonEnd) {
+            return [$seasonId];
+        }
+
+        if ($this->compareDates($seasonStart, $overlapStart) < 0) {
+            $this->updateSeasonDateRange($pdo, $seasonId, $seasonStart, $this->dateAdd($overlapStart, -1));
+            $targetSeasonId = $this->copySeasonWithDateRange($pdo, $seasonId, $overlapStart, $overlapEnd);
+        } else {
+            $this->updateSeasonDateRange($pdo, $seasonId, $overlapStart, $overlapEnd);
+            $targetSeasonId = $seasonId;
+        }
+
+        if ($this->compareDates($overlapEnd, $seasonEnd) < 0) {
+            $this->copySeasonWithDateRange($pdo, $seasonId, $this->dateAdd($overlapEnd, 1), $seasonEnd);
+        }
+
+        return $targetSeasonId > 0 ? [$targetSeasonId] : [];
+    }
+
+    private function updateSeasonDateRange(PDO $pdo, int $seasonId, string $startDate, string $endDate): void
+    {
+        $columns = $this->sezonlarColumns($pdo);
+        $dateSet = '';
+        if (isset($columns['tarih1_date'])) {
+            $dateSet .= ', tarih1_date = CONVERT(date, :tarih1Date, 104)';
+        }
+        if (isset($columns['tarih2_date'])) {
+            $dateSet .= ', tarih2_date = CONVERT(date, :tarih2Date, 104)';
+        }
+
+        $stmt = $pdo->prepare(
+            "UPDATE sezonlar
+             SET tarih1 = :tarih1,
+                 tarih2 = :tarih2
+                 {$dateSet}
+             WHERE id = :id"
+        );
+        $params = [
+            ':id' => $seasonId,
+            ':tarih1' => $startDate,
+            ':tarih2' => $endDate,
+        ];
+        if (isset($columns['tarih1_date'])) {
+            $params[':tarih1Date'] = $startDate;
+        }
+        if (isset($columns['tarih2_date'])) {
+            $params[':tarih2Date'] = $endDate;
+        }
+        $stmt->execute($params);
+    }
+
+    private function copySeasonWithDateRange(PDO $pdo, int $sourceSeasonId, string $startDate, string $endDate): int
+    {
+        $availableColumns = $this->sezonlarColumns($pdo);
+        $copyColumns = [];
+        foreach ([
+                     'site',
+                     'islem',
+                     'islem_id',
+                     'fiyat',
+                     'gece',
+                     'sezon',
+                     'temizlikgece',
+                     'temizlikFiyat',
+                     'isitmaFiyat',
+                     'isitmaHizmetDisi',
+                 ] as $column) {
+            if (isset($availableColumns[strtolower($column)])) {
+                $copyColumns[] = $column;
+            }
+        }
+
+        $insertColumns = ['tarih1', 'tarih2'];
+        $selectColumns = [':tarih1', ':tarih2'];
+        if (isset($availableColumns['tarih1_date'])) {
+            $insertColumns[] = 'tarih1_date';
+            $selectColumns[] = 'CONVERT(date, :tarih1Date, 104)';
+        }
+        if (isset($availableColumns['tarih2_date'])) {
+            $insertColumns[] = 'tarih2_date';
+            $selectColumns[] = 'CONVERT(date, :tarih2Date, 104)';
+        }
+        $insertColumns = array_merge($insertColumns, $copyColumns);
+        $selectColumns = array_merge($selectColumns, array_map(function (string $column): string {
+            return '[' . $column . ']';
+        }, $copyColumns));
+
+        $stmt = $pdo->prepare(
+            'INSERT INTO sezonlar ([' . implode('], [', $insertColumns) . '])
+             OUTPUT INSERTED.id
+             SELECT ' . implode(', ', $selectColumns) . '
+             FROM sezonlar
+             WHERE id = :id'
+        );
+        $params = [
+            ':id' => $sourceSeasonId,
+            ':tarih1' => $startDate,
+            ':tarih2' => $endDate,
+        ];
+        if (isset($availableColumns['tarih1_date'])) {
+            $params[':tarih1Date'] = $startDate;
+        }
+        if (isset($availableColumns['tarih2_date'])) {
+            $params[':tarih2Date'] = $endDate;
+        }
+        $stmt->execute($params);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * @return array<string,bool>
+     */
+    private function sezonlarColumns(PDO $pdo): array
+    {
+        $stmt = $pdo->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'sezonlar'");
+        $columns = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $column) {
+            $columns[strtolower((string) $column)] = true;
+        }
+
+        return $columns;
+    }
+
+    private function maxDate(string $left, string $right): string
+    {
+        if ($right === '') {
+            return $left;
+        }
+        if ($left === '') {
+            return $right;
+        }
+
+        return $this->compareDates($left, $right) >= 0 ? $left : $right;
+    }
+
+    private function minDate(string $left, string $right): string
+    {
+        if ($right === '') {
+            return $left;
+        }
+        if ($left === '') {
+            return $right;
+        }
+
+        return $this->compareDates($left, $right) <= 0 ? $left : $right;
+    }
+
+    private function compareDates(string $left, string $right): int
+    {
+        $leftDate = \DateTime::createFromFormat('d.m.Y', $left);
+        $rightDate = \DateTime::createFromFormat('d.m.Y', $right);
+        if (!$leftDate instanceof \DateTime || !$rightDate instanceof \DateTime) {
+            return strcmp($left, $right);
+        }
+
+        return $leftDate <=> $rightDate;
+    }
+
+    private function dateAdd(string $date, int $days): string
+    {
+        $dateTime = \DateTime::createFromFormat('d.m.Y', $date);
+        if (!$dateTime instanceof \DateTime) {
+            return $date;
+        }
+
+        $dateTime->modify(($days >= 0 ? '+' : '') . $days . ' day');
+
+        return $dateTime->format('d.m.Y');
     }
 
     /**
@@ -876,6 +1291,18 @@ final class HomesManagementPricesController extends Controller
         return is_array($row) ? $row : [];
     }
 
+    private function deleteLegacyExtraPaymentById(PDO $pdo, int $legacyId): int
+    {
+        if (!$this->tableExists($pdo, 'dbo', 'HomesExtraPayments')) {
+            return 0;
+        }
+
+        $stmt = $pdo->prepare('DELETE FROM dbo.HomesExtraPayments WHERE id = :legacyId');
+        $stmt->execute([':legacyId' => $legacyId]);
+
+        return $stmt->rowCount();
+    }
+
     private function upsertExtraPaymentPrice(
         PDO $pdo,
         int $homeId,
@@ -886,36 +1313,41 @@ final class HomesManagementPricesController extends Controller
         float $value,
         int $currencyId,
         string $priceType,
-        string $description
-    ): void {
-        $stmt = $pdo->prepare(
-            "UPDATE dbo.HomesExtraPaymentPrices
-             SET StartDate = CONVERT(date, :startDate, 104),
-                 EndDate = CONVERT(date, :endDate, 104),
-                 CurrencyId = :currencyId,
-                 PriceType = :priceType,
-                 Value = :value,
-                 Description = :description,
-                 UpdatedOn = GETDATE(),
-                 IsDeleted = 0
-             WHERE HomesId = :homeId
-               AND SeasonId = :seasonId
-               AND ExtraPaymentTypeId = :typeId"
-        );
-        $stmt->execute([
-            ':homeId' => $homeId,
-            ':seasonId' => $seasonId,
-            ':typeId' => $typeId,
-            ':startDate' => $startDate,
-            ':endDate' => $endDate,
-            ':currencyId' => $currencyId > 0 ? $currencyId : null,
-            ':priceType' => $priceType,
-            ':value' => $value,
-            ':description' => $description,
-        ]);
+        string $description,
+        bool $updateExisting
+    ): array {
+        if ($updateExisting) {
+            $stmt = $pdo->prepare(
+                "UPDATE dbo.HomesExtraPaymentPrices
+                 SET StartDate = CONVERT(date, :startDate, 104),
+                     EndDate = CONVERT(date, :endDate, 104),
+                     CurrencyId = :currencyId,
+                     PriceType = :priceType,
+                     Value = :value,
+                     Description = :description,
+                     UpdatedOn = GETDATE(),
+                     IsDeleted = 0
+                 WHERE HomesId = :homeId
+                   AND SeasonId = :seasonId
+                   AND ExtraPaymentTypeId = :typeId"
+            );
+            $stmt->execute([
+                ':homeId' => $homeId,
+                ':seasonId' => $seasonId,
+                ':typeId' => $typeId,
+                ':startDate' => $startDate,
+                ':endDate' => $endDate,
+                ':currencyId' => $currencyId > 0 ? $currencyId : null,
+                ':priceType' => $priceType,
+                ':value' => $value,
+                ':description' => $description,
+            ]);
 
-        if ($stmt->rowCount() > 0) {
-            return;
+            if ($stmt->rowCount() > 0) {
+                return $this->extraPaymentPriceRow($pdo, $homeId, $seasonId, $typeId, $startDate, $endDate, $priceType);
+            }
+        } elseif ($this->extraPaymentPriceExists($pdo, $homeId, $seasonId, $typeId, $startDate, $endDate, $priceType)) {
+            return $this->extraPaymentPriceRow($pdo, $homeId, $seasonId, $typeId, $startDate, $endDate, $priceType);
         }
 
         $stmt = $pdo->prepare(
@@ -935,13 +1367,329 @@ final class HomesManagementPricesController extends Controller
             ':value' => $value,
             ':description' => $description,
         ]);
+
+        return $this->extraPaymentPriceRow($pdo, $homeId, $seasonId, $typeId, $startDate, $endDate, $priceType);
     }
 
-    private function updateSeasonCleaningPrice(PDO $pdo, int $homeId, int $seasonId, float $value): void
+    private function extraPaymentPriceExists(
+        PDO $pdo,
+        int $homeId,
+        int $seasonId,
+        int $typeId,
+        string $startDate,
+        string $endDate,
+        string $priceType
+    ): bool {
+        $stmt = $pdo->prepare(
+            "SELECT COUNT(*)
+             FROM dbo.HomesExtraPaymentPrices
+             WHERE HomesId = :homeId
+               AND SeasonId = :seasonId
+               AND ExtraPaymentTypeId = :typeId
+               AND StartDate = CONVERT(date, :startDate, 104)
+               AND EndDate = CONVERT(date, :endDate, 104)
+               AND PriceType = :priceType
+               AND IsDeleted = 0"
+        );
+        $stmt->execute([
+            ':homeId' => $homeId,
+            ':seasonId' => $seasonId,
+            ':typeId' => $typeId,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate,
+            ':priceType' => $priceType,
+        ]);
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function extraPaymentPriceRow(
+        PDO $pdo,
+        int $homeId,
+        int $seasonId,
+        int $typeId,
+        string $startDate,
+        string $endDate,
+        string $priceType
+    ): array {
+        $idSelect = $this->columnExists($pdo, 'dbo', 'HomesExtraPaymentPrices', 'id')
+            ? '[id] AS id'
+            : 'CAST(NULL AS int) AS id';
+
+        $stmt = $pdo->prepare(
+            "SELECT TOP 1
+                    {$idSelect},
+                    ExtraPaymentPriceId AS extraPaymentPriceId,
+                    HomesId AS homesId,
+                    SeasonId AS seasonId,
+                    ExtraPaymentTypeId AS extraPaymentTypeId,
+                    StartDate AS startDate,
+                    EndDate AS endDate,
+                    CurrencyId AS currencyId,
+                    PriceType AS priceType,
+                    Value AS value,
+                    Description AS description
+             FROM dbo.HomesExtraPaymentPrices
+             WHERE HomesId = :homeId
+               AND SeasonId = :seasonId
+               AND ExtraPaymentTypeId = :typeId
+               AND StartDate = CONVERT(date, :startDate, 104)
+               AND EndDate = CONVERT(date, :endDate, 104)
+               AND PriceType = :priceType
+               AND IsDeleted = 0
+             ORDER BY ExtraPaymentPriceId DESC"
+        );
+        $stmt->execute([
+            ':homeId' => $homeId,
+            ':seasonId' => $seasonId,
+            ':typeId' => $typeId,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate,
+            ':priceType' => $priceType,
+        ]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($row) ? $row : [];
+    }
+
+    private function deactivateSeasonExtraPaymentPrices(PDO $pdo, int $homeId, int $typeId, string $startDate, string $endDate): void
     {
         $stmt = $pdo->prepare(
+            "UPDATE dbo.HomesExtraPaymentPrices
+             SET IsDeleted = 1,
+                 UpdatedOn = GETDATE()
+             WHERE HomesId = :homeId
+               AND ExtraPaymentTypeId = :typeId
+               AND ISNULL(SeasonId, 0) <> 0
+               AND StartDate <= CONVERT(date, :endDate, 104)
+               AND EndDate >= CONVERT(date, :startDate, 104)"
+        );
+        $stmt->execute([
+            ':homeId' => $homeId,
+            ':typeId' => $typeId,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate,
+        ]);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @param array{id:int,code:string,name:string,home_column_base:string,is_included:int} $type
+     */
+    private function extraPaymentDescription(array $row, array $type): string
+    {
+        $description = $this->normalizeScalar($this->firstPayloadValue($row, ['title', 'baslik', 'description', 'aciklama']));
+        if ($description !== '') {
+            return (string) $description;
+        }
+
+        return $type['name'] !== '' ? $type['name'] : $type['code'];
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @param array{id:int,code:string,name:string,home_column_base:string,is_included:int} $type
+     */
+    private function upsertLegacyExtraPayment(
+        PDO $pdo,
+        int $homeId,
+        array $row,
+        array $type,
+        string $startDate,
+        string $endDate,
+        float $value,
+        int $currencyId,
+        string $priceType,
+        string $description
+    ): array {
+        $title = $this->normalizeScalar($this->firstPayloadValue($row, ['title', 'baslik', 'description', 'aciklama']));
+        if ($title === '') {
+            $title = $type['name'] !== '' ? $type['name'] : $type['code'];
+        }
+
+        $legacyType = $this->legacyExtraPaymentType($row, $priceType);
+        $isOptional = $this->legacyExtraPaymentIsOptional($row, (int) $type['is_included']);
+        $amount = (int) round($value);
+        $chargeNightLimit = $this->numericValue($row, ['ChargeNightLimit', 'chargeNightLimit']);
+
+        $stmt = $pdo->prepare(
+            "UPDATE dbo.HomesExtraPayments
+             SET amount = :amount,
+                 price = :price,
+                 CurrencyId = :currencyId,
+                 IsOptional = :isOptional,
+                 ChargeNightLimit = :chargeNightLimit
+             WHERE homesId = :homeId
+               AND title = :title
+               AND Type = :type
+               AND start_date = CONVERT(date, :startDate, 104)
+               AND end_date = CONVERT(date, :endDate, 104)"
+        );
+        $stmt->execute([
+            ':homeId' => $homeId,
+            ':title' => $title,
+            ':type' => $legacyType,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate,
+            ':amount' => $amount,
+            ':price' => $amount,
+            ':currencyId' => $currencyId > 0 ? $currencyId : null,
+            ':isOptional' => $isOptional,
+            ':chargeNightLimit' => $chargeNightLimit > 0 ? $chargeNightLimit : null,
+        ]);
+
+        if ($stmt->rowCount() > 0) {
+            return $this->legacyExtraPaymentRow($pdo, $homeId, $title, $legacyType, $startDate, $endDate);
+        }
+
+        $stmt = $pdo->prepare(
+            "INSERT INTO dbo.HomesExtraPayments
+                (amount, start_date, end_date, price, homesId, title, CurrencyId, Type, IsOptional, ChargeNightLimit)
+             VALUES
+                (:amount, CONVERT(date, :startDate, 104), CONVERT(date, :endDate, 104), :price, :homeId, :title, :currencyId, :type, :isOptional, :chargeNightLimit)"
+        );
+        $stmt->execute([
+            ':homeId' => $homeId,
+            ':title' => $title,
+            ':type' => $legacyType,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate,
+            ':amount' => $amount,
+            ':price' => $amount,
+            ':currencyId' => $currencyId > 0 ? $currencyId : null,
+            ':isOptional' => $isOptional,
+            ':chargeNightLimit' => $chargeNightLimit > 0 ? $chargeNightLimit : null,
+        ]);
+
+        return $this->legacyExtraPaymentRow($pdo, $homeId, $title, $legacyType, $startDate, $endDate);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function legacyExtraPaymentRow(
+        PDO $pdo,
+        int $homeId,
+        string $title,
+        int $type,
+        string $startDate,
+        string $endDate
+    ): array {
+        $stmt = $pdo->prepare(
+            "SELECT TOP 1
+                    id AS extraPaymentId,
+                    homesId,
+                    title,
+                    Type AS type,
+                    start_date AS startDate,
+                    end_date AS endDate,
+                    amount,
+                    price,
+                    CurrencyId AS currencyId,
+                    IsOptional AS isOptional,
+                    ChargeNightLimit AS chargeNightLimit
+             FROM dbo.HomesExtraPayments
+             WHERE homesId = :homeId
+               AND title = :title
+               AND Type = :type
+               AND start_date = CONVERT(date, :startDate, 104)
+               AND end_date = CONVERT(date, :endDate, 104)
+             ORDER BY id DESC"
+        );
+        $stmt->execute([
+            ':homeId' => $homeId,
+            ':title' => $title,
+            ':type' => $type,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate,
+        ]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($row) ? $row : [];
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function legacyExtraPaymentType(array $row, string $priceType): int
+    {
+        foreach (['Type', 'type'] as $key) {
+            if (array_key_exists($key, $row) && is_numeric($row[$key])) {
+                return (int) $row[$key] === 1 ? 1 : 0;
+            }
+        }
+
+        return in_array(strtolower(trim($priceType)), [
+            'tekseferlik',
+            'tek_seferlik',
+            'tek-seferlik',
+            'single',
+            'one_time',
+            'one-time',
+            'onetime',
+            'konaklama',
+            'stay',
+        ], true) ? 1 : 0;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function legacyExtraPaymentIsOptional(array $row, int $typeIsIncluded): int
+    {
+        foreach (['durum', 'status'] as $key) {
+            if (!array_key_exists($key, $row)) {
+                continue;
+            }
+
+            $value = strtolower(trim((string) $row[$key]));
+            if (in_array($value, ['zorunlu', 'required', 'mandatory', '1', 'true'], true)) {
+                return 1;
+            }
+            if (in_array($value, ['opsiyonel', 'optional', '0', 'false'], true)) {
+                return 0;
+            }
+        }
+
+        foreach (['included', 'isIncluded', 'IsIncluded'] as $key) {
+            if (array_key_exists($key, $row)) {
+                return $this->boolPayloadValue($row, [$key]) ? 0 : 1;
+            }
+        }
+
+        foreach (['isOptional', 'IsOptional', 'optional'] as $key) {
+            if (array_key_exists($key, $row)) {
+                return $this->boolPayloadValue($row, [$key]) ? 1 : 0;
+            }
+        }
+
+        return $typeIsIncluded === 1 ? 0 : 1;
+    }
+
+    /**
+     * @param array{id:int,code:string,name:string,home_column_base:string,is_included:int} $type
+     */
+    private function extraPaymentUsesSeasonColumn(array $type): bool
+    {
+        return $type['home_column_base'] !== '';
+    }
+
+    /**
+     * @param array{id:int,code:string,name:string,home_column_base:string,is_included:int} $type
+     */
+    private function updateSeasonExtraPaymentColumn(PDO $pdo, int $homeId, int $seasonId, array $type, float $value): void
+    {
+        $column = $this->seasonExtraPaymentColumn($pdo, $type);
+        if ($column === '') {
+            return;
+        }
+
+        $stmt = $pdo->prepare(
             "UPDATE sezonlar
-             SET temizlikFiyat = :value
+             SET [{$column}] = :value
              WHERE id = :seasonId AND islem_id = :homeId AND islem = 'emlak'"
         );
         $stmt->execute([
@@ -949,6 +1697,27 @@ final class HomesManagementPricesController extends Controller
             ':seasonId' => $seasonId,
             ':homeId' => $homeId,
         ]);
+    }
+
+    /**
+     * @param array{id:int,code:string,name:string,home_column_base:string,is_included:int} $type
+     */
+    private function seasonExtraPaymentColumn(PDO $pdo, array $type): string
+    {
+        $key = $type['home_column_base'] !== '' ? $type['home_column_base'] : $type['code'];
+        $map = [
+            'temizlik' => 'temizlikFiyat',
+            'elektrik' => 'isitmaFiyat',
+            'elektriksu' => 'isitmaFiyat',
+            'elektrik-su' => 'isitmaFiyat',
+            'elektrik_su' => 'isitmaFiyat',
+        ];
+        $column = $map[$key] ?? '';
+        if ($column === '') {
+            return '';
+        }
+
+        return isset($this->sezonlarColumns($pdo)[strtolower($column)]) ? $column : '';
     }
 
     /**
@@ -972,7 +1741,7 @@ final class HomesManagementPricesController extends Controller
      */
     private function currencyId(array $row): int
     {
-        $value = $this->firstPayloadValue($row, ['currencyId', 'paraBirimi', 'currency_id']);
+        $value = $this->firstPayloadValue($row, ['currencyId', 'currencyid', 'paraBirimi', 'currency_id']);
 
         return is_numeric($value) ? (int) $value : 0;
     }
@@ -982,17 +1751,27 @@ final class HomesManagementPricesController extends Controller
      */
     private function extraPaymentPriceType(array $row): string
     {
-        $value = strtolower(trim((string) $this->firstPayloadValue($row, ['fiyatTipi', 'fiyat_tipi', 'priceType'])));
+        $value = strtolower(trim((string) $this->firstPayloadValue($row, ['fiyatTipi', 'fiyattipi', 'fiyat_tipi', 'priceType', 'pricetype'])));
         $map = [
             'gunluk' => 'gunluk',
             'daily' => 'gunluk',
             'day' => 'gunluk',
+            'gecelik' => 'gecelik',
+            'nightly' => 'gecelik',
+            'night' => 'gecelik',
             'haftalik' => 'haftalik',
             'weekly' => 'haftalik',
             'week' => 'haftalik',
             'aylik' => 'aylik',
             'monthly' => 'aylik',
             'month' => 'aylik',
+            'tekseferlik' => 'tekseferlik',
+            'tek_seferlik' => 'tekseferlik',
+            'tek-seferlik' => 'tekseferlik',
+            'single' => 'tekseferlik',
+            'one_time' => 'tekseferlik',
+            'one-time' => 'tekseferlik',
+            'onetime' => 'tekseferlik',
             'konaklama' => 'konaklama',
             'stay' => 'konaklama',
         ];
@@ -1010,6 +1789,24 @@ final class HomesManagementPricesController extends Controller
         $stmt->execute([
             ':schema' => $schema,
             ':table' => $table,
+        ]);
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function columnExists(PDO $pdo, string $schema, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT COUNT(*)
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = :schema
+               AND TABLE_NAME = :table
+               AND COLUMN_NAME = :column'
+        );
+        $stmt->execute([
+            ':schema' => $schema,
+            ':table' => $table,
+            ':column' => $column,
         ]);
 
         return (int) $stmt->fetchColumn() > 0;
@@ -1052,6 +1849,27 @@ final class HomesManagementPricesController extends Controller
         foreach ($keys as $key) {
             if (array_key_exists($key, $row)) {
                 return $row[$key];
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @param array<int,string> $keys
+     * @return int|float|string
+     */
+    private function firstNonEmptyValue(array $row, array $keys)
+    {
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $row)) {
+                continue;
+            }
+
+            $value = $this->normalizeScalar($row[$key]);
+            if ($value !== '') {
+                return $value;
             }
         }
 

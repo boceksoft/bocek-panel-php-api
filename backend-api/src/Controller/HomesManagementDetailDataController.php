@@ -54,11 +54,17 @@ final class HomesManagementDetailDataController extends Controller
             'dahil_hizmetler' => $selectableData['dahil_hizmetler'],
             'ev_sahipleri' => $selectableData['ev_sahipleri'],
             'bakimcilar' => $selectableData['bakimcilar'],
+            'yetkilifirmalar' => $selectableData['yetkilifirmalar'],
+            'yetkili_firmalar' => $selectableData['yetkili_firmalar'],
             'on_odeme_yontemleri' => $selectableData['on_odeme_yontemleri'],
+            'payment_types' => $selectableData['payment_types'],
+            'odeme_tipleri' => $selectableData['payment_types'],
             'havuz_tipleri' => $selectableData['havuz_tipleri'],
             'oda_yatak_tipleri' => $selectableData['oda_yatak_tipleri'],
             'para_birimleri' => $selectableData['para_birimleri'],
             'mesafe_tipleri' => $selectableData['mesafe_tipleri'],
+            'distance' => $selectableData['distance'],
+            'mesafe_secenekleri' => $selectableData['mesafe_secenekleri'],
             'fiyat_tipleri' => $selectableData['fiyat_tipleri'],
             'ekstra_ucret_tipleri' => $selectableData['ekstra_ucret_tipleri'],
             'iptal_sartlari' => $selectableData['iptal_sartlari'],
@@ -109,7 +115,7 @@ final class HomesManagementDetailDataController extends Controller
             $this->field('bakimcitel', 'string'),
             $this->field('evsahibi', 'integer', 'ev_sahipleri'),
             $this->field('whatsappgrupadi', 'string'),
-            $this->field('yetkilifirma', 'string'),
+            $this->field('yetkilifirma', 'string', 'yetkilifirmalar'),
             $this->field('ilannotlari', 'string'),
             $this->field('icerik', 'string'),
             $this->field('ozellikler', 'integer[]', 'ozellikler'),
@@ -126,6 +132,7 @@ final class HomesManagementDetailDataController extends Controller
             $this->field('elektrik', 'number'),
             $this->field('elektrikSu', 'number'),
             $this->field('onodemeyontemi', 'integer', 'on_odeme_yontemleri'),
+            $this->field('paymentType', 'string', 'payment_types'),
             $this->field('bolge', 'integer', 'bolgeler'),
             $this->field('n_bolge', 'integer', 'bolgeler'),
             $this->field('n_emlak_bolgesi', 'integer', 'bolgeler'),
@@ -180,6 +187,8 @@ final class HomesManagementDetailDataController extends Controller
              WHERE cat = 0 AND aktif = 1
              ORDER BY baslik ASC"
         );
+        $distanceOptions = $this->distanceOptions($pdo);
+        $yetkiliFirmalar = $this->yetkiliFirmalar();
 
         return [
             'arr' => array_map(static function (array $row): array {
@@ -234,18 +243,21 @@ final class HomesManagementDetailDataController extends Controller
             ),
             'ev_sahipleri' => $this->evSahipleri($pdo),
             'bakimcilar' => $this->bakimcilar($pdo),
+            'yetkilifirmalar' => $yetkiliFirmalar,
+            'yetkili_firmalar' => $yetkiliFirmalar,
             'on_odeme_yontemleri' => $this->fetchOptions(
                 $pdo,
                 "SELECT Id AS id, Title AS title
                  FROM Finance.FirstPaymentTypes
                  ORDER BY Title ASC"
             ),
-            'mesafe_secenekleri' => $this->fetchOptions(
-                $pdo,
-                "SELECT id, baslik AS title
-                 FROM mesafeler
-                 ORDER BY baslik ASC"
-            ),
+            'payment_types' => [
+                ['id' => 'default', 'title' => 'Normal'],
+                ['id' => 'advance', 'title' => 'Ön Ödeme'],
+                ['id' => 'all', 'title' => 'Tamamı'],
+            ],
+            'distance' => $distanceOptions,
+            'mesafe_secenekleri' => $distanceOptions,
             'iptal_sartlari' => $this->iptalSartlari($pdo, $sites),
             'havuz_tipleri' => $this->fetchOptions(
                 $pdo,
@@ -285,7 +297,12 @@ final class HomesManagementDetailDataController extends Controller
         try {
             $rows = $this->fetchOptions(
                 $pdo,
-                "SELECT ExtraPaymentTypeId AS id, Name AS title, Code AS code, HomeColumnBase AS home_column_base
+                "SELECT ExtraPaymentTypeId AS id,
+                        Name AS title,
+                        Code AS code,
+                        HomeColumnBase AS home_column_base,
+                        CAST(IsIncluded AS int) AS included,
+                        CAST(IsIncluded AS int) AS is_included
                  FROM dbo.HomesExtraPaymentTypes
                  WHERE IsDeleted = 0
                  ORDER BY ExtraPaymentTypeId ASC"
@@ -297,10 +314,24 @@ final class HomesManagementDetailDataController extends Controller
         }
 
         return [
-            ['id' => 'hasar', 'title' => 'Hasar Depozitosu', 'code' => 'hasar', 'home_column_base' => 'hasar'],
-            ['id' => 'temizlik', 'title' => 'Temizlik', 'code' => 'temizlik', 'home_column_base' => 'temizlik'],
-            ['id' => 'elektrik', 'title' => 'Elektrik-Su', 'code' => 'elektrik', 'home_column_base' => 'elektrik'],
+            ['id' => 'hasar', 'title' => 'Hasar Depozitosu', 'code' => 'hasar', 'home_column_base' => 'hasar', 'included' => 0, 'is_included' => 0],
+            ['id' => 'temizlik', 'title' => 'Temizlik', 'code' => 'temizlik', 'home_column_base' => 'temizlik', 'included' => 0, 'is_included' => 0],
+            ['id' => 'elektrik', 'title' => 'Elektrik-Su', 'code' => 'elektrik', 'home_column_base' => 'elektrik', 'included' => 0, 'is_included' => 0],
         ];
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function distanceOptions(PDO $pdo): array
+    {
+        return $this->fetchOptions(
+            $pdo,
+            "SELECT id, baslik AS title
+             FROM mesafeler
+             WHERE aktif = 1
+             ORDER BY siralama ASC, baslik ASC"
+        );
     }
 
     /**
@@ -354,6 +385,100 @@ final class HomesManagementDetailDataController extends Controller
                AND LTRIM(RTRIM(bakimciAdi)) <> ''
              ORDER BY bakimciAdi ASC"
         );
+    }
+
+    /**
+     * @return array<int,array<string,string>>
+     */
+    private function yetkiliFirmalar(): array
+    {
+        $url = $this->establishmentListUrl();
+        if ($url === '') {
+            return [];
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'timeout' => 5,
+                'ignore_errors' => true,
+                'header' => "Accept: application/json\r\n",
+            ],
+        ]);
+        $json = @file_get_contents($url, false, $context);
+        if (!is_string($json) || trim($json) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        $rows = $this->establishmentRows($decoded);
+        $items = [];
+        $seen = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $name = trim((string) ($row['EstablishmentName'] ?? ''));
+            if ($name === '' || isset($seen[$name])) {
+                continue;
+            }
+
+            $seen[$name] = true;
+            $items[] = [
+                'id' => $name,
+                'title' => $name,
+                'name' => $name,
+            ];
+        }
+
+        return $items;
+    }
+
+    private function establishmentListUrl(): string
+    {
+        $host = $_SERVER['HTTP_X_FORWARDED_HOST']
+            ?? $_SERVER['HTTP_HOST']
+            ?? $_SERVER['SERVER_NAME']
+            ?? '';
+        $host = trim((string) explode(',', (string) $host)[0]);
+        $host = preg_replace('/:\d+$/', '', $host) ?? '';
+        if ($host === '' || filter_var($host, FILTER_VALIDATE_IP)) {
+            return '';
+        }
+
+        $parts = explode('.', $host);
+        if (count($parts) > 2) {
+            $parts[0] = 'web';
+            $webHost = implode('.', $parts);
+        } else {
+            $webHost = 'web.' . $host;
+        }
+
+        return 'https://' . $webHost . '/api/establishment/list';
+    }
+
+    /**
+     * @param array<mixed> $decoded
+     * @return array<int,mixed>
+     */
+    private function establishmentRows(array $decoded): array
+    {
+        if ($this->isList($decoded)) {
+            return $decoded;
+        }
+
+        foreach (['data', 'items', 'result', 'results', 'list'] as $key) {
+            if (isset($decoded[$key]) && is_array($decoded[$key])) {
+                return $this->establishmentRows($decoded[$key]);
+            }
+        }
+
+        return [];
     }
 
     /**
@@ -630,7 +755,9 @@ final class HomesManagementDetailDataController extends Controller
                 'elektrikSu' => $this->numericValue($this->firstValueFrom($row, ['elektrik'])),
             ],
             'onodemeyontemi' => (int) ($row['FirstPaymentTypeId'] ?? 0),
+            'paymentType' => $this->paymentType($row['paymentType'] ?? ''),
             'evsahibi' => (int) ($row['evsahibi'] ?? 0),
+            'yetkilifirma' => $this->firstValueFrom($row, ['yetkilifirma']),
             'iptalpolitikasi' => (int) ($row['iptal_politikasi'] ?? 0),
             'iptal_politikalari' => $iptalPolitikalari,
         ];
@@ -709,6 +836,14 @@ final class HomesManagementDetailDataController extends Controller
     }
 
     /**
+     * @param array<mixed> $value
+     */
+    private function isList(array $value): bool
+    {
+        return array_keys($value) === range(0, count($value) - 1);
+    }
+
+    /**
      * @param mixed $value
      */
     private function currencyCode($value): string
@@ -731,6 +866,16 @@ final class HomesManagementDetailDataController extends Controller
             default:
                 return $currency;
         }
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function paymentType($value): string
+    {
+        $paymentType = strtolower(trim((string) $value));
+
+        return in_array($paymentType, ['advance', 'all'], true) ? $paymentType : 'default';
     }
 
 }

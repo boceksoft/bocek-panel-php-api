@@ -10,18 +10,18 @@ use PDO;
 /*
  * Emlak havuz tanimlarini detail update akisi disinda ayri endpoint'ten yonetir.
  *
- * Endpointler:
- *   POST|PUT /backend-api/homes-management-pools/havuzlar?id={emlakId}&tipId={tipId}&deger={deger}
- *   DELETE   /backend-api/homes-management-pools/havuzlar?havuzId={havuzId}
- *   POST     /backend-api/homes-management-pools/havuzlar/delete?havuzId={havuzId}
+ * Endpoint:
+ *   POST|PUT /backend-api/homes-management-pools?id={emlakId}&tipId={tipId}&deger={deger}
+ *   DELETE   /backend-api/homes-management-pools?havuzId={havuzId}
  */
 final class HomesManagementPoolsController extends Controller
 {
     /**
      * Emlak havuzlarini ekler veya gunceller.
      *
-     * @Post("havuzlar")
-     * @Put("havuzlar")
+     * @Post
+     * @Put
+     * @Delete
      * @query id int required Emlak ID
      * @query havuzId int Havuz ID
      * @query tipId int Havuz tipi ID
@@ -36,15 +36,14 @@ final class HomesManagementPoolsController extends Controller
     public function pools(): void
     {
         $payload = $this->payload();
-        $id = $this->resolveId($payload);
-        $delete = $this->boolPayloadValue($payload, ['delete']);
 
-        if ($delete) {
+        if ($this->request->method() === 'DELETE') {
             $this->deletePoolFromPayload($payload);
 
             return;
         }
 
+        $id = $this->resolveId($payload);
         if ($id <= 0) {
             throw new HttpException('Lutfen gecerli bir emlak ID gonderin.', 'VALIDATION', 422);
         }
@@ -78,20 +77,6 @@ final class HomesManagementPoolsController extends Controller
             ],
             'skipped_related_rows' => $result['skipped'],
         ]);
-    }
-
-    /**
-     * Emlak havuz satirini siler.
-     *
-     * @Delete("havuzlar")
-     * @Post("havuzlar-sil")
-     * @Post("havuzlar/delete")
-     * @query havuzId int required Havuz ID
-     */
-    public function deletePool(): void
-    {
-        $payload = $this->payload();
-        $this->deletePoolFromPayload($payload);
     }
 
     /**
@@ -215,7 +200,7 @@ final class HomesManagementPoolsController extends Controller
         $skipped = [];
 
         foreach ($rows as $index => $row) {
-            $poolId = $this->numericValue($row, ['id', 'havuzId', 'poolId']);
+            $poolId = $this->numericValue($row, ['havuzId', 'poolId']);
             $existingPool = $poolId > 0 ? $this->poolRowById($pdo, $homeId, $poolId) : [];
             if ($poolId > 0 && $existingPool === []) {
                 $skipped[] = [
@@ -264,6 +249,7 @@ final class HomesManagementPoolsController extends Controller
             }
 
             if ($existingPool !== []) {
+                $oldTipId = (int) ($existingPool['tipId'] ?? 0);
                 $stmt = $pdo->prepare(
                     "UPDATE dbo.havuztanimlamari
                      SET tipId = :tipId,
@@ -290,6 +276,10 @@ final class HomesManagementPoolsController extends Controller
                     ':homeId' => $homeId,
                 ]);
                 $updated += max(1, $stmt->rowCount());
+                if ($oldTipId > 0 && $oldTipId !== $tipId) {
+                    $this->clearHomesPoolColumns($pdo, $homeId, $oldTipId);
+                }
+                $this->syncHomesPoolColumns($pdo, $homeId, $tipId, $values);
                 continue;
             }
 
@@ -311,6 +301,7 @@ final class HomesManagementPoolsController extends Controller
                 ':isitma' => $values['isitma'],
             ]);
             $updated++;
+            $this->syncHomesPoolColumns($pdo, $homeId, $tipId, $values);
         }
 
         return ['updated' => $updated, 'skipped' => $skipped];
@@ -335,6 +326,95 @@ final class HomesManagementPoolsController extends Controller
     }
 
     /**
+     * @param array{deger:string,havuzTipiId:int|null,uzunluk:string,genislik:string,derinlik:string,tamKorunakli:string,isitma:int|null} $values
+     */
+    private function syncHomesPoolColumns(PDO $pdo, int $homeId, int $tipId, array $values): void
+    {
+        $map = $this->homesPoolColumnMap($tipId);
+        if ($map === []) {
+            return;
+        }
+
+        $updates = [];
+        $params = [':homeId' => $homeId];
+        foreach ($map as $valueKey => $column) {
+            if (!$this->columnExists($pdo, 'dbo', 'homes', $column)) {
+                continue;
+            }
+
+            $param = ':p_' . $valueKey;
+            $updates[] = $column . ' = ' . $param;
+            $params[$param] = $values[$valueKey] ?? null;
+        }
+
+        if ($updates === []) {
+            return;
+        }
+
+        $stmt = $pdo->prepare('UPDATE dbo.homes SET ' . implode(', ', $updates) . ' WHERE id = :homeId');
+        $stmt->execute($params);
+    }
+
+    private function clearHomesPoolColumns(PDO $pdo, int $homeId, int $tipId): void
+    {
+        $map = $this->homesPoolColumnMap($tipId);
+        if ($map === []) {
+            return;
+        }
+
+        $updates = [];
+        foreach ($map as $column) {
+            if ($this->columnExists($pdo, 'dbo', 'homes', $column)) {
+                $updates[] = $column . ' = NULL';
+            }
+        }
+
+        if ($updates === []) {
+            return;
+        }
+
+        $stmt = $pdo->prepare('UPDATE dbo.homes SET ' . implode(', ', $updates) . ' WHERE id = :homeId');
+        $stmt->execute([':homeId' => $homeId]);
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function homesPoolColumnMap(int $tipId): array
+    {
+        if ($tipId === 1) {
+            return [
+                'deger' => 'yuzme_havuzu',
+                'havuzTipiId' => 'yuzme_havuzu_tipi',
+                'uzunluk' => 'yuzme_havuzu_uzunluk',
+                'genislik' => 'yuzme_havuzu_genislik',
+                'derinlik' => 'yuzme_havuzu_derinlik',
+                'tamKorunakli' => 'tam_korunakli_havuz',
+            ];
+        }
+
+        if ($tipId === 2) {
+            return [
+                'deger' => 'cocuk_havuzu',
+                'uzunluk' => 'cocuk_havuzu_uzunluk',
+                'genislik' => 'cocuk_havuzu_genislik',
+                'derinlik' => 'cocuk_havuzu_derinlik',
+            ];
+        }
+
+        if ($tipId === 3) {
+            return [
+                'deger' => 'kapali_havuz',
+                'uzunluk' => 'kapali_havuz_uzunluk',
+                'genislik' => 'kapali_havuz_genislik',
+                'derinlik' => 'kapali_havuz_derinlik',
+            ];
+        }
+
+        return [];
+    }
+
+    /**
      * @param array<string,mixed> $payload
      */
     private function deletePoolFromPayload(array $payload): void
@@ -347,6 +427,7 @@ final class HomesManagementPoolsController extends Controller
 
         $pdo = $this->db->pdo();
         $this->assertPoolTableReady($pdo);
+        $pool = $this->poolRowByGlobalId($pdo, $poolId);
 
         $stmt = $pdo->prepare('DELETE FROM dbo.havuztanimlamari WHERE id = :poolId');
         $stmt->execute([
@@ -355,6 +436,10 @@ final class HomesManagementPoolsController extends Controller
 
         if ($stmt->rowCount() <= 0) {
             throw new HttpException('Secilen havuz bulunamadi.', 'NOT_FOUND', 404);
+        }
+
+        if ($pool !== []) {
+            $this->clearHomesPoolColumns($pdo, (int) $pool['homesId'], (int) $pool['tipId']);
         }
 
         $this->response->success([
@@ -379,6 +464,24 @@ final class HomesManagementPoolsController extends Controller
         $stmt->execute([
             ':id' => $poolId,
             ':homeId' => $homeId,
+        ]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($row) ? $row : [];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function poolRowByGlobalId(PDO $pdo, int $poolId): array
+    {
+        $stmt = $pdo->prepare(
+            'SELECT id, homesId, tipId, deger, havuzTipiId, uzunluk, genislik, derinlik, tamKorunakli, isitma
+             FROM dbo.havuztanimlamari
+             WHERE id = :id'
+        );
+        $stmt->execute([
+            ':id' => $poolId,
         ]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
