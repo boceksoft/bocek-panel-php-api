@@ -516,6 +516,13 @@ ALTER TABLE [dbo].[kayitlar] ADD [maliyet] nvarchar(50) NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'MigrationStatus') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [MigrationStatus] bit NOT NULL CONSTRAINT [DF_kayitlar_MigrationStatus] DEFAULT 0;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[kisi_bilgileri]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kisi_bilgileri]', N'id') IS NULL
 BEGIN
@@ -2756,6 +2763,13 @@ IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kayitlar]', N'maliyet') IS NULL
 BEGIN
 ALTER TABLE [dbo].[kayitlar] ADD [maliyet] nvarchar(50) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'MigrationStatus') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [MigrationStatus] bit NOT NULL CONSTRAINT [DF_kayitlar_MigrationStatus] DEFAULT 0;
 END;
 GO
 

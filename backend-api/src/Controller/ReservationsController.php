@@ -28,6 +28,7 @@ final class ReservationsController extends Controller
         $pdo = $this->db->pdo();
         $useAcentaUsers = !empty($this->app['reservation_filters_use_acenta_users']);
         $useMaliyetColumn = $this->configBool('reservations_use_maliyet_column', false);
+        $hasMigrationStatusColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'MigrationStatus');
         $defterReservationIdColumnSql = $this->qualifiedColumn(
             'defter',
             $this->configString('defter_reservation_id_column')
@@ -211,6 +212,7 @@ final class ReservationsController extends Controller
         $toplamKar      = 0.0;
         $toplamMaliyet  = 0.0;
         $toplamTemizlik = 0.0;
+        $yeniRezervasyon = $hasMigrationStatusColumn ? $this->hasNewReservation($pdo) : false;
 
         if (count($rows) > 0) {
             $totalCount     = (int)   $rows[0]['totalCount'];
@@ -230,6 +232,7 @@ final class ReservationsController extends Controller
             'page'        => $allRows ? 1 : $page,
             'per_page'    => $allRows ? $totalCount : $perPage,
             'total_pages' => $allRows ? 1 : (int) ceil($totalCount / max(1, $perPage)),
+            'yenireservasyon' => $yeniRezervasyon,
             'count'       => count($rows),
 
             'ciro_bilgileri' => [
@@ -468,7 +471,6 @@ $orderSql
                     $row[$f] = (int) $row[$f];
                 }
             }
-
             $this->addTableColumnAliases($row);
         }
         unset($row);
@@ -693,6 +695,33 @@ $orderSql
         }
 
         return $alias . '.[' . $column . ']';
+    }
+
+    private function columnExists(PDO $pdo, string $schema, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT CASE WHEN COL_LENGTH(:tableName, :columnName) IS NULL THEN 0 ELSE 1 END'
+        );
+        $stmt->execute([
+            ':tableName' => $schema . '.' . $table,
+            ':columnName' => $column,
+        ]);
+
+        return (int) $stmt->fetchColumn() === 1;
+    }
+
+    private function hasNewReservation(PDO $pdo): bool
+    {
+        $stmt = $pdo->query(
+            'SELECT TOP 1 1
+             FROM kayitlar
+             WHERE ISNULL(MigrationStatus, 0) = 0'
+        );
+        if ($stmt === false) {
+            return false;
+        }
+
+        return $stmt->fetchColumn() !== false;
     }
 
     private function configString(string $key): string

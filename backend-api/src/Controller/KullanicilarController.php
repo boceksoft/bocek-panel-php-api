@@ -12,6 +12,9 @@ use PDO;
  */
 final class KullanicilarController extends Controller
 {
+    /** @var int */
+    private $latestCustomerId = 0;
+
     /**
      * Emlak sahipleri ve musterileri telefonlari normalize ederek listeler.
      *
@@ -22,6 +25,24 @@ final class KullanicilarController extends Controller
     {
         $pdo = $this->db->pdo();
         $veri = trim((string) $this->request->query('veri', $this->request->input('veri', '')));
+        $newUsersOnly = trim((string) $this->request->query('yenikullanicilar', $this->request->input('yenikullanicilar', ''))) === '1';
+
+        if ($newUsersOnly) {
+            $customers = $this->fetchCustomers($pdo, true);
+            $this->response->success([
+                'musteriler' => $customers,
+                'musteriler_sayisi' => count($customers),
+                'toplam_sayi' => count($customers),
+                'meta' => [
+                    'veri' => 2,
+                    'yenikullanicilar' => 1,
+                    'musteriler_count' => count($customers),
+                    'en_yeni_kisi_id' => $this->latestCustomerId,
+                    'total' => count($customers),
+                ],
+            ]);
+            return;
+        }
 
         if ($veri === '1') {
             $owners = $this->fetchOwners($pdo);
@@ -39,7 +60,7 @@ final class KullanicilarController extends Controller
         }
 
         if ($veri === '2') {
-            $customers = $this->fetchCustomers($pdo);
+            $customers = $this->fetchCustomers($pdo, $newUsersOnly);
             $this->response->success([
                 'musteriler' => $customers,
                 'musteriler_sayisi' => count($customers),
@@ -47,6 +68,7 @@ final class KullanicilarController extends Controller
                 'meta' => [
                     'veri' => 2,
                     'musteriler_count' => count($customers),
+                    'en_yeni_kisi_id' => $this->latestCustomerId,
                     'total' => count($customers),
                 ],
             ]);
@@ -54,7 +76,7 @@ final class KullanicilarController extends Controller
         }
 
         $owners = $this->fetchOwners($pdo);
-        $customers = $this->fetchCustomers($pdo);
+        $customers = $this->fetchCustomers($pdo, $newUsersOnly);
 
         $this->response->success([
             'emlak_sahipleri' => $owners,
@@ -65,6 +87,7 @@ final class KullanicilarController extends Controller
             'meta' => [
                 'emlak_sahipleri_count' => count($owners),
                 'musteriler_count' => count($customers),
+                'en_yeni_kisi_id' => $this->latestCustomerId,
                 'total' => count($owners) + count($customers),
             ],
         ]);
@@ -104,17 +127,29 @@ final class KullanicilarController extends Controller
     /**
      * @return array<int,array<string,mixed>>
      */
-    private function fetchCustomers(PDO $pdo): array
+    private function fetchCustomers(PDO $pdo, bool $newUsersOnly): array
     {
+        if ($newUsersOnly && !$this->columnExists($pdo, 'dbo', 'kayitlar', 'MigrationStatus')) {
+            $this->latestCustomerId = 0;
+
+            return [];
+        }
+
+        $migrationFilterSql = $newUsersOnly
+            ? ' AND ISNULL(kayitlar.MigrationStatus, 0) = 0'
+            : '';
+
         $stmt = $pdo->query(
             "SELECT id, musteri, telefon, email
              FROM kayitlar
              WHERE telefon IS NOT NULL
                AND LTRIM(RTRIM(CONVERT(nvarchar(100), telefon))) <> ''
+               " . $migrationFilterSql . "
              ORDER BY id DESC"
         );
 
         $customers = [];
+        $listedIds = [];
         $seenPhones = [];
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $phone = $this->normalizePhone((string) ($row['telefon'] ?? ''));
@@ -129,10 +164,41 @@ final class KullanicilarController extends Controller
                 'tel' => $phone,
                 'email' => $this->cleanEmail((string) ($row['email'] ?? '')),
             ];
+            $listedIds[] = (int) ($row['id'] ?? 0);
             $seenPhones[$phone] = true;
         }
 
+        $this->latestCustomerId = $this->maxId($listedIds);
+
         return $customers;
+    }
+
+    /**
+     * @param array<int,int> $ids
+     */
+    private function maxId(array $ids): int
+    {
+        $ids = array_filter($ids, static function (int $id): bool {
+            return $id > 0;
+        });
+        if ($ids === []) {
+            return 0;
+        }
+
+        return max($ids);
+    }
+
+    private function columnExists(PDO $pdo, string $schema, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT CASE WHEN COL_LENGTH(:tableName, :columnName) IS NULL THEN 0 ELSE 1 END'
+        );
+        $stmt->execute([
+            ':tableName' => $schema . '.' . $table,
+            ':columnName' => $column,
+        ]);
+
+        return (int) $stmt->fetchColumn() === 1;
     }
 
     private function normalizePhone(string $phone): string

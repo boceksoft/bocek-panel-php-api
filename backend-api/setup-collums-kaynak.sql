@@ -114,6 +114,7 @@ VALUES
     (N'dbo', N'kayitlar', N'kazancorani'),
     (N'dbo', N'kayitlar', N'kur'),
     (N'dbo', N'kayitlar', N'maliyet'),
+    (N'dbo', N'kayitlar', N'MigrationStatus'),
     (N'dbo', N'kayitlar', N'musteri'),
     (N'dbo', N'kayitlar', N'odeme'),
     (N'dbo', N'kayitlar', N'on_odeme'),
