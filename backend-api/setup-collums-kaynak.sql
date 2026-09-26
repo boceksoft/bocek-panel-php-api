@@ -191,6 +191,7 @@ VALUES
     (N'dbo', N'HomesExtraPayments', N'end_date'),
     (N'dbo', N'HomesExtraPayments', N'IsOptional'),
     (N'dbo', N'HomesExtraPayments', N'Type'),
+    (N'dbo', N'HomesExtraPayments', N'ChargeNightLimit'),
     (N'dbo', N'promotionCodes', N'code'),
     (N'dbo', N'promotionCodes', N'startDate'),
     (N'dbo', N'promotionCodes', N'endDate'),

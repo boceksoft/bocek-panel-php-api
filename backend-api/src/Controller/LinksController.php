@@ -65,9 +65,7 @@ final class LinksController extends Controller
         $pdo = $this->db->pdo();
 
         // 3) Sıradaki id'den eşsiz link üret
-        $nextRow = $pdo->query('SELECT ISNULL(MAX(id), 0) + 1 AS nextId FROM redirects')->fetch();
-        $nextId = (int) ($nextRow['nextId'] ?? 1);
-        $originalLink = $this->randomString(4) . $nextId;
+        $originalLink = $this->uniqueOriginalLink($pdo);
 
         // 4) Yönlendirme hedefini homes.id ile sayfa URL'sine kur
         $searchPageQuery = trim((string) ($this->app['links_search_page_query'] ?? 'SELECT url FROM tip WHERE id = 1'));
@@ -129,6 +127,24 @@ final class LinksController extends Controller
         }
 
         return $out;
+    }
+
+    private function uniqueOriginalLink(\PDO $pdo): string
+    {
+        $nextRow = $pdo->query('SELECT ISNULL(MAX(id), 0) + 1 AS nextId FROM redirects')->fetch();
+        $nextId = (int) ($nextRow['nextId'] ?? 1);
+
+        $stmt = $pdo->prepare('SELECT COUNT(1) AS linkCount FROM redirects WHERE originalLink = :originalLink');
+        for ($attempt = 0; $attempt < 20; $attempt++) {
+            $originalLink = $this->randomString(4) . $nextId;
+            $stmt->execute([':originalLink' => $originalLink]);
+            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+            if ((int) ($row['linkCount'] ?? 0) === 0) {
+                return $originalLink;
+            }
+        }
+
+        throw new HttpException('Benzersiz link olusturulamadi.', 'LINK_COLLISION', 500);
     }
 
     /**

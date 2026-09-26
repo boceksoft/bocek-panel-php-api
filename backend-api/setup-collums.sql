@@ -1049,6 +1049,7 @@ CREATE TABLE [dbo].[HomesExtraPayments]
     [title_s2] nvarchar(150) NULL,
     [Type] tinyint NULL,
     [IsOptional] bit NULL CONSTRAINT [DF_HomesExtraPayments_IsOptional] DEFAULT 1,
+    [ChargeNightLimit] int NULL,
     CONSTRAINT [PK_HomesExtraPayments] PRIMARY KEY ([id])
 );
 END;
@@ -1114,6 +1115,13 @@ IF OBJECT_ID(N'[dbo].[HomesExtraPayments]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[HomesExtraPayments]', N'IsOptional') IS NULL
 BEGIN
 ALTER TABLE [dbo].[HomesExtraPayments] ADD [IsOptional] bit NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[HomesExtraPayments]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[HomesExtraPayments]', N'ChargeNightLimit') IS NULL
+BEGIN
+ALTER TABLE [dbo].[HomesExtraPayments] ADD [ChargeNightLimit] int NULL;
 END;
 GO
 
@@ -3299,6 +3307,7 @@ CREATE TABLE [dbo].[HomesExtraPayments]
     [title_s2] nvarchar(150) NULL,
     [Type] tinyint NULL,
     [IsOptional] bit NULL CONSTRAINT [DF_HomesExtraPayments_IsOptional] DEFAULT 1,
+    [ChargeNightLimit] int NULL,
     CONSTRAINT [PK_HomesExtraPayments] PRIMARY KEY ([id])
 );
 END;
@@ -3364,6 +3373,13 @@ IF OBJECT_ID(N'[dbo].[HomesExtraPayments]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[HomesExtraPayments]', N'IsOptional') IS NULL
 BEGIN
 ALTER TABLE [dbo].[HomesExtraPayments] ADD [IsOptional] bit NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[HomesExtraPayments]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[HomesExtraPayments]', N'ChargeNightLimit') IS NULL
+BEGIN
+ALTER TABLE [dbo].[HomesExtraPayments] ADD [ChargeNightLimit] int NULL;
 END;
 GO
 
