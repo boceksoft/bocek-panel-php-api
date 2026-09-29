@@ -71,7 +71,7 @@ final class ReservationdetailController extends Controller
             ? $this->fetchOne($pdo, 'SELECT * FROM KiralamaTakvimi.CalendarHomes WHERE homesId = :id', [':id' => $homeId])
             : null;
 
-        $personInfoList = $this->fetchAll($pdo, 'SELECT * FROM kisi_bilgileri WHERE siparis_kodu = :id ORDER BY id ASC', [':id' => $id]);
+        $personInfoList = $this->fetchPersonInfoList($pdo, $id);
         $personInfo = $personInfoList !== [] ? $personInfoList[0] : false;
         $partialPayments = $this->fetchAll(
             $pdo,
@@ -290,7 +290,7 @@ final class ReservationdetailController extends Controller
                 'bebek' => $personCountInfo['bebek'],
                 'musteriNotu' => $this->firstValueFrom([$reservation], ['oznot', 'oz_not', 'musteri_notu', 'not']),
             ],
-            'misafirler' => $this->guestInfo($personInfoList),
+            'misafirler' => $this->guestInfo($personInfoList, $reservation, $personCountInfo),
             'odemeBilgileri' => [
                 'odemeTuru' => [
                     'id' => $this->intValue($this->firstValueFrom([$reservation], ['tur', 'odeme_turu'])),
@@ -324,7 +324,7 @@ final class ReservationdetailController extends Controller
      * @param array<int,array<string,mixed>> $personInfoList
      * @return array<int,array<string,mixed>>
      */
-    private function guestInfo(array $personInfoList): array
+    private function guestInfo(array $personInfoList, array $reservation, array $personCountInfo): array
     {
         $guests = [];
 
@@ -352,7 +352,59 @@ final class ReservationdetailController extends Controller
             ]);
         }
 
+        if ($guests === []) {
+            $fallbackGuest = $this->withoutEmptyValues([
+                'siparisKodu' => $this->nullableIntValue($this->firstValueFrom([$reservation], ['id'])),
+                'tip' => 'Ana Misafir',
+                'isim' => $this->firstValueFrom([$reservation], ['musteri', 'musteri_adi', 'adsoyad', 'ad_soyad']),
+                'telefon' => $this->firstValueFrom([$reservation], ['telefon', 'musteri_teli', 'tel', 'gsm']),
+                'eposta' => $this->firstValueFrom([$reservation], ['eposta', 'email', 'mail']),
+                'yetiskin' => $personCountInfo['yetiskin'],
+                'cocuk' => $personCountInfo['cocuk'],
+                'bebek' => $personCountInfo['bebek'],
+                'toplam' => $personCountInfo['toplam'],
+            ]);
+
+            if ($fallbackGuest !== []) {
+                $guests[] = $fallbackGuest;
+            }
+        }
+
         return $guests;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function fetchPersonInfoList(PDO $pdo, int $id): array
+    {
+        $candidateColumns = [
+            'siparis_kodu',
+            'siparisKodu',
+            'kayitlarId',
+            'kayit_id',
+            'rezervasyon_id',
+            'rezid',
+        ];
+
+        $whereParts = [];
+        foreach ($candidateColumns as $column) {
+            if ($this->columnExists($pdo, 'dbo.kisi_bilgileri', $column)) {
+                $whereParts[] = '[' . $column . '] = :id';
+            }
+        }
+
+        if ($whereParts === []) {
+            return [];
+        }
+
+        $orderBy = $this->columnExists($pdo, 'dbo.kisi_bilgileri', 'id') ? ' ORDER BY id ASC' : '';
+
+        return $this->fetchAll(
+            $pdo,
+            'SELECT * FROM kisi_bilgileri WHERE ' . implode(' OR ', $whereParts) . $orderBy,
+            [':id' => $id]
+        );
     }
 
     /**
@@ -682,6 +734,16 @@ final class ReservationdetailController extends Controller
         $stmt->execute();
 
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    private function columnExists(PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare('SELECT CASE WHEN COL_LENGTH(:table, :column) IS NULL THEN 0 ELSE 1 END');
+        $stmt->bindValue(':table', $table);
+        $stmt->bindValue(':column', $column);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() === 1;
     }
 
     /**

@@ -1014,6 +1014,14 @@ END;
 GO
 
 IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'template') IS NULL
+BEGIN
+ALTER TABLE [dbo].[homes] ADD [template] bit NOT NULL
+    CONSTRAINT [DF_homes_template] DEFAULT 0;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[homes]', N'hasar') IS NULL
 BEGIN
 ALTER TABLE [dbo].[homes] ADD [hasar] nvarchar(255) NULL;
@@ -3268,6 +3276,14 @@ IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[homes]', N'aktif') IS NULL
 BEGIN
 ALTER TABLE [dbo].[homes] ADD [aktif] bit NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'template') IS NULL
+BEGIN
+ALTER TABLE [dbo].[homes] ADD [template] bit NOT NULL
+    CONSTRAINT [DF_homes_template] DEFAULT 0;
 END;
 GO
 

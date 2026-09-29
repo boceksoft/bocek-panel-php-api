@@ -78,7 +78,21 @@ try {
     $rowId = $stmtId->fetch();
     $nextId = $rowId['nextId'];
 
-    $originalLink = generateRandomString(4) . $nextId;
+    $stmtLinkCheck = $pdo->prepare("SELECT COUNT(1) AS linkCount FROM redirects WHERE originalLink = :originalLink");
+    $originalLink = null;
+    for ($attempt = 0; $attempt < 20; $attempt++) {
+        $candidateLink = generateRandomString(4) . $nextId;
+        $stmtLinkCheck->execute(array(':originalLink' => $candidateLink));
+        $linkRow = $stmtLinkCheck->fetch(PDO::FETCH_ASSOC);
+        if ((int)($linkRow['linkCount'] ?? 0) === 0) {
+            $originalLink = $candidateLink;
+            break;
+        }
+    }
+
+    if ($originalLink === null) {
+        throw new Exception("Benzersiz link olusturulamadi.");
+    }
 
     // Domain config.php dosyasındaki sabitten çekiliyor
     $domain = linkSiteDomain($pdo, $backendApiAppConfig, $siteId);

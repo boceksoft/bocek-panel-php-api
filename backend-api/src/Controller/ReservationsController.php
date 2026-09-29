@@ -326,7 +326,7 @@ SELECT
     CONVERT(varchar(10), kayitlar.gelecek_tarih, 104) AS cikis_tarihi,
     CONVERT(varchar(10), dolu.tarih, 104) AS dolu_giris_tarihi,
     CONVERT(varchar(10), dolu.tarih2, 104) AS dolu_cikis_tarihi,
-    CONVERT(varchar(10), kayitlar.islem_tarihi, 104) AS islem_tarihi,
+    CONVERT(varchar(10), kayitlar.islem_tarihi, 104) + ' ' + CONVERT(varchar(8), kayitlar.islem_tarihi, 108) AS islem_tarihi,
     DATEDIFF(day, kayitlar.rez_tarihi, kayitlar.gelecek_tarih) AS gece,
     tutar.toplam_tutar AS toplam_tutar,
     tutar.on_odeme AS on_odeme,
@@ -338,7 +338,7 @@ SELECT
     tutar.toplam_tutar * tutar.kur_carpan AS toplam_tutar_tl,
     (CASE WHEN kayitlar.tur = 2 THEN tutar.toplam_tutar ELSE tutar.on_odeme END) * tutar.kur_carpan AS odeme_tutari_tl,
     (CASE WHEN kayitlar.tur = 2 THEN 0 ELSE tutar.kalan END) * tutar.kur_carpan AS kalan_tutar_tl,
-    CASE
+    CASE 
         WHEN tutar.kar = 0 THEN
             (tutar.toplam_tutar * tutar.kur_carpan) / 100 * ISNULL(TRY_CONVERT(float, kayitlar.kazancorani), 0)
         ELSE

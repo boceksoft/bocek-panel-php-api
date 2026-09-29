@@ -11,11 +11,12 @@ use PDO;
  * Homes management detail update resource.
  * Detail sayfasindan query string veya JSON body ile gelen alanlari gunceller.
  */
-class HomesManagementDetailUpdateController extends Controller
+final class HomesManagementDetailUpdateController extends Controller
 {
     /** test
      * Detay sayfasindan gelen emlak bilgilerini gunceller.
      *
+     * @Get
      * @Post
      * @Put
      * @query id int required Emlak ID
@@ -50,8 +51,8 @@ class HomesManagementDetailUpdateController extends Controller
                 ? $this->updateHomes($pdo, $id, $updates)
                 : ['updated_columns' => [], 'skipped_columns' => []];
             $mesafelerResult = $this->updateMesafeler($pdo, $id, $mesafeler);
-            $bakimciAssignmentResult = $this->syncBakimciAssignment($pdo, $id, $updates);
-            $bakimciResult = $this->updateBakimciContact($pdo, $id, $payload);
+            $bakimciAssignmentResult = $this->safeSyncBakimciAssignment($pdo, $id, $updates);
+            $bakimciResult = $this->safeUpdateBakimciContact($pdo, $id, $payload);
             $pdo->commit();
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) {
@@ -84,11 +85,49 @@ class HomesManagementDetailUpdateController extends Controller
     }
 
     /**
+     * @param array<string,mixed> $updates
+     * @return array{updated:int,skipped:array<int,array<string,string>>}
+     */
+    private function safeSyncBakimciAssignment(PDO $pdo, int $homeId, array $updates): array
+    {
+        try {
+            return $this->syncBakimciAssignment($pdo, $homeId, $updates);
+        } catch (\Throwable $e) {
+            return [
+                'updated' => 0,
+                'skipped' => [[
+                    'section' => 'bakimci_assignment',
+                    'reason' => 'Bakimci eslestirme atlandi: ' . $e->getMessage(),
+                ]],
+            ];
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array{updated:int,skipped:array<int,array<string,string>>}
+     */
+    private function safeUpdateBakimciContact(PDO $pdo, int $homeId, array $payload): array
+    {
+        try {
+            return $this->updateBakimciContact($pdo, $homeId, $payload);
+        } catch (\Throwable $e) {
+            return [
+                'updated' => 0,
+                'skipped' => [[
+                    'section' => 'bakimci',
+                    'reason' => 'Bakimci iletisim guncelleme atlandi: ' . $e->getMessage(),
+                ]],
+            ];
+        }
+    }
+
+    /**
      * Query parametreleri JSON body'nin uzerine yazar.
      *
      * @return array<string,mixed>
      */
-    protected function payload(): array
+    private function payload(): array
     {
         return array_merge($this->request->json(), $_GET);
     }
@@ -118,7 +157,7 @@ class HomesManagementDetailUpdateController extends Controller
      * @param array<string,mixed> $payload
      * @return array<string,mixed>
      */
-    protected function homesUpdates(array $payload): array
+    private function homesUpdates(array $payload): array
     {
         $updates = [];
         $map = [
@@ -199,6 +238,9 @@ class HomesManagementDetailUpdateController extends Controller
             }
 
             $value = $this->normalizeScalar($this->getPath($payload, $path));
+            if ($column === 'evsahibi' && $value === '') {
+                continue;
+            }
             $updates[$column] = $column === 'doviz' ? $this->currencyDbValue($value) : $value;
         }
 
@@ -459,7 +501,7 @@ class HomesManagementDetailUpdateController extends Controller
      * @param array<string,mixed> $payload
      * @return array{updated:int,skipped:array<int,array<string,string>>}
      */
-    protected function updateBakimciContact(PDO $pdo, int $homeId, array $payload): array
+    private function updateBakimciContact(PDO $pdo, int $homeId, array $payload): array
     {
         $addressValue = $this->firstExistingPath($payload, [
             'bakimciAdres',
@@ -604,7 +646,7 @@ class HomesManagementDetailUpdateController extends Controller
      * @param array<string,mixed> $updates
      * @return array{updated:int,skipped:array<int,array<string,string>>}
      */
-    protected function syncBakimciAssignment(PDO $pdo, int $homeId, array $updates): array
+    private function syncBakimciAssignment(PDO $pdo, int $homeId, array $updates): array
     {
         if (!array_key_exists('bakimciad', $updates) && !array_key_exists('bakimcitel', $updates)) {
             return ['updated' => 0, 'skipped' => []];
@@ -743,7 +785,7 @@ class HomesManagementDetailUpdateController extends Controller
      * @param array<string,mixed> $payload
      * @return array<int,array<string,mixed>>
      */
-    protected function mesafelerPayload(array $payload): array
+    private function mesafelerPayload(array $payload): array
     {
         $value = null;
         if ($this->hasPath($payload, 'mesafeler')) {
@@ -760,7 +802,7 @@ class HomesManagementDetailUpdateController extends Controller
      * @param array<int,array<string,mixed>> $rows
      * @return array{updated:int,skipped:array<int,array<string,string>>}
      */
-    protected function updateMesafeler(PDO $pdo, int $homeId, array $rows): array
+    private function updateMesafeler(PDO $pdo, int $homeId, array $rows): array
     {
         if ($rows === []) {
             return ['updated' => 0, 'skipped' => []];
@@ -867,111 +909,12 @@ class HomesManagementDetailUpdateController extends Controller
 
     /**
      * @param array<string,mixed> $updates
-     * @param array<string,mixed> $payload
-     * @return array{id:int,inserted_columns:array<int,string>,skipped_columns:array<int,array<string,string>>}
-     */
-    protected function insertHome(PDO $pdo, array $updates, array $payload): array
-    {
-        $existingColumns = $this->homesColumns($pdo);
-        $insertValues = $updates;
-        $skippedColumns = [];
-
-        if (isset($existingColumns['site']) && !array_key_exists('site', $insertValues)) {
-            $insertValues['site'] = $this->siteId($payload);
-        }
-
-        if (isset($existingColumns['aktif']) && !array_key_exists('aktif', $insertValues)) {
-            $insertValues['aktif'] = 0;
-        }
-
-        if (isset($existingColumns['url']) && !array_key_exists('url', $insertValues) && array_key_exists('baslik', $insertValues)) {
-            $insertValues['url'] = $this->slugValue((string) $insertValues['baslik']);
-        }
-
-        if (isset($existingColumns['n_emlak_bolgesi']) && !array_key_exists('n_emlak_bolgesi', $insertValues) && array_key_exists('emlak_bolgesi', $insertValues)) {
-            $insertValues['n_emlak_bolgesi'] = $insertValues['emlak_bolgesi'];
-        }
-
-        if (isset($existingColumns['id']) && empty($existingColumns['id']['is_identity']) && !array_key_exists('id', $insertValues)) {
-            $insertValues['id'] = $this->nextHomeId($pdo);
-        }
-
-        $columns = [];
-        $placeholders = [];
-        $params = [];
-        $insertedColumns = [];
-        $index = 0;
-
-        foreach ($insertValues as $column => $value) {
-            if ($this->safeColumn($column) === false) {
-                continue;
-            }
-            if (!isset($existingColumns[strtolower($column)])) {
-                continue;
-            }
-
-            $columnInfo = $existingColumns[strtolower($column)];
-            if (!empty($columnInfo['is_identity'])) {
-                continue;
-            }
-
-            $normalized = $this->normalizeForColumn($column, $value, $columnInfo);
-            if (!$normalized['ok']) {
-                $skippedColumns[] = [
-                    'column' => $column,
-                    'reason' => $normalized['reason'],
-                ];
-                continue;
-            }
-
-            $param = ':p' . $index++;
-            $columns[] = '[' . $column . ']';
-            $placeholders[] = $param;
-            $params[$param] = $normalized['value'];
-            $insertedColumns[] = $column;
-        }
-
-        if ($columns === []) {
-            throw new HttpException('Gecerli homes alani bulunamadi.', 'VALIDATION', 422);
-        }
-
-        $sql = 'INSERT INTO homes (' . implode(', ', $columns) . ')
-                VALUES (' . implode(', ', $placeholders) . ')';
-        $stmt = $pdo->prepare($sql);
-        foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
-        }
-        $stmt->execute();
-
-        $id = 0;
-        if (isset($insertValues['id']) && is_numeric($insertValues['id'])) {
-            $id = (int) $insertValues['id'];
-        } elseif (isset($existingColumns['id']) && !empty($existingColumns['id']['is_identity'])) {
-            $id = (int) $pdo->query('SELECT CAST(SCOPE_IDENTITY() AS int)')->fetchColumn();
-        }
-
-        if ($id <= 0) {
-            throw new HttpException('Olusturulan emlak ID degeri alinamadi.', 'DB_CREATE_FAILED', 500);
-        }
-
-        return [
-            'id' => $id,
-            'inserted_columns' => $insertedColumns,
-            'skipped_columns' => $skippedColumns,
-        ];
-    }
-
-    /**
-     * @param array<string,mixed> $updates
      * @return array{updated_columns:array<int,string>,skipped_columns:array<int,array<string,string>>}
      */
     private function updateHomes(PDO $pdo, int $id, array $updates): array
     {
-        $set = [];
-        $params = [':id' => $id];
-        $columns = [];
+        $assignments = [];
         $skippedColumns = [];
-        $index = 0;
         $existingColumns = $this->homesColumns($pdo);
 
         foreach ($updates as $column => $value) {
@@ -991,13 +934,13 @@ class HomesManagementDetailUpdateController extends Controller
                 continue;
             }
 
-            $param = ':p' . $index++;
-            $set[] = '[' . $column . '] = ' . $param;
-            $params[$param] = $normalized['value'];
-            $columns[] = $column;
+            $assignments[] = [
+                'column' => $column,
+                'value' => $normalized['value'],
+            ];
         }
 
-        if ($set === []) {
+        if ($assignments === []) {
             if ($skippedColumns !== []) {
                 return [
                     'updated_columns' => [],
@@ -1008,30 +951,37 @@ class HomesManagementDetailUpdateController extends Controller
             throw new HttpException('Gecerli homes alani bulunamadi.', 'VALIDATION', 422);
         }
 
-        $stmt = $pdo->prepare('UPDATE homes SET ' . implode(', ', $set) . ' WHERE id = :id');
-        foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        $updatedColumns = [];
+        foreach ($assignments as $assignment) {
+            $column = (string) $assignment['column'];
+            $value = $assignment['value'];
+
+            try {
+                $stmt = $pdo->prepare('UPDATE homes SET [' . $column . '] = :value WHERE id = :id');
+                $stmt->bindValue(':value', $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
+                $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+                $stmt->execute();
+                $updatedColumns[] = $column;
+            } catch (\Throwable $e) {
+                $skippedColumns[] = [
+                    'column' => $column,
+                    'reason' => 'DB update atlandi: ' . $e->getMessage(),
+                ];
+            }
         }
-        $stmt->execute();
 
         return [
-            'updated_columns' => $columns,
+            'updated_columns' => $updatedColumns,
             'skipped_columns' => $skippedColumns,
         ];
     }
 
     /**
-     * @return array<string,array{data_type:string,is_identity:bool}>
+     * @return array<string,array{data_type:string}>
      */
     private function homesColumns(PDO $pdo): array
     {
-        $stmt = $pdo->query(
-            "SELECT COLUMN_NAME,
-                    DATA_TYPE,
-                    COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME), COLUMN_NAME, 'IsIdentity') AS IsIdentity
-             FROM INFORMATION_SCHEMA.COLUMNS
-             WHERE TABLE_NAME = 'homes'"
-        );
+        $stmt = $pdo->query("SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'homes'");
         $columns = [];
 
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
@@ -1039,7 +989,6 @@ class HomesManagementDetailUpdateController extends Controller
             if ($name !== '') {
                 $columns[$name] = [
                     'data_type' => strtolower((string) ($row['DATA_TYPE'] ?? '')),
-                    'is_identity' => (int) ($row['IsIdentity'] ?? 0) === 1,
                 ];
             }
         }
@@ -1047,46 +996,9 @@ class HomesManagementDetailUpdateController extends Controller
         return $columns;
     }
 
-    private function nextHomeId(PDO $pdo): int
-    {
-        $row = $pdo->query('SELECT ISNULL(MAX(id), 0) + 1 AS nextId FROM homes')->fetch(PDO::FETCH_ASSOC);
-
-        return (int) ($row['nextId'] ?? 1);
-    }
-
-    private function slugValue(string $value): string
-    {
-        $value = trim($value);
-        if ($value === '') {
-            return '';
-        }
-
-        $map = [
-            'Ç' => 'C',
-            'Ğ' => 'G',
-            'İ' => 'I',
-            'Ö' => 'O',
-            'Ş' => 'S',
-            'Ü' => 'U',
-            'ç' => 'c',
-            'ğ' => 'g',
-            'ı' => 'i',
-            'i' => 'i',
-            'ö' => 'o',
-            'ş' => 's',
-            'ü' => 'u',
-        ];
-        $value = strtr($value, $map);
-        $value = strtolower($value);
-        $value = preg_replace('/[^a-z0-9]+/', '-', $value);
-        $value = trim((string) $value, '-');
-
-        return $value !== '' ? $value : 'villa';
-    }
-
     /**
      * @param mixed $value
-     * @param array{data_type:string,is_identity?:bool} $columnInfo
+     * @param array{data_type:string} $columnInfo
      * @return array{ok:bool,value:mixed,reason:string}
      */
     private function normalizeForColumn(string $column, $value, array $columnInfo): array
@@ -1128,7 +1040,7 @@ class HomesManagementDetailUpdateController extends Controller
     /**
      * @param array<string,mixed> $payload
      */
-    protected function hasBakimciContactPayload(array $payload): bool
+    private function hasBakimciContactPayload(array $payload): bool
     {
         foreach ([
                      'bakimciAdres',
@@ -1341,7 +1253,7 @@ class HomesManagementDetailUpdateController extends Controller
      * @param array<string,mixed> $payload
      * @return array<int,string>
      */
-    protected function skippedRelatedSections(array $payload): array
+    private function skippedRelatedSections(array $payload): array
     {
         $sections = [];
         foreach ([
