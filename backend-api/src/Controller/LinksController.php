@@ -66,10 +66,11 @@ final class LinksController extends Controller
 
         // 3) Sıradaki id'den eşsiz link üret
         $originalLink = $this->uniqueOriginalLink($pdo);
+        $directSearchPageUrl = trim((string) ($this->app['links_search_page_url'] ?? ''));
 
         // 4) Yönlendirme hedefini homes.id ile sayfa URL'sine kur
         $searchPageQuery = trim((string) ($this->app['links_search_page_query'] ?? 'SELECT url FROM tip WHERE id = 1'));
-        $urlRow = $pdo->query($searchPageQuery)->fetch();
+        $urlRow = $directSearchPageUrl === '' ? $pdo->query($searchPageQuery)->fetch() : ['url' => $directSearchPageUrl];
         $aramaSayfasi = trim((string) ($urlRow['url'] ?? ''));
         if ($aramaSayfasi === '') {
             throw new HttpException('Link sayfa URL ayarı bulunamadı.', 'CONFIG_ERROR', 500);
@@ -174,7 +175,16 @@ final class LinksController extends Controller
             $query[$this->queryParamName($params, 'pool_fee', 'buyPool')] = 1;
         }
 
-        return $domain . '/' . ltrim($pageUrl, '/') . '?' . urldecode(http_build_query($query, '', '&'));
+        $queryString = urldecode(http_build_query($query, '', '&'));
+
+        if (preg_match('#^https?://#i', $pageUrl) === 1) {
+            $baseUrl = rtrim($pageUrl, '?&');
+            $separator = strpos($baseUrl, '?') === false ? '?' : '&';
+
+            return $baseUrl . $separator . $queryString;
+        }
+
+        return $domain . '/' . ltrim($pageUrl, '/') . '?' . $queryString;
     }
 
     private function siteId(): int

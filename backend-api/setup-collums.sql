@@ -1,3 +1,52 @@
+IF OBJECT_ID(N'[dbo].[genel]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel]', N'dil') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel] ADD [dil] nvarchar(10) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[genel_s2]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel_s2]', N'dil') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel_s2] ADD [dil] nvarchar(10) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[genel_s3]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel_s3]', N'dil') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel_s3] ADD [dil] nvarchar(10) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[genel_s4]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel_s4]', N'dil') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel_s4] ADD [dil] nvarchar(10) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[genel_s5]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel_s5]', N'dil') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel_s5] ADD [dil] nvarchar(10) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[genel_s6]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel_s6]', N'dil') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel_s6] ADD [dil] nvarchar(10) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[genel_s7]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel_s7]', N'dil') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel_s7] ADD [dil] nvarchar(10) NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[defter]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[defter]', N'id') IS NULL
 BEGIN
@@ -618,6 +667,20 @@ IF OBJECT_ID(N'[dbo].[redirects]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[redirects]', N'teklifId') IS NULL
 BEGIN
 ALTER TABLE [dbo].[redirects] ADD [teklifId] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[redirects]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[redirects]', N'expiredDate') IS NULL
+BEGIN
+ALTER TABLE [dbo].[redirects] ADD [expiredDate] datetime NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[redirects]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[redirects]', N'expiredMode') IS NULL
+BEGIN
+ALTER TABLE [dbo].[redirects] ADD [expiredMode] int NULL;
 END;
 GO
 
@@ -2884,6 +2947,20 @@ IF OBJECT_ID(N'[dbo].[redirects]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[redirects]', N'teklifId') IS NULL
 BEGIN
 ALTER TABLE [dbo].[redirects] ADD [teklifId] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[redirects]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[redirects]', N'expiredDate') IS NULL
+BEGIN
+ALTER TABLE [dbo].[redirects] ADD [expiredDate] datetime NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[redirects]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[redirects]', N'expiredMode') IS NULL
+BEGIN
+ALTER TABLE [dbo].[redirects] ADD [expiredMode] int NULL;
 END;
 GO
 

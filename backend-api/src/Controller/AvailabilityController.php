@@ -30,26 +30,10 @@ final class AvailabilityController extends Controller
         $defaultCurrencyId = defined('DEFAULT_CURRENCY_ID') ? (int) constant('DEFAULT_CURRENCY_ID') : 1;
         $uzanti  = defined('UZANTI') ? (string) constant('UZANTI') : '';
         $siteVal = defined('PRICE_SITE') ? (int) constant('PRICE_SITE') : 1;
-        $doluKayitIdColumn = (string) ($this->app['dolu_kayit_id_column'] ?? 'kayitid');
-        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $doluKayitIdColumn)) {
-            throw new HttpException('Gecersiz dolu kayit id kolon ayari.', 'CONFIG_ERROR', 500);
-        }
-        $doluKayitIdSql = 'dolu.[' . $doluKayitIdColumn . ']';
-        $ruleshomesRulesIdColumn = (string) ($this->app['ruleshomes_rules_id_column'] ?? 'rulesId');
-        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $ruleshomesRulesIdColumn)) {
-            throw new HttpException('Gecersiz ruleshomes rules id kolon ayari.', 'CONFIG_ERROR', 500);
-        }
-        $ruleshomesRulesIdSql = 'rh.[' . $ruleshomesRulesIdColumn . ']';
-        $ruleshomesHomesIdColumn = (string) ($this->app['ruleshomes_homes_id_column'] ?? 'homesId');
-        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $ruleshomesHomesIdColumn)) {
-            throw new HttpException('Gecersiz ruleshomes homes id kolon ayari.', 'CONFIG_ERROR', 500);
-        }
-        $ruleshomesHomesIdSql = 'rh.[' . $ruleshomesHomesIdColumn . ']';
-        $rulesruletypesRulesIdColumn = (string) ($this->app['rulesruletypes_rules_id_column'] ?? 'rulesId');
-        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $rulesruletypesRulesIdColumn)) {
-            throw new HttpException('Gecersiz rulesruletypes rules id kolon ayari.', 'CONFIG_ERROR', 500);
-        }
-        $rulesruletypesRulesIdSql = 'rulesruletypes.[' . $rulesruletypesRulesIdColumn . ']';
+        $doluKayitIdSql = $this->qualifiedExistingColumn($pdo, 'dbo.dolu', 'dolu', ['kayitid', 'kayitId'], 'Dolu kayit id kolonu bulunamadi.');
+        $ruleshomesRulesIdSql = $this->qualifiedExistingColumn($pdo, 'dbo.ruleshomes', 'rh', ['rulesid', 'rulesId'], 'Ruleshomes rules id kolonu bulunamadi.');
+        $ruleshomesHomesIdSql = $this->qualifiedExistingColumn($pdo, 'dbo.ruleshomes', 'rh', ['homesid', 'homesId'], 'Ruleshomes homes id kolonu bulunamadi.');
+        $rulesruletypesRulesIdSql = $this->qualifiedExistingColumn($pdo, 'dbo.rulesruletypes', 'rulesruletypes', ['rulesid', 'rulesId'], 'Rulesruletypes rules id kolonu bulunamadi.');
 
         // Home bilgisi (döviz + sembol)
         $homeStmt = $pdo->prepare(
@@ -180,5 +164,26 @@ final class AvailabilityController extends Controller
             'symbol' => $home['Symbol'],
             'data'   => $data,
         ]);
+    }
+
+    private function qualifiedExistingColumn(\PDO $pdo, string $table, string $alias, array $columns, string $errorMessage): string
+    {
+        foreach ($columns as $column) {
+            if ($this->columnExists($pdo, $table, $column)) {
+                return $alias . '.[' . $column . ']';
+            }
+        }
+
+        throw new HttpException($errorMessage, 'CONFIG_ERROR', 500);
+    }
+
+    private function columnExists(\PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare('SELECT CASE WHEN COL_LENGTH(:table, :column) IS NULL THEN 0 ELSE 1 END');
+        $stmt->bindValue(':table', $table);
+        $stmt->bindValue(':column', $column);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() === 1;
     }
 }

@@ -20,6 +20,13 @@ DECLARE @IstenenKolonlar TABLE
 
 INSERT INTO @IstenenKolonlar (SchemaName, TableName, ColumnName)
 VALUES
+    (N'dbo', N'genel', N'dil'),
+    (N'dbo', N'genel_s2', N'dil'),
+    (N'dbo', N'genel_s3', N'dil'),
+    (N'dbo', N'genel_s4', N'dil'),
+    (N'dbo', N'genel_s5', N'dil'),
+    (N'dbo', N'genel_s6', N'dil'),
+    (N'dbo', N'genel_s7', N'dil'),
     (N'dbo', N'acenta_kayitlar', N'acentaId'),
     (N'dbo', N'acenta_kayitlar', N'kayitId'),
     (N'dbo', N'acenta_users', N'id'),
@@ -46,6 +53,8 @@ VALUES
     (N'dbo', N'HomesExtraPaymentTypes', N'IsDeleted'),
     (N'dbo', N'HomesExtraPaymentTypes', N'Name'),
     (N'dbo', N'redirects', N'teklifId'),
+    (N'dbo', N'redirects', N'expiredDate'),
+    (N'dbo', N'redirects', N'expiredMode'),
     (N'dbo', N'teklifler', N'createdOn'),
     (N'dbo', N'teklifler', N'email'),
     (N'dbo', N'teklifler', N'id'),

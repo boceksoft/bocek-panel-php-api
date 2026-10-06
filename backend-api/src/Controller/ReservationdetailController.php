@@ -32,12 +32,8 @@ final class ReservationdetailController extends Controller
         }
 
         $pdo = $this->db->pdo();
-        $defterReservationIdColumnSql = $this->qualifiedColumn(
-            'defter',
-            $this->configString('defter_reservation_id_column', 'islm_id')
-        );
 
-        $reservation = $this->fetchReservation($pdo, $id, $defterReservationIdColumnSql);
+        $reservation = $this->fetchReservation($pdo, $id);
         if (!$reservation) {
             throw new HttpException('Belirtilen ID ile rezervasyon bulunamadÄ±.', 'NOT_FOUND', 404);
         }
@@ -184,7 +180,7 @@ final class ReservationdetailController extends Controller
     /**
      * @return array<string,mixed>|false
      */
-    private function fetchReservation(PDO $pdo, int $id, string $defterReservationIdColumnSql)
+    private function fetchReservation(PDO $pdo, int $id)
     {
         $sql = "SELECT *,
                     (SELECT site FROM sites WHERE id = kayitlar.site) AS siteadi,
@@ -197,7 +193,6 @@ final class ReservationdetailController extends Controller
                     ISNULL(btrans_iban, '00') AS btrans_iban,
                     ISNULL(btrans_odeme_bilgisi, 0) AS btrans_odeme_bilgisi,
                     ISNULL(btrans_odeme_yontemi, 4) AS btrans_odeme_yontemi,
-                    (SELECT COUNT(defter.id) FROM defter WHERE {$defterReservationIdColumnSql} = kayitlar.id) AS yorumsay,
                     ISNULL(iyzico_odeme, 1) AS iyzico_odeme,
                     ISNULL(kazancorani, 0) AS kazancorani,
                     ISNULL(
@@ -754,28 +749,6 @@ final class ReservationdetailController extends Controller
         foreach ($params as $key => $value) {
             $stmt->bindValue($key, $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
         }
-    }
-
-    private function qualifiedColumn(string $alias, string $column): string
-    {
-        if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $column) !== 1) {
-            throw new HttpException('Gecersiz defter rezervasyon kolon ayari.', 'CONFIG_ERROR', 500);
-        }
-
-        return $alias . '.[' . $column . ']';
-    }
-
-    private function configString(string $key, string $default = ''): string
-    {
-        if (!array_key_exists($key, $this->app) || trim((string) $this->app[$key]) === '') {
-            if ($default !== '') {
-                return $default;
-            }
-
-            throw new HttpException('Eksik config ayari: ' . $key, 'CONFIG_ERROR', 500);
-        }
-
-        return trim((string) $this->app[$key]);
     }
 
     private function configBool(string $key, bool $default): bool

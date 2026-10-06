@@ -208,6 +208,7 @@ final class GuestMovementsController extends Controller
         $movementSortValue = $this->movementSortValue($type);
         $ownerNameSql = $this->ownerNameSql();
         $ownerPhoneSql = $this->ownerPhoneSql();
+        $homeIdSql = $this->guestMovementsHomeIdSql();
 
         $sql = "  
 
@@ -283,7 +284,7 @@ FROM dolu d
 
 INNER JOIN kayitlar k ON k.id = {$reservationIdSql}
 
-LEFT JOIN homes h ON h.id = d.emlak
+LEFT JOIN homes h ON h.id = {$homeIdSql}
 
 LEFT JOIN kullanici es ON es.id = h.evsahibi
 
@@ -404,12 +405,35 @@ ORDER BY
 
     private function doluReservationIdSql(): string
     {
-        $column = (string) ($this->app['dolu_kayit_id_column'] ?? 'kayitid');
-        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $column)) {
-            throw new HttpException('dolu kayit id kolonu gecersiz.', 'CONFIG_ERROR', 500);
+        foreach (['kayitid', 'kayitId'] as $column) {
+            if ($this->columnExists('dbo.dolu', $column)) {
+                return 'd.[' . $column . ']';
+            }
         }
 
-        return 'd.[' . $column . ']';
+        throw new HttpException('Dolu kayit id kolonu bulunamadi.', 'CONFIG_ERROR', 500);
+    }
+
+    private function guestMovementsHomeIdSql(): string
+    {
+        $useKayitlarEvid = $this->configBool('guest_movements_home_id_column', false);
+
+        return $useKayitlarEvid ? 'k.evid' : 'd.emlak';
+    }
+
+    private function configBool(string $key, bool $default): bool
+    {
+        if (!array_key_exists($key, $this->app)) {
+            return $default;
+        }
+
+        $value = $this->app[$key];
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        $parsed = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        return $parsed ?? $default;
     }
 
     private function tableExists(string $table): bool

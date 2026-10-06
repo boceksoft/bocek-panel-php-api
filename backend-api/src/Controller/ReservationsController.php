@@ -27,12 +27,8 @@ final class ReservationsController extends Controller
     {
         $pdo = $this->db->pdo();
         $useAcentaUsers = !empty($this->app['reservation_filters_use_acenta_users']);
-        $useMaliyetColumn = $this->configBool('reservations_use_maliyet_column', false);
+        $useMaliyetColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'maliyet');
         $hasMigrationStatusColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'MigrationStatus');
-        $defterReservationIdColumnSql = $this->qualifiedColumn(
-            'defter',
-            $this->configString('defter_reservation_id_column')
-        );
 
         // Sayfalama
         $page       = max(1, $this->pInt('page', $this->pInt('s', 1)));
@@ -188,8 +184,7 @@ final class ReservationsController extends Controller
             $orderSql,
             $allRows,
             $useAcentaUsers,
-            $useMaliyetColumn,
-            $defterReservationIdColumnSql
+            $useMaliyetColumn
         );
 
         // Çalıştır
@@ -262,8 +257,7 @@ final class ReservationsController extends Controller
         string $orderSql,
         bool $allRows,
         bool $useAcentaUsers,
-        bool $useMaliyetColumn,
-        string $defterReservationIdColumnSql
+        bool $useMaliyetColumn
     ): string
     {
         $maliyetValueSql = $useMaliyetColumn
@@ -361,7 +355,6 @@ $acentaSelectSql
     ISNULL(homes.rez_takip_yeri_adi, '') AS whatsapp,
     kayitlar.oznot AS oz_not,
     kisi.total AS kisi_bilgileri_count,
-    yorumsay.total AS yorum_count,
     opsiyonvarmi.total AS opsiyon_count,
     CASE WHEN opsiyonvarmi.total > 0 THEN 1 ELSE 0 END AS has_opsiyon,
     dolu_fake.bizdekitarih AS dolu_fake_count,
@@ -383,9 +376,6 @@ CROSS APPLY (
         ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.kar)), 0) AS kar,
         CASE WHEN kayitlar.doviz = 'tl' THEN 1 ELSE ISNULL(TRY_CONVERT(float, kayitlar.kur), 1) END AS kur_carpan
 ) AS tutar
-CROSS APPLY (
-    SELECT COUNT(defter.id) AS total FROM defter WHERE {$defterReservationIdColumnSql} = kayitlar.id
-) AS yorumsay
 CROSS APPLY (  
     SELECT COUNT(kb.id) AS total FROM kisi_bilgileri kb WHERE kb.siparis_kodu = kayitlar.id
 ) AS kisi
@@ -448,7 +438,7 @@ $orderSql
         ];
         $intFields = [
             'id', 'site', 'evid', 'home_id', 'gece', 'odeme_sekli', 'odeme_turu', 'durum',
-            'acenta', 'kisi_bilgileri_count', 'yorum_count', 'opsiyon_count', 'has_opsiyon',
+            'acenta', 'kisi_bilgileri_count', 'opsiyon_count', 'has_opsiyon',
             'dolu_fake_count', 'has_bizdeki_tarih', 'arandi', 'sozlesme', 'gonderildi',
             'belgeSuresiTipi', 'gavel', 'ozelden_al',
             'acenta_rez_no', 'acenta_rez_durum', 'acenta_user_id',
@@ -688,15 +678,6 @@ $orderSql
         return $parsed === null ? $default : $parsed;
     }
 
-    private function qualifiedColumn(string $alias, string $column): string
-    {
-        if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $column) !== 1) {
-            throw new HttpException('Gecersiz defter rezervasyon kolon ayari.', 'CONFIG_ERROR', 500);
-        }
-
-        return $alias . '.[' . $column . ']';
-    }
-
     private function columnExists(PDO $pdo, string $schema, string $table, string $column): bool
     {
         $stmt = $pdo->prepare(
@@ -724,17 +705,4 @@ $orderSql
         return $stmt->fetchColumn() !== false;
     }
 
-    private function configString(string $key): string
-    {
-        if (!array_key_exists($key, $this->app) || trim((string) $this->app[$key]) === '') {
-            throw new HttpException('Eksik config ayari: ' . $key, 'CONFIG_ERROR', 500, null, [
-                'config_path' => $this->app['_config_path'] ?? null,
-                'local_config_path' => $this->app['_local_config_path'] ?? null,
-                'local_config_loaded' => $this->app['_local_config_loaded'] ?? null,
-                'loaded_config_keys' => implode(',', array_keys($this->app)),
-            ]);
-        }
-
-        return trim((string) $this->app[$key]);
-    }
 }
