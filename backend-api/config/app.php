@@ -23,31 +23,22 @@ return [
     // Örn: https://web.villakilavuzu.com/backend-api  ->  '/backend-api'
     'base_path' => '/backend-api',
 
-    // dolu tablosunda kayitlar.id ile eslesen kolon adi.
-    // Bazi SQL Server kurulumlari case-sensitive oldugu icin siteye gore override edilebilir.
-    'dolu_kayit_id_column' => 'kayitid',
-
-    // Guest movements listesinde homes.id ile eslesen kolon.
-    // Varsayilan dolu.emlak'tir. Bazi sitelerde kayitlar.evid kullanilirsa
-    // app.local.php icinde 'k.evid' olarak override edilebilir.
-    'guest_movements_home_id_column' => 'd.emlak',
+    // Guest movements listesinde homes.id eslesmesi.
+    // false: dolu.emlak, true: kayitlar.evid kullanilir.
+    'guest_movements_home_id_column' => false,
 
     // true ise Guest movements listesinde ev sahibi adi/teli bos geldiginde
     // homes.BakimciAd ve homes.BakimciTel fallback olarak kullanilir.
     'guest_movements_use_caretaker_owner_fallback' => false,
 
-    // ruleshomes tablosunda rules.id ile eslesen kolon adi.
-    'ruleshomes_rules_id_column' => 'rulesId',
-
-    // ruleshomes tablosunda homes.id ile eslesen kolon adi.
-    'ruleshomes_homes_id_column' => 'homesId',
-
-    // redirects tablosunda expiredDate/expiredMode kolonlari varsa true, yoksa false.
-    'links_use_expiration_columns' => false,
-
     // Link olustururken redirect hedefinde kullanilan arama sayfasi sorgusu.
     // Sorgu ilk satirdaki "url" alanindan arama sayfasi yolunu okumalidir.
     'links_search_page_query' => 'SELECT url FROM sayfalar WHERE id = 229',
+
+    // Doluysa link olustururken DB'den sayfa URL'si okumak yerine direkt bu URL kullanilir.
+    // Bos birakilirsa links_search_page_query ile mevcut davranis devam eder.
+    // Ornekler: '/arama', 'https://www.site.com/arama'
+    'links_search_page_url' => '',
 
     // Rezervasyon filtrelerinde acenta_users tablosundan alt acentalar cekilsin mi?
     'reservation_filters_use_acenta_users' => false,
@@ -154,6 +145,23 @@ return [
     // update = otomatik güncelleme (kendi "deploy_secret" ile korunur),
     // version = kurulu sürümü gösterir (salt okunur, sır istemez).
     'public_resources' => ['tokens', 'update', 'version'],
+
+    // Panelden app.local.php icine yazilabilecek site-ozel ayarlar.
+    // deploy_secret, github_token ve DB bilgileri bilerek burada yok.
+    'editable_local_settings' => [
+        'guest_movements_home_id_column' => 'bool',
+        'guest_movements_use_caretaker_owner_fallback' => 'bool',
+        'links_search_page_url' => 'string',
+        'reservation_filters_use_acenta_users' => 'bool',
+        'reservation_detail_use_islem_kaydi' => 'bool',
+        'calculate_param_names' => 'array',
+        'calculate_date_formats' => 'array',
+        'calculate_reservation_url' => 'array',
+        'links_reservation_url' => 'array',
+        'site_column_suffixes' => 'array',
+        'site_languages' => 'array',
+        'calculate_prices_same_across_sites' => 'bool',
+    ],
 
     // DB bilgileri ($config['db']) ve Domain sabitinin geldiği,
     // repo dışındaki config dosyasının yolu (backend-api/../api/config.php).
