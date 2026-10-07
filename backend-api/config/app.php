@@ -5,7 +5,7 @@ declare(strict_types=1);
 /*
  * Uygulama ayarları.
  * Sırlar (DB kullanıcı/şifre) burada DEĞİL; repo dışındaki ../api/config.php
- * dosyasından gelir. Bu dosya repoya girebilir. test2
+ * dosyasından gelir. Bu dosya repoya girebilir. test3
  */
 
 return [
