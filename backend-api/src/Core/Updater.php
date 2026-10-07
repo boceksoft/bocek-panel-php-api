@@ -82,7 +82,22 @@ final class Updater
         try {
             $sourceRoot = $this->findBackendApiRoot($extractDir, $repo, $sha);
             $backupPath = $this->backupCurrent();
-            $this->copyOverlay($sourceRoot, $this->root);
+
+            try {
+                $this->log("COPY START {$sourceRoot} -> {$this->root}");
+                $this->copyOverlay($sourceRoot, $this->root);
+                $this->log("COPY OK {$sourceRoot} -> {$this->root}");
+            } catch (\Throwable $e) {
+                $this->log('COPY FAIL ' . get_class($e) . ': ' . $e->getMessage());
+
+                throw new HttpException(
+                    'Guncelleme kopyalama asamasinda basarisiz oldu: ' . $e->getMessage(),
+                    'UPDATE_COPY',
+                    500,
+                    $e
+                );
+            }
+
             $this->writeState($sha, $version, $previousSha, $previousVersion, $changelog);
             $this->log("OK  {$previousVersion}({$previousSha}) -> {$version}({$sha})");
         } finally {
@@ -617,7 +632,19 @@ final class Updater
      */
     private function copyOverlay(string $source, string $dest): void
     {
-        foreach ((array) scandir($source) as $entry) {
+        error_clear_last();
+        $entries = @scandir($source);
+        if ($entries === false) {
+            $lastError = error_get_last();
+            throw new HttpException(
+                'Kaynak klasor okunamadi: ' . $source
+                    . ' (' . ($lastError['message'] ?? 'bilinmeyen hata') . ')',
+                'UPDATE_COPY',
+                500
+            );
+        }
+
+        foreach ($entries as $entry) {
             if ($entry === '.' || $entry === '..') {
                 continue;
             }
@@ -628,6 +655,13 @@ final class Updater
             if (is_dir($from)) {
                 if (!is_dir($to) && !@mkdir($to, 0755, true) && !is_dir($to)) {
                     $lastError = error_get_last();
+                    $this->log(
+                        'COPY MKDIR FAIL from=' . $from
+                        . ' to=' . $to
+                        . ' parent=' . dirname($to)
+                        . ' parent_writable=' . (is_writable(dirname($to)) ? 'yes' : 'no')
+                        . ' error=' . ($lastError['message'] ?? 'unknown')
+                    );
                     throw new HttpException(
                         'Klasör oluşturulamadı: ' . $to
                             . ' (' . ($lastError['message'] ?? 'bilinmeyen hata') . ')',
@@ -640,6 +674,16 @@ final class Updater
                 error_clear_last();
                 if (!@copy($from, $to)) {
                     $lastError = error_get_last();
+                    $this->log(
+                        'COPY FILE FAIL from=' . $from
+                        . ' to=' . $to
+                        . ' from_readable=' . (is_readable($from) ? 'yes' : 'no')
+                        . ' parent_writable=' . (is_writable(dirname($to)) ? 'yes' : 'no')
+                        . ' target_exists=' . (file_exists($to) ? 'yes' : 'no')
+                        . ' target_writable=' . (file_exists($to) && is_writable($to) ? 'yes' : 'no')
+                        . ' source_size=' . (is_file($from) ? (string) filesize($from) : 'n/a')
+                        . ' error=' . ($lastError['message'] ?? 'unknown')
+                    );
                     throw new HttpException(
                         'Dosya kopyalanamadı: ' . $to
                             . ' (' . ($lastError['message'] ?? 'bilinmeyen hata') . ')',
