@@ -40,6 +40,8 @@ final class Updater
      */
     public function run(bool $force = false, $requestedVersion = null): array
     {
+        $this->extendExecutionTime();
+
         $owner  = $this->config['github_owner'] ?? '';
         $repo   = $this->config['github_repo'] ?? '';
         $branch = $this->config['github_branch'] ?? 'main';
@@ -80,11 +82,23 @@ final class Updater
         @unlink($tmpZip);
 
         try {
+            $this->log("FIND SOURCE START {$extractDir}");
             $sourceRoot = $this->findBackendApiRoot($extractDir, $repo, $sha);
-            $backupPath = $this->backupCurrent();
+            $this->log("FIND SOURCE OK {$sourceRoot}");
+
+            $this->extendExecutionTime();
+            $this->log('BACKUP START');
+            try {
+                $backupPath = $this->backupCurrent();
+            } catch (\Throwable $e) {
+                $backupPath = null;
+                $this->log('BACKUP FAIL ' . get_class($e) . ': ' . $e->getMessage() . ' -- update continues without backup');
+            }
+            $this->log('BACKUP OK ' . ($backupPath ?? 'none'));
 
             try {
                 $this->log("COPY START {$sourceRoot} -> {$this->root}");
+                $this->extendExecutionTime();
                 $this->copyOverlay($sourceRoot, $this->root);
                 $this->log("COPY OK {$sourceRoot} -> {$this->root}");
             } catch (\Throwable $e) {
@@ -98,11 +112,32 @@ final class Updater
                 );
             }
 
+            $this->extendExecutionTime();
+            $this->log('STATE WRITE START');
             $this->writeState($sha, $version, $previousSha, $previousVersion, $changelog);
+            $this->log('STATE WRITE OK');
             $this->log("OK  {$previousVersion}({$previousSha}) -> {$version}({$sha})");
+        } catch (\Throwable $e) {
+            $this->log('INSTALL FAIL ' . get_class($e) . ': ' . $e->getMessage());
+
+            throw new HttpException(
+                'Guncelleme kurulum asamasinda basarisiz oldu: ' . $e->getMessage(),
+                $e instanceof HttpException ? $e->errorCode() : 'UPDATE_INSTALL',
+                $e instanceof HttpException ? $e->httpStatus() : 500,
+                $e
+            );
         } finally {
-            $this->removeDir($extractDir);
+            try {
+                $this->log("CLEANUP START {$extractDir}");
+                $this->extendExecutionTime();
+                $this->removeDir($extractDir);
+                $this->log("CLEANUP OK {$extractDir}");
+            } catch (\Throwable $e) {
+                $this->log('CLEANUP FAIL ' . get_class($e) . ': ' . $e->getMessage());
+            }
         }
+
+        $this->log('RETURN SUCCESS RESPONSE');
 
         return [
             'updated'      => $previousSha !== $sha,
@@ -542,7 +577,19 @@ final class Updater
      */
     private function findBackendApiRoot(string $extractDir, string $repo, string $sha): string
     {
-        $entries = array_values(array_diff((array) scandir($extractDir), ['.', '..']));
+        error_clear_last();
+        $scannedEntries = @scandir($extractDir);
+        if ($scannedEntries === false) {
+            $lastError = error_get_last();
+            throw new HttpException(
+                'Arsiv cikarma klasoru okunamadi: ' . $extractDir
+                    . ' (' . ($lastError['message'] ?? 'bilinmeyen hata') . ')',
+                'UPDATE_ZIP_LAYOUT',
+                500
+            );
+        }
+
+        $entries = array_values(array_diff($scannedEntries, ['.', '..']));
         $rootFolder = null;
 
         foreach ($entries as $entry) {
@@ -572,6 +619,12 @@ final class Updater
      */
     private function backupCurrent()
     {
+        if (empty($this->config['update_backup_enabled'])) {
+            $this->log('BACKUP SKIP update_backup_enabled=false');
+
+            return null;
+        }
+
         if (!class_exists('ZipArchive')) {
             return null;
         }
@@ -589,7 +642,7 @@ final class Updater
             return null;
         }
 
-        $this->addDirToZip($zip, $this->root, '');
+        $this->addDirToZip($zip, $this->root, '', $this->backupExcludePaths($backupDir));
         $zip->close();
 
         $this->pruneBackups($backupDir, 3);
@@ -597,22 +650,74 @@ final class Updater
         return $backupPath;
     }
 
-    private function addDirToZip(\ZipArchive $zip, string $dir, string $prefix): void
+    /**
+     * @param array<int,string> $excludedPaths
+     */
+    private function addDirToZip(\ZipArchive $zip, string $dir, string $prefix, array $excludedPaths = []): void
     {
+        $this->extendExecutionTime();
+
         foreach ((array) scandir($dir) as $entry) {
-            if ($entry === '.' || $entry === '..' || $entry === '.backups') {
+            if ($entry === '.' || $entry === '..') {
                 continue;
             }
 
             $fullPath = $dir . '/' . $entry;
+            if ($this->isBackupExcludedPath($fullPath, $excludedPaths)) {
+                continue;
+            }
+
             $zipPath = $prefix === '' ? $entry : $prefix . '/' . $entry;
 
             if (is_dir($fullPath)) {
-                $this->addDirToZip($zip, $fullPath, $zipPath);
+                $this->addDirToZip($zip, $fullPath, $zipPath, $excludedPaths);
             } else {
                 $zip->addFile($fullPath, $zipPath);
             }
         }
+    }
+
+    /**
+     * @return array<int,string>
+     */
+    private function backupExcludePaths(string $backupDir): array
+    {
+        $paths = [
+            $backupDir,
+            $this->tmpDir(),
+            $this->root . '/.update.log',
+            $this->root . '/.deploy-state.json',
+        ];
+
+        $normalized = [];
+        foreach ($paths as $path) {
+            $real = realpath($path);
+            $normalized[] = $this->normalizePath($real !== false ? $real : $path);
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    /**
+     * @param array<int,string> $excludedPaths
+     */
+    private function isBackupExcludedPath(string $path, array $excludedPaths): bool
+    {
+        $real = realpath($path);
+        $path = $this->normalizePath($real !== false ? $real : $path);
+
+        foreach ($excludedPaths as $excludedPath) {
+            if ($path === $excludedPath || strpos($path, $excludedPath . '/') === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function normalizePath(string $path): string
+    {
+        return rtrim(str_replace('\\', '/', $path), '/');
     }
 
     private function pruneBackups(string $backupDir, int $keep): void
@@ -700,7 +805,20 @@ final class Updater
         if (!is_dir($dir)) {
             return;
         }
-        foreach ((array) scandir($dir) as $entry) {
+
+        error_clear_last();
+        $entries = @scandir($dir);
+        if ($entries === false) {
+            $lastError = error_get_last();
+            throw new HttpException(
+                'Silinecek klasor okunamadi: ' . $dir
+                    . ' (' . ($lastError['message'] ?? 'bilinmeyen hata') . ')',
+                'UPDATE_CLEANUP',
+                500
+            );
+        }
+
+        foreach ($entries as $entry) {
             if ($entry === '.' || $entry === '..') {
                 continue;
             }
@@ -708,10 +826,41 @@ final class Updater
             if (is_dir($path)) {
                 $this->removeDir($path);
             } else {
-                @unlink($path);
+                error_clear_last();
+                if (!@unlink($path) && file_exists($path)) {
+                    $lastError = error_get_last();
+                    $this->log(
+                        'CLEANUP FILE FAIL path=' . $path
+                        . ' writable=' . (is_writable($path) ? 'yes' : 'no')
+                        . ' parent_writable=' . (is_writable(dirname($path)) ? 'yes' : 'no')
+                        . ' error=' . ($lastError['message'] ?? 'unknown')
+                    );
+                    throw new HttpException(
+                        'Gecici dosya silinemedi: ' . $path
+                            . ' (' . ($lastError['message'] ?? 'bilinmeyen hata') . ')',
+                        'UPDATE_CLEANUP',
+                        500
+                    );
+                }
             }
         }
-        @rmdir($dir);
+
+        error_clear_last();
+        if (!@rmdir($dir) && is_dir($dir)) {
+            $lastError = error_get_last();
+            $this->log(
+                'CLEANUP DIR FAIL path=' . $dir
+                . ' writable=' . (is_writable($dir) ? 'yes' : 'no')
+                . ' parent_writable=' . (is_writable(dirname($dir)) ? 'yes' : 'no')
+                . ' error=' . ($lastError['message'] ?? 'unknown')
+            );
+            throw new HttpException(
+                'Gecici klasor silinemedi: ' . $dir
+                    . ' (' . ($lastError['message'] ?? 'bilinmeyen hata') . ')',
+                'UPDATE_CLEANUP',
+                500
+            );
+        }
     }
 
     /**
@@ -744,6 +893,15 @@ final class Updater
         file_put_contents($this->root . '/.update.log', $entry, FILE_APPEND);
     }
 
+    private function extendExecutionTime(): void
+    {
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(300);
+        }
+
+        @ini_set('max_execution_time', '300');
+    }
+
     /**
      * @return array<int,string>
      */
@@ -766,13 +924,16 @@ final class Updater
      */
     private function httpGet(string $url, array $headers, bool $binary = false): array
     {
+        $this->extendExecutionTime();
+
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
             curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
             curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 20);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 240);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
             $body = curl_exec($ch);
             $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -786,7 +947,7 @@ final class Updater
             'http' => [
                 'method'        => 'GET',
                 'header'        => implode("\r\n", $headers),
-                'timeout'       => 60,
+                'timeout'       => 240,
                 'follow_location' => 1,
                 'max_redirects' => 5,
             ],
