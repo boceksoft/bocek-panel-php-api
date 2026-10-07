@@ -537,6 +537,7 @@ WHERE h.id = {$entityId}";
         $paymentWaiting = false;
         $heatingFees = [];
         $extraServices = [];
+        $heatingPriceDivisor = !empty($this->app['calculate_heating_price_is_weekly']) ? 7 : 1;
 
         while ($date <= $last) {
             $day = $date->format('Y-m-d');
@@ -556,7 +557,7 @@ WHERE h.id = {$entityId}";
             if ($day !== $end) {
                 $stmt = $pdo->prepare(
                     "SELECT :day AS tarih,
-                            CAST(isitmaFiyat * :buy AS int) AS isitmaFiyat,
+                            CAST((ISNULL(TRY_CONVERT(float, NULLIF(REPLACE(CONVERT(nvarchar(64), isitmaFiyat), ',', '.'), '')), 0) / {$heatingPriceDivisor}) * :buy AS int) AS isitmaFiyat,
                             isitmaHizmetDisi
                      FROM sezonlar
                      WHERE site = {$site}

@@ -68,7 +68,7 @@ final class Updater
                 'to_version'   => $version,
                 'from_sha'     => $previousSha,
                 'to_sha'       => $sha,
-                'changelog'    => [],
+                'changelog'    => $this->fetchRecentCommits($owner, $repo, $token, $sha, 10),
                 'backup'       => null,
             ];
         }
@@ -223,7 +223,11 @@ final class Updater
      */
     private function fetchChangelog(string $owner, string $repo, string $token, $base, string $head): array
     {
-        if ($base === null || $base === $head) {
+        if ($base === null) {
+            return $this->fetchRecentCommits($owner, $repo, $token, $head, 10);
+        }
+
+        if ($base === $head) {
             return [];
         }
 
@@ -255,6 +259,46 @@ final class Updater
             ];
 
             if (count($commits) >= 50) {
+                break;
+            }
+        }
+
+        return $commits;
+    }
+
+    /**
+     * @return array<int,array{sha:string,message:string}>
+     */
+    private function fetchRecentCommits(string $owner, string $repo, string $token, string $sha, int $limit): array
+    {
+        $url = "https://api.github.com/repos/{$owner}/{$repo}/commits?sha={$sha}&per_page={$limit}";
+        [$status, $body] = $this->httpGet($url, $this->githubHeaders($token, 'application/vnd.github+json'));
+
+        if ($status !== 200) {
+            $this->log("UYARI: son commitler alinamadi (HTTP {$status}) {$sha}");
+
+            return [];
+        }
+
+        $data = json_decode($body, true);
+        if (!is_array($data)) {
+            return [];
+        }
+
+        $commits = [];
+        foreach ($data as $commit) {
+            $message = (string) ($commit['commit']['message'] ?? '');
+            $firstLine = trim(explode("\n", $message)[0]);
+            if ($firstLine === '') {
+                continue;
+            }
+
+            $commits[] = [
+                'sha'     => substr((string) ($commit['sha'] ?? ''), 0, 7),
+                'message' => $firstLine,
+            ];
+
+            if (count($commits) >= $limit) {
                 break;
             }
         }

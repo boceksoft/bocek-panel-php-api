@@ -566,6 +566,34 @@ END;
 GO
 
 IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'btrans_iban') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [btrans_iban] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'btrans_odeme_bilgisi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [btrans_odeme_bilgisi] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'btrans_odeme_yontemi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [btrans_odeme_yontemi] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'iyzico_odeme') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [iyzico_odeme] bit NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kayitlar]', N'MigrationStatus') IS NULL
 BEGIN
 ALTER TABLE [dbo].[kayitlar] ADD [MigrationStatus] bit NOT NULL CONSTRAINT [DF_kayitlar_MigrationStatus] DEFAULT 0;
@@ -2842,6 +2870,34 @@ IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kayitlar]', N'maliyet') IS NULL
 BEGIN
 ALTER TABLE [dbo].[kayitlar] ADD [maliyet] nvarchar(50) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'btrans_iban') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [btrans_iban] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'btrans_odeme_bilgisi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [btrans_odeme_bilgisi] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'btrans_odeme_yontemi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [btrans_odeme_yontemi] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'iyzico_odeme') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [iyzico_odeme] bit NULL;
 END;
 GO
 

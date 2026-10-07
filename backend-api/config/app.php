@@ -124,6 +124,10 @@ return [
     // false ise hesaplama istekte gelen site id ile yapilir.
     'calculate_prices_same_across_sites' => true,
 
+    // true ise sezonlar.isitmaFiyat haftalik kabul edilir ve gunluk hesap icin 7'ye bolunur.
+    // false ise sezonlar.isitmaFiyat gunluk fiyat kabul edilir.
+    'calculate_heating_price_is_weekly' => false,
+
     // Homes endpoint'inde siteye gore URL/foto domain'i.
     // Sorgu ilk satirda "domain" alias'i dondurmelidir.
     'homes_site_domain_queries' => [
@@ -161,6 +165,7 @@ return [
         'site_column_suffixes' => 'array',
         'site_languages' => 'array',
         'calculate_prices_same_across_sites' => 'bool',
+        'calculate_heating_price_is_weekly' => 'bool',
     ],
 
     // DB bilgileri ($config['db']) ve Domain sabitinin geldiği,
