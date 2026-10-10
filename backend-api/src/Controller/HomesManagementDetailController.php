@@ -70,7 +70,7 @@ final class HomesManagementDetailController extends Controller
         $tipCat0Aktif = $this->fetchAll($pdo, 'SELECT * FROM tip WHERE cat = 0 AND aktif = 1 ORDER BY baslik ASC');
         $images = $this->fetchAll(
             $pdo,
-            "SELECT UploadId, filename, aciklama
+            "SELECT UploadId, filename, aciklama, sira
              FROM upload
              WHERE islm = 'emlak' AND islm_id = :id
              ORDER BY sira ASC",
@@ -1174,6 +1174,7 @@ final class HomesManagementDetailController extends Controller
                 'fileName' => $filename,
                 'url' => $cdnBase . $filename,
                 'aciklama' => $this->firstNonEmptyValue($row, ['aciklama']),
+                'sira' => (int) ($row['sira'] ?? 0),
                 'kapak' => isset($kapakMap[$filename]),
             ];
         }

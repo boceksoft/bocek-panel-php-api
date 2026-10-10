@@ -20,9 +20,20 @@ final class AvailabilityController extends Controller
      */
     public function index(): void
     {
-        $entityId = (int) $this->request->query('EntityId', $this->request->query('id', 0));
-        if ($entityId === 0) {
-            throw new HttpException('EntityId belirtilmedi.', 'VALIDATION', 422);
+        $entityIdsStr = $this->request->query('EntityIds', $this->request->query('EntityId', $this->request->query('id', '')));
+        $entityIds = [];
+        $isBulk = false;
+        if (strpos((string)$entityIdsStr, ',') !== false) {
+            $isBulk = true;
+            $entityIds = array_filter(array_map('intval', explode(',', (string)$entityIdsStr)));
+        } else {
+            $eId = (int) $entityIdsStr;
+            if ($eId > 0) {
+                $entityIds[] = $eId;
+            }
+        }
+        if (empty($entityIds)) {
+            throw new HttpException('EntityId(s) belirtilmedi.', 'VALIDATION', 422);
         }
 
         $pdo = $this->db->pdo();
@@ -35,8 +46,10 @@ final class AvailabilityController extends Controller
         $ruleshomesHomesIdSql = $this->qualifiedExistingColumn($pdo, 'dbo.ruleshomes', 'rh', ['homesid', 'homesId'], 'Ruleshomes homes id kolonu bulunamadi.');
         $rulesruletypesRulesIdSql = $this->qualifiedExistingColumn($pdo, 'dbo.rulesruletypes', 'rulesruletypes', ['rulesid', 'rulesId'], 'Rulesruletypes rules id kolonu bulunamadi.');
 
-        // Home bilgisi (döviz + sembol)
-        $homeStmt = $pdo->prepare(
+        $results = [];
+        foreach ($entityIds as $entityId) {
+            // Home bilgisi (döviz + sembol)
+            $homeStmt = $pdo->prepare(
             "SELECT h.id, h.doviz{$uzanti} AS doviz, ISNULL(ToC.Symbol, N'TL') AS Symbol
              FROM homes h
              LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
@@ -160,10 +173,21 @@ final class AvailabilityController extends Controller
             }
         }
 
-        $this->response->success([
-            'symbol' => $home['Symbol'],
-            'data'   => $data,
-        ]);
+            $results[$entityId] = [
+                'symbol' => $home['Symbol'],
+                'data'   => $data,
+            ];
+        }
+
+        if ($isBulk) {
+            $this->response->success($results);
+        } else {
+            $eId = $entityIds[0] ?? 0;
+            if (!isset($results[$eId])) {
+                throw new HttpException('Kayit bulunamadi.', 'NOT_FOUND', 404);
+            }
+            $this->response->success($results[$eId]);
+        }
     }
 
     private function qualifiedExistingColumn(\PDO $pdo, string $table, string $alias, array $columns, string $errorMessage): string
