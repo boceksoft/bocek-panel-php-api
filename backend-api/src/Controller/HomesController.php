@@ -27,7 +27,7 @@ final class HomesController extends Controller
      * @query tip string Tip kimlik(ler)i (virgüllü ya da tekrarlı)
      * @query bolge string Bölge kimlik(ler)i
      * @query ozellik string Özellik kimlik(ler)i
-     * @query villaadi string Villa adı araması
+     * @query villaadi string Villa adı / gavel belge no araması
      * @query order_by int Sıralama (0-6)
      * @query page int Sayfa
      * @query per_page int Sayfa başına kayıt
@@ -250,7 +250,7 @@ final class HomesController extends Controller
 
         if ($villaadi !== '') {
             $params[':villaadi'] = "%{$villaadi}%";
-            $sql .= ' AND h.baslik LIKE :villaadi';
+            $sql .= ' AND (h.baslik LIKE :villaadi OR CONVERT(varchar(128), h.gavelBelgeNo) LIKE :villaadi)';
         }
 
         // ORDER BY + sayfalama
@@ -327,7 +327,7 @@ final class HomesController extends Controller
         return "
 SELECT
     COUNT(*) OVER() AS totalCount,
-    h.yatak_odasi, h.id,
+    h.yatak_odasi, h.id, h.gavelBelgeNo,
     h.url{$c['dbt']} AS url,
     h.title{$c['dbt']} AS title,
     h.kisa_icerik{$c['dbt']} AS kisa_icerik,

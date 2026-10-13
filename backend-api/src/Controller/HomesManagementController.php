@@ -18,8 +18,8 @@ final class HomesManagementController extends Controller
      * @Get
      * @query page int Page number
      * @query per_page int Rows per page
-     * @query keyword string Search by title, code or id
-     * @query title string Search by title or code
+     * @query keyword string Search by title, code, document number or id
+     * @query title string Search by title, code or document number
      * @query region string Region id
      * @query type int Home type id
      * @query active int Active status
@@ -427,22 +427,28 @@ WHERE {$whereSql}
         $parts = [];
         $titleNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE({$titleColumn}, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
         $codeNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE(h.evkodu, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
+        $documentNo = "ISNULL(gavel.gavelBelgeNo, '')";
+        $documentNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE({$documentNo}, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
         $valueNoSpace = preg_replace('/\s+/', '', $value) ?? '';
         foreach ($tokens as $index => $token) {
             $titleParam = ':' . $prefix . 'Name' . $index;
             $codeParam = ':' . $prefix . 'Code' . $index;
-            $parts[] = "({$titleColumn} LIKE {$titleParam} OR h.evkodu LIKE {$codeParam})";
+            $documentParam = ':' . $prefix . 'DocumentNo' . $index;
+            $parts[] = "({$titleColumn} LIKE {$titleParam} OR h.evkodu LIKE {$codeParam} OR {$documentNo} LIKE {$documentParam})";
             $params[$titleParam] = '%' . $token . '%';
             $params[$codeParam] = '%' . $token . '%';
+            $params[$documentParam] = '%' . $token . '%';
         }
 
         $textWhere = '(' . implode(' AND ', $parts) . ')';
         if ($valueNoSpace !== '') {
             $titleNoSpaceParam = ':' . $prefix . 'TitleNoSpace';
             $codeNoSpaceParam = ':' . $prefix . 'CodeNoSpace';
-            $textWhere = "({$textWhere} OR {$titleNoSpace} LIKE {$titleNoSpaceParam} OR {$codeNoSpace} LIKE {$codeNoSpaceParam})";
+            $documentNoSpaceParam = ':' . $prefix . 'DocumentNoSpace';
+            $textWhere = "({$textWhere} OR {$titleNoSpace} LIKE {$titleNoSpaceParam} OR {$codeNoSpace} LIKE {$codeNoSpaceParam} OR {$documentNoSpace} LIKE {$documentNoSpaceParam})";
             $params[$titleNoSpaceParam] = '%' . $valueNoSpace . '%';
             $params[$codeNoSpaceParam] = '%' . $valueNoSpace . '%';
+            $params[$documentNoSpaceParam] = '%' . $valueNoSpace . '%';
         }
         if ($includeExactId) {
             $exactIdParam = ':' . $prefix . 'Exact';
