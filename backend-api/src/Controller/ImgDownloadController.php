@@ -2,6 +2,7 @@
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\Uploads;
 
 /*
  * Ilan detaylarinda fotograf yÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼klemek iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§in endpoint.
@@ -247,6 +248,26 @@ final class ImgDownloadController extends Controller
         } else {
             throw new HttpException('Fotograf kaydedilemedi.', 'SAVE_FAILED', 500);
         }
+    }
+
+    /**
+     * Metin editoru (CKEditor) gorseli: uploads/images/ altina kaydeder, icerige yazilacak tam adresi dondurur.
+     *
+     * @Post("editor")
+     */
+    public function editor(): void
+    {
+        $filename = Uploads::storeImage('image', [
+            'image/jpeg' => 'jpg',
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+            'image/gif' => 'gif',
+        ], 'images');
+
+        $this->response->success([
+            'fileName' => $filename,
+            'url' => Uploads::cdnDomain() . '/uploads/images/' . $filename,
+        ], 201);
     }
 
     private function imageName(string $value): string

@@ -74,6 +74,7 @@ VALUES
     (N'dbo', N'dolu', N'id'),
     (N'dbo', N'dolu', N'IsExternal'),
     (N'dbo', N'dolu', N'kayitid'),
+    (N'dbo', N'dolu', N'rez_tip'),
     (N'dbo', N'dolu', N'tarih'),
     (N'dbo', N'dolu', N'tarih2'),
     (N'dbo', N'dolu_fake', N'emlak'),

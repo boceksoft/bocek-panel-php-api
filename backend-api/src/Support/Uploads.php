@@ -1,0 +1,109 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Support;
+
+use App\Core\HttpException;
+
+/*
+ * Panelden yuklenen gorseller icin ortak uploads/ klasoru ve CDN adresi.
+ * Klasor, ImgDownloadController ile ayni sekilde resizerPHP/config.json "base" ayarindan cozulur.
+ */
+final class Uploads
+{
+    private const MAX_BYTES = 10 * 1024 * 1024;
+
+    public static function dir(): string
+    {
+        $rootDir = dirname(__DIR__, 4);
+        $cdnFolder = 'cdn';
+        if (defined('Cdn')) {
+            $parsedHost = parse_url((string) constant('Cdn'), PHP_URL_HOST);
+            if ($parsedHost) {
+                $domainHost = defined('Domain') ? parse_url((string) constant('Domain'), PHP_URL_HOST) : '';
+                $cdnFolder = (strpos($parsedHost, 'www.') === 0 || ($domainHost && $parsedHost === $domainHost))
+                    ? 'httpdocs'
+                    : $parsedHost;
+            }
+        }
+
+        $uploadsDir = $rootDir . DIRECTORY_SEPARATOR . 'httpdocs' . DIRECTORY_SEPARATOR . 'uploads';
+        $configPath = $rootDir . DIRECTORY_SEPARATOR . $cdnFolder . DIRECTORY_SEPARATOR . 'resizerPHP' . DIRECTORY_SEPARATOR . 'config.json';
+        if (@file_exists($configPath)) {
+            $cdnConfig = json_decode((string) @file_get_contents($configPath), true);
+            if (is_array($cdnConfig) && isset($cdnConfig['base'])) {
+                $calculated = realpath(dirname($configPath) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, (string) $cdnConfig['base']));
+                if ($calculated && is_dir($calculated)) {
+                    $uploadsDir = $calculated;
+                }
+            }
+        }
+
+        if (!is_dir($uploadsDir)) {
+            throw new HttpException('Uploads klasoru bulunamadi.', 'UPLOADS_DIR_INVALID', 500);
+        }
+
+        return $uploadsDir;
+    }
+
+    /**
+     * Cdn sabiti, yoksa Domain; sonunda "/" olmadan ve https:// ile.
+     */
+    public static function cdnDomain(): string
+    {
+        $domain = defined('Cdn') ? trim((string) constant('Cdn')) : '';
+        if ($domain === '') {
+            $domain = defined('Domain') ? trim((string) constant('Domain')) : '';
+        }
+        $domain = rtrim($domain, '/');
+        if ($domain !== '' && preg_match('#^https?://#i', $domain) !== 1) {
+            $domain = 'https://' . $domain;
+        }
+
+        return $domain;
+    }
+
+    /**
+     * $_FILES[$field] gorselini dogrulayip rastgele adla uploads/ (veya uploads/{$subDir}/) altina kaydeder
+     * ve dosya adini dondurur.
+     *
+     * @param array<string,string> $allowed mime => uzanti
+     */
+    public static function storeImage(string $field, array $allowed, string $subDir = ''): string
+    {
+        if ($subDir !== '' && preg_match('/^[A-Za-z0-9_-]+$/', $subDir) !== 1) {
+            throw new HttpException('Gecersiz klasor adi.', 'VALIDATION', 422);
+        }
+        if (!isset($_FILES[$field]) || $_FILES[$field]['error'] !== UPLOAD_ERR_OK) {
+            throw new HttpException('Gecerli bir dosya yuklenmedi.', 'UPLOAD_FAILED', 400);
+        }
+        if ($_FILES[$field]['size'] > self::MAX_BYTES) {
+            throw new HttpException('Dosya boyutu 10MB limitini asiyor.', 'FILE_TOO_LARGE', 400);
+        }
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mime = finfo_file($finfo, $_FILES[$field]['tmp_name']);
+        finfo_close($finfo);
+        if (!isset($allowed[$mime])) {
+            throw new HttpException('Desteklenmeyen gorsel formati.', 'INVALID_FILE_TYPE', 400);
+        }
+
+        try {
+            $filename = bin2hex(random_bytes(16)) . '.' . $allowed[$mime];
+        } catch (\Exception $e) {
+            $filename = md5(uniqid('', true)) . '.' . $allowed[$mime];
+        }
+
+        $targetDir = self::dir() . ($subDir !== '' ? DIRECTORY_SEPARATOR . $subDir : '');
+        if (!is_dir($targetDir) && !@mkdir($targetDir, 0755, true)) {
+            throw new HttpException($subDir . ' klasoru olusturulamadi.', 'MKDIR_FAILED', 500);
+        }
+
+        if (!move_uploaded_file($_FILES[$field]['tmp_name'], $targetDir . DIRECTORY_SEPARATOR . $filename)) {
+            throw new HttpException('Gorsel kaydedilemedi.', 'SAVE_FAILED', 500);
+        }
+
+        return $filename;
+    }
+}

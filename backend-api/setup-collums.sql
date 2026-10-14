@@ -131,6 +131,13 @@ ALTER TABLE [dbo].[dolu] ADD [IsExternal] bit NULL CONSTRAINT DF_dolu_IsExternal
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[dolu]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[dolu]', N'rez_tip') IS NULL
+BEGIN
+ALTER TABLE [dbo].[dolu] ADD [rez_tip] nvarchar(50) NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[dolu_fake]', N'U') IS NULL
 BEGIN
 CREATE TABLE [dbo].[dolu_fake]
