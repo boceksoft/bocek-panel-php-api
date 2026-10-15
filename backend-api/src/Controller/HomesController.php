@@ -249,8 +249,9 @@ final class HomesController extends Controller
         }
 
         if ($villaadi !== '') {
-            $params[':villaadi'] = "%{$villaadi}%";
-            $sql .= ' AND (h.baslik LIKE :villaadi OR CONVERT(varchar(128), h.gavelBelgeNo) LIKE :villaadi)';
+            $params[':villa_baslik'] = "%{$villaadi}%";
+            $params[':villa_belge'] = "%{$villaadi}%";
+            $sql .= ' AND (h.baslik LIKE :villa_baslik OR CONVERT(varchar(128), h.gavelBelgeNo) LIKE :villa_belge)';
         }
 
         // ORDER BY + sayfalama
