@@ -30,6 +30,8 @@ final class ReservationsController extends Controller
         $useAcentaUsers = !empty($this->app['reservation_filters_use_acenta_users']);
         $useMaliyetColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'maliyet');
         $hasMigrationStatusColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'MigrationStatus');
+        // Ayar aciksa toplamlarin yanina onayli ve onaydan iptale gecen (durum=7) sayilari da eklenir.
+        $useStatusLog = $this->configBool('reservation_filters_use_status_log', false);
 
         // Sayfalama
         $page       = max(1, $this->pInt('page', $this->pInt('s', 1)));
@@ -55,7 +57,25 @@ final class ReservationsController extends Controller
         $hasDurum6        = strpos(',' . str_replace(' ', '', $combinedDurumRaw) . ',', ',6,') !== false;
 
         $girisTarih1P = $this->p('girisTarih1');
-        if (!$hasDurum6 && $girisTarih1P === '') {
+
+        // Operasyon (Natsisa) startDate / endDate gonderir; bunlar rezervasyonun islem tarihine (rezTarih) uygulanir.
+        // endDate haric (guest-movements ile ayni): 20-22 secimi startDate=20, endDate=23 olarak gelir.
+        $operationStartDate = $this->p('rezTarih1') === '' ? $this->guestStyleDate(['startDate', 'start_date', 'date']) : null;
+        if ($operationStartDate !== null) {
+            $rezTarih1 = $operationStartDate->format('d.m.Y');
+            if ($this->p('rezTarih2') === '') {
+                $operationEndDate = $this->guestStyleDate(['endDate', 'end_date']);
+                $rangeEnd = $operationEndDate !== null && $operationEndDate > $operationStartDate
+                    ? (clone $operationEndDate)->modify('-1 day')
+                    : $operationStartDate;
+                $rezTarih2 = $rangeEnd->format('d.m.Y');
+            }
+        }
+
+        // Islem tarihi araligi (rezTarih1/rezTarih2 ya da operasyon startDate) verildiyse
+        // giris tarihi icin varsayilan "bugun ve sonrasi" filtresi uygulanmaz.
+        $hasRezTarihFilter = $this->p('rezTarih1') !== '' || $this->p('rezTarih2') !== '';
+        if (!$hasDurum6 && $girisTarih1P === '' && $operationStartDate === null && !$hasRezTarihFilter) {
             $girisTarih1P = date('d.m.Y');
         }
         $girisTarih1 = $this->parseTrDate($girisTarih1P);
@@ -149,11 +169,13 @@ final class ReservationsController extends Controller
             $where[] = 'au.id = :altacenta';
             $params[':altacenta'] = $altacentaInt;
         }
+        // Durum filtreleri ayri tutulur: onayli / onaydan iptal toplamlari durum filtresinden bagimsiz sayilir.
+        $statusWhere = [];
         if ($rezDurumu !== '') {
-            $where[] = $this->statusFilterSql($rezDurumu);
+            $statusWhere[] = $this->statusFilterSql($rezDurumu);
         }
         if ($durum !== '') {
-            $where[] = $this->statusFilterSql($durum);
+            $statusWhere[] = $this->statusFilterSql($durum);
         }
         if ($promosyon !== '') {
             $where[] = 'kayitlar.promotionCode = :promosyon';
@@ -176,6 +198,8 @@ final class ReservationsController extends Controller
             $where[] = 'ISNULL(kanun7464.gavel, 0) = 1';
         }
 
+        $whereNoStatusSql = 'WHERE 1=1 AND ' . implode(' AND ', $where);
+        $where = array_merge($where, $statusWhere);
         $whereSql = $where ? ('WHERE 1=1 AND ' . implode(' AND ', $where)) : 'WHERE 1=1';
 
         $orderSql = 'ORDER BY kayitlar.id DESC';
@@ -185,7 +209,8 @@ final class ReservationsController extends Controller
             $orderSql,
             $allRows,
             $useAcentaUsers,
-            $useMaliyetColumn
+            $useMaliyetColumn,
+            $kisibilgileri === '>' || $kisibilgileri === '='
         );
 
         // Çalıştır
@@ -208,6 +233,8 @@ final class ReservationsController extends Controller
         $toplamKar      = 0.0;
         $toplamMaliyet  = 0.0;
         $toplamTemizlik = 0.0;
+        $toplamOnayli   = 0;
+        $toplamOnaydanIptal = 0;
         $yeniRezervasyon = $hasMigrationStatusColumn ? $this->hasNewReservation($pdo) : false;
 
         if (count($rows) > 0) {
@@ -220,37 +247,98 @@ final class ReservationsController extends Controller
             $toplamTemizlik = (float) $rows[0]['sumTemizlik'];
         }
 
+        // Onayli ve onaydan iptal sayilari: secili durum filtresi (orn. sadece 3 ya da sadece 7) haric,
+        // diger tum filtrelerle (tarih, site, acenta...) o aralikta kac tane varsa ikisi birden.
+        if ($useStatusLog) {
+            $statusTotalsStmt = $pdo->prepare($this->buildStatusTotalsSql(
+                $whereNoStatusSql,
+                $useAcentaUsers,
+                $kisibilgileri === '>' || $kisibilgileri === '='
+            ));
+            foreach ($params as $key => $value) {
+                $statusTotalsStmt->bindValue($key, $value);
+            }
+            $statusTotalsStmt->execute();
+            $statusTotalsRow = $statusTotalsStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $toplamOnayli       = (int) ($statusTotalsRow['countOnayli'] ?? 0);
+            $toplamOnaydanIptal = (int) ($statusTotalsRow['countOnaydanIptal'] ?? 0);
+        }
+
         $rows = $this->normalizeRows($rows);
 
+        $statusTotals = $useStatusLog
+            ? ['total_onayli' => $toplamOnayli, 'total_onaydan_iptal' => $toplamOnaydanIptal]
+            : [];
+
         $this->response->success([
-            'status'      => 'success',
-            'total'       => $totalCount,
-            'page'        => $allRows ? 1 : $page,
-            'per_page'    => $allRows ? $totalCount : $perPage,
-            'total_pages' => $allRows ? 1 : (int) ceil($totalCount / max(1, $perPage)),
-            'yenireservasyon' => $yeniRezervasyon,
-            'count'       => count($rows),
+                'status'      => 'success',
+                'total'       => $totalCount,
+            ] + $statusTotals + [
+                'page'        => $allRows ? 1 : $page,
+                'per_page'    => $allRows ? $totalCount : $perPage,
+                'total_pages' => $allRows ? 1 : (int) ceil($totalCount / max(1, $perPage)),
+                'yenireservasyon' => $yeniRezervasyon,
+                'count'       => count($rows),
 
-            'ciro_bilgileri' => [
-                'toplamTutar'    => round($toplamTutar,    2),
-                'toplamOnOdeme'  => round($toplamOnOdeme,  2),
-                'toplamKalan'    => round($toplamKalan,    2),
-                'toplamKar'      => round($toplamKar,      2),
-                'toplamMaliyet'  => round($toplamMaliyet,  2),
-                'toplamTemizlik' => round($toplamTemizlik, 2),
-            ],
+                'ciro_bilgileri' => [
+                    'toplamTutar'    => round($toplamTutar,    2),
+                    'toplamOnOdeme'  => round($toplamOnOdeme,  2),
+                    'toplamKalan'    => round($toplamKalan,    2),
+                    'toplamKar'      => round($toplamKar,      2),
+                    'toplamMaliyet'  => round($toplamMaliyet,  2),
+                    'toplamTemizlik' => round($toplamTemizlik, 2),
+                ],
 
-            'ciro_bilgileri_formatted' => [
-                'toplamTutar'    => $this->trMoney($toplamTutar),
-                'toplamOnOdeme'  => $this->trMoney($toplamOnOdeme),
-                'toplamKalan'    => $this->trMoney($toplamKalan),
-                'toplamKar'      => $this->trMoney($toplamKar),
-                'toplamMaliyet'  => $this->trMoney($toplamMaliyet),
-                'toplamTemizlik' => $this->trMoney($toplamTemizlik),
-            ],
+                'ciro_bilgileri_formatted' => [
+                    'toplamTutar'    => $this->trMoney($toplamTutar),
+                    'toplamOnOdeme'  => $this->trMoney($toplamOnOdeme),
+                    'toplamKalan'    => $this->trMoney($toplamKalan),
+                    'toplamKar'      => $this->trMoney($toplamKar),
+                    'toplamMaliyet'  => $this->trMoney($toplamMaliyet),
+                    'toplamTemizlik' => $this->trMoney($toplamTemizlik),
+                ],
 
-            'data' => $rows,
-        ]);
+                'data' => $rows,
+            ]);
+    }
+
+    /**
+     * Onayli (durum 3) ve onaydan iptal (durum 4 + status_log 3->4) sayilari.
+     * Ana sorgudaki satiri eleyen join'ler (rate, sites, dolu) ve filtrelerin kullandigi tablolar ayni tutulur.
+     */
+    private function buildStatusTotalsSql(string $whereSql, bool $useAcentaUsers, bool $useKisiFilter): string
+    {
+        $acentaJoinSql = $useAcentaUsers
+            ? "
+LEFT  JOIN acenta_kayitlar a ON kayitlar.id = a.kayitId
+LEFT  JOIN acenta_users au ON au.id = a.acentaId"
+            : '';
+        $kisiApplySql = $useKisiFilter
+            ? "
+CROSS APPLY (
+    SELECT COUNT(kb.id) AS total FROM kisi_bilgileri kb WHERE kb.siparis_kodu = kayitlar.id
+) AS kisi"
+            : '';
+
+        return "
+SELECT
+    SUM(CASE WHEN dolu.durum = 3 THEN 1 ELSE 0 END) AS countOnayli,
+    SUM(CASE WHEN dolu.durum = 4 AND onaydan_iptal.found = 1 THEN 1 ELSE 0 END) AS countOnaydanIptal
+FROM kayitlar{$kisiApplySql}
+OUTER APPLY (
+    SELECT TOP 1 1 AS found FROM dbo.reservations_status_log AS status_log
+    WHERE status_log.kayitlarId = kayitlar.id
+      AND status_log.old_status = 3
+      AND status_log.current_status = 4
+) AS onaydan_iptal
+INNER JOIN rate ON rate.CurrencyName = ISNULL(kayitlar.doviz, 'tl')
+LEFT  JOIN homes ON kayitlar.evid = homes.id
+INNER JOIN sites ON sites.id = ISNULL(kayitlar.site, 1)
+LEFT  JOIN kanun7464 ON kanun7464.homeId = homes.id
+INNER JOIN dolu ON dolu.kayitid = kayitlar.id
+$acentaJoinSql
+$whereSql
+";
     }
 
     private function buildSql(
@@ -258,9 +346,18 @@ final class ReservationsController extends Controller
         string $orderSql,
         bool $allRows,
         bool $useAcentaUsers,
-        bool $useMaliyetColumn
+        bool $useMaliyetColumn,
+        bool $useKisiFilter = false
     ): string
     {
+        // Kisi filtresi WHERE'de kullaniliyorsa sayim filtre asamasinda da gerekir.
+        $kisiFilterApplySql = $useKisiFilter
+            ? "
+CROSS APPLY (
+    SELECT COUNT(kb.id) AS total FROM kisi_bilgileri kb WHERE kb.siparis_kodu = kayitlar.id
+) AS kisi"
+            : '';
+
         $maliyetValueSql = $useMaliyetColumn
             ? 'ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.maliyet)), 0)'
             : '0';
@@ -291,7 +388,10 @@ LEFT  JOIN acenta_kayitlar a ON kayitlar.id = a.kayitId
 LEFT  JOIN acenta_users au ON au.id = a.acentaId"
             : '';
 
-        $sql = " 
+        // Hiz: filtre + toplamlar + sayfalama once 'base' icinde yapilir; satir basina pahali alt sorgular
+        // (kisi, opsiyon, dolu_fake) sadece donen sayfadaki satirlar icin calisir. Sonuc ayni.
+        $sql = "
+WITH base AS (
 SELECT
     COUNT(*) OVER() AS totalCount,
     SUM(tutar.toplam_tutar * tutar.kur_carpan) OVER() AS sumTutar,
@@ -355,11 +455,8 @@ $acentaSelectSql
     REPLACE(ISNULL(es.tel, ''), ' ', '') AS evsahibitel,
     ISNULL(homes.rez_takip_yeri_adi, '') AS whatsapp,
     kayitlar.oznot AS oz_not,
-    kisi.total AS kisi_bilgileri_count,
-    opsiyonvarmi.total AS opsiyon_count,
-    CASE WHEN opsiyonvarmi.total > 0 THEN 1 ELSE 0 END AS has_opsiyon,
-    dolu_fake.bizdekitarih AS dolu_fake_count,
-    CASE WHEN dolu_fake.bizdekitarih > 0 THEN 1 ELSE 0 END AS has_bizdeki_tarih,
+    kayitlar.rez_tarihi AS _rez_tarihi_raw,
+    kayitlar.gelecek_tarih AS _gelecek_tarih_raw,
     ISNULL(kayitlar.arandi, 0) AS arandi,
     ISNULL(kayitlar.sozlesme, 0) AS sozlesme,
     ISNULL(kayitlar.gonderildi, 0) AS gonderildi,
@@ -376,33 +473,7 @@ CROSS APPLY (
         ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.temizlik)), 0) AS temizlik,
         ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.kar)), 0) AS kar,
         CASE WHEN kayitlar.doviz = 'tl' THEN 1 ELSE ISNULL(TRY_CONVERT(float, kayitlar.kur), 1) END AS kur_carpan
-) AS tutar
-CROSS APPLY (  
-    SELECT COUNT(kb.id) AS total FROM kisi_bilgileri kb WHERE kb.siparis_kodu = kayitlar.id
-) AS kisi
-CROSS APPLY (
-    SELECT COUNT(ddop.id) AS total FROM dolu ddop
-    WHERE ddop.durum IN (0, 1) AND ddop.emlak = kayitlar.evid AND ISNULL(ddop.kayitid, 0) <> kayitlar.id
-      AND ((kayitlar.rez_tarihi BETWEEN ddop.tarih AND ddop.tarih2)
-        OR (kayitlar.gelecek_tarih BETWEEN ddop.tarih AND ddop.tarih2)
-        OR (ddop.tarih BETWEEN kayitlar.rez_tarihi AND kayitlar.gelecek_tarih)
-        OR (ddop.tarih2 BETWEEN kayitlar.rez_tarihi AND kayitlar.gelecek_tarih))
-) AS opsiyonvarmi 
-OUTER APPLY (
-    SELECT COUNT(df.id) AS bizdekitarih  
-    FROM dolu_fake df
-    WHERE df.emlak = kayitlar.evid
-      AND (
-            (CONVERT(date, df.tarih, 103) >= CONVERT(date, kayitlar.rez_tarihi, 103)
-             AND CONVERT(date, kayitlar.gelecek_tarih, 103) >= CONVERT(date, df.tarih2, 103))
-         OR (CONVERT(date, df.tarih, 103) BETWEEN CONVERT(date, kayitlar.gelecek_tarih, 103) AND CONVERT(date, kayitlar.rez_tarihi, 103)
-             OR CONVERT(date, df.tarih2, 103) BETWEEN CONVERT(date, kayitlar.gelecek_tarih, 103) AND CONVERT(date, kayitlar.rez_tarihi, 103)
-             OR CONVERT(date, kayitlar.rez_tarihi, 103) BETWEEN CONVERT(date, df.tarih, 103) AND CONVERT(date, df.tarih2, 103)
-             OR CONVERT(date, kayitlar.gelecek_tarih, 103) BETWEEN CONVERT(date, df.tarih, 103) AND CONVERT(date, df.tarih2, 103))
-      )
-      AND df.tarih <> kayitlar.gelecek_tarih
-      AND df.tarih2 <> kayitlar.rez_tarihi
-) AS dolu_fake
+) AS tutar{$kisiFilterApplySql}
 INNER JOIN rate ON rate.CurrencyName = ISNULL(kayitlar.doviz, 'tl')
 LEFT  JOIN homes ON kayitlar.evid = homes.id
 INNER JOIN sites ON sites.id = ISNULL(kayitlar.site, 1)
@@ -412,12 +483,44 @@ INNER JOIN dolu ON dolu.kayitid = kayitlar.id
 LEFT  JOIN satis_kanallari sk ON sk.id = kayitlar.satis_kanallari_id
 $acentaJoinSql
 $whereSql
-$orderSql
+" . ($allRows ? '' : "$orderSql OFFSET :offset ROWS FETCH NEXT :perPage ROWS ONLY") . "
+)
+SELECT
+    base.*,
+    kisi.total AS kisi_bilgileri_count,
+    opsiyonvarmi.total AS opsiyon_count,
+    CASE WHEN opsiyonvarmi.total > 0 THEN 1 ELSE 0 END AS has_opsiyon,
+    dolu_fake.bizdekitarih AS dolu_fake_count,
+    CASE WHEN dolu_fake.bizdekitarih > 0 THEN 1 ELSE 0 END AS has_bizdeki_tarih
+FROM base
+CROSS APPLY (
+    SELECT COUNT(kb.id) AS total FROM kisi_bilgileri kb WHERE kb.siparis_kodu = base.id
+) AS kisi
+CROSS APPLY (
+    SELECT COUNT(ddop.id) AS total FROM dolu ddop
+    WHERE ddop.durum IN (0, 1) AND ddop.emlak = base.evid AND ISNULL(ddop.kayitid, 0) <> base.id
+      AND ((base._rez_tarihi_raw BETWEEN ddop.tarih AND ddop.tarih2)
+        OR (base._gelecek_tarih_raw BETWEEN ddop.tarih AND ddop.tarih2)
+        OR (ddop.tarih BETWEEN base._rez_tarihi_raw AND base._gelecek_tarih_raw)
+        OR (ddop.tarih2 BETWEEN base._rez_tarihi_raw AND base._gelecek_tarih_raw))
+) AS opsiyonvarmi
+OUTER APPLY (
+    SELECT COUNT(df.id) AS bizdekitarih
+    FROM dolu_fake df
+    WHERE df.emlak = base.evid
+      AND (
+            (CONVERT(date, df.tarih, 103) >= CONVERT(date, base._rez_tarihi_raw, 103)
+             AND CONVERT(date, base._gelecek_tarih_raw, 103) >= CONVERT(date, df.tarih2, 103))
+         OR (CONVERT(date, df.tarih, 103) BETWEEN CONVERT(date, base._gelecek_tarih_raw, 103) AND CONVERT(date, base._rez_tarihi_raw, 103)
+             OR CONVERT(date, df.tarih2, 103) BETWEEN CONVERT(date, base._gelecek_tarih_raw, 103) AND CONVERT(date, base._rez_tarihi_raw, 103)
+             OR CONVERT(date, base._rez_tarihi_raw, 103) BETWEEN CONVERT(date, df.tarih, 103) AND CONVERT(date, df.tarih2, 103)
+             OR CONVERT(date, base._gelecek_tarih_raw, 103) BETWEEN CONVERT(date, df.tarih, 103) AND CONVERT(date, df.tarih2, 103))
+      )
+      AND df.tarih <> base._gelecek_tarih_raw
+      AND df.tarih2 <> base._rez_tarihi_raw
+) AS dolu_fake
+ORDER BY base.id DESC
 ";
-
-        if (!$allRows) {
-            $sql .= ' OFFSET :offset ROWS FETCH NEXT :perPage ROWS ONLY ';
-        }
 
         return $sql;
     }
@@ -449,7 +552,9 @@ $orderSql
             unset(
                 $row['totalCount'], $row['sumTutar'], $row['sumOnOdeme'],
                 $row['sumKalan'],   $row['sumKar'],
-                $row['sumMaliyet'], $row['sumTemizlik']
+                $row['sumMaliyet'], $row['sumTemizlik'],
+                $row['countOnayli'], $row['countOnaydanIptal'],
+                $row['_rez_tarihi_raw'], $row['_gelecek_tarih_raw']
             );
 
             foreach ($moneyFields as $f) {
@@ -638,6 +743,33 @@ $orderSql
     /**
      * @return string|null
      */
+    /**
+     * YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY ve Natsisa'nin saatli bicimi (YYYY-MM-DDTHH:MM:SS, saat yok sayilir).
+     * Gecersiz veya bossa null.
+     *
+     * @param string[] $keys
+     */
+    private function guestStyleDate(array $keys): ?\DateTime
+    {
+        foreach ($keys as $key) {
+            $value = trim($this->p($key));
+            if ($value === '') {
+                continue;
+            }
+            if (preg_match('/^(\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}(:\d{2})?/', $value, $match) === 1) {
+                $value = $match[1];
+            }
+            foreach (['Y-m-d', 'd.m.Y', 'd/m/Y'] as $format) {
+                $date = \DateTime::createFromFormat('!' . $format, $value);
+                if ($date instanceof \DateTime && $date->format($format) === $value) {
+                    return $date;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private function parseTrDate(string $s)
     {
         $s = trim($s);
