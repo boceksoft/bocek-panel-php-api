@@ -162,7 +162,7 @@ final class FiltersController extends Controller
             'acenta_users' => $subAgencies,
             'table_colons' => $this->reservationTableColumns(),
             'static_filters' => [
-                'durum' => array_merge([
+                'durum' => [
                     ['id' => 0, 'label' => 'Onay Bekliyor'],
                     ['id' => 1, 'label' => 'Ödeme Bekliyor'],
                     ['id' => 2, 'label' => 'Süresi Doldu'],
@@ -170,9 +170,7 @@ final class FiltersController extends Controller
                     ['id' => 4, 'label' => 'İptal'],
                     ['id' => 5, 'label' => 'Silinenler'],
                     ['id' => 6, 'label' => 'Açık Rezervasyon'],
-                ], filter_var($this->app['reservation_filters_use_status_log'] ?? false, FILTER_VALIDATE_BOOLEAN)
-                    ? [['id' => 7, 'label' => 'Onaydan İptale Geçenler']]
-                    : []),
+                ],
                 'odemesekli' => [
                     ['id' => 1, 'label' => 'Kredi Kartı'],
                     ['id' => 2, 'label' => 'Havale'],

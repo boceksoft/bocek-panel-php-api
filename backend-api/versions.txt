@@ -9,7 +9,9 @@ reservations 1
 links 1
 tokens 1
 reservationsCreate 2
-reservationdetail 12
+reservationdetail 17
 setup 1
 guest-movements 1
 guestMovements 1
+bank-accounts 1
+virtual-pos 1

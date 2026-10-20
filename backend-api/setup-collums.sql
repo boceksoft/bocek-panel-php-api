@@ -1,10 +1,3 @@
-IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
-    AND COL_LENGTH(N'[dbo].[homes]', N'gavelBelgeNo') IS NULL
-BEGIN
-ALTER TABLE [dbo].[homes] ADD [gavelBelgeNo] nvarchar(128) NULL;
-END;
-GO
-
 IF OBJECT_ID(N'[dbo].[genel]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[genel]', N'dil') IS NULL
 BEGIN
@@ -646,6 +639,13 @@ IF OBJECT_ID(N'[dbo].[kullanici_log_kaydi]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kullanici_log_kaydi]', N'kullanici_id') IS NULL
 BEGIN
 ALTER TABLE [dbo].[kullanici_log_kaydi] ADD [kullanici_id] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici_log_kaydi]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici_log_kaydi]', N'degisiklikler') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici_log_kaydi] ADD [degisiklikler] nvarchar(max) NULL;
 END;
 GO
 
@@ -2954,6 +2954,13 @@ IF OBJECT_ID(N'[dbo].[kullanici_log_kaydi]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kullanici_log_kaydi]', N'kullanici_id') IS NULL
 BEGIN
 ALTER TABLE [dbo].[kullanici_log_kaydi] ADD [kullanici_id] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici_log_kaydi]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici_log_kaydi]', N'degisiklikler') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici_log_kaydi] ADD [degisiklikler] nvarchar(max) NULL;
 END;
 GO
 

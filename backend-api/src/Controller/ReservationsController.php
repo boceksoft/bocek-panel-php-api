@@ -21,7 +21,6 @@ final class ReservationsController extends Controller
      * @query page int Sayfa numarası
      * @query per_page int Sayfa başına kayıt (0 veya "tumu" => tümü)
      * @query durum int Rezervasyon durumu (çoklu olabilir)
-     * durum=7: Ayar aciksa, logda 3 -> 4 gecisi bulunan halen iptal rezervasyonlar.
      * @query musteri string Müşteri adı/kelime araması
      */
     public function index(): void
@@ -149,11 +148,12 @@ final class ReservationsController extends Controller
             $where[] = 'au.id = :altacenta';
             $params[':altacenta'] = $altacentaInt;
         }
+        // Filtrede 5 (Silindi) siteye özel silinme koduna çevrilir (örn. -1).
         if ($rezDurumu !== '') {
-            $where[] = $this->statusFilterSql($rezDurumu);
+            $where[] = 'dolu.durum IN (' . $this->statusFilterList($rezDurumu) . ')';
         }
         if ($durum !== '') {
-            $where[] = $this->statusFilterSql($durum);
+            $where[] = 'dolu.durum IN (' . $this->statusFilterList($durum) . ')';
         }
         if ($promosyon !== '') {
             $where[] = 'kayitlar.promotionCode = :promosyon';
@@ -261,6 +261,9 @@ final class ReservationsController extends Controller
         bool $useMaliyetColumn
     ): string
     {
+        // dolu.durum API koduna çevrilir (siteye özel silinme kodu -> 5).
+        $durumSql = $this->normalizedStatusSql('dolu.durum');
+
         $maliyetValueSql = $useMaliyetColumn
             ? 'ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.maliyet)), 0)'
             : '0';
@@ -272,7 +275,7 @@ final class ReservationsController extends Controller
     CONVERT(varchar(10), a.islem_tarihi, 104) AS acenta_rez_tarihi,
     tutar.toplam_tutar AS acenta_rez_toplam_tutar,
     tutar.on_odeme AS acenta_rez_komisyon,
-    dolu.durum AS acenta_rez_durum,
+    {$durumSql} AS acenta_rez_durum,
     au.id AS acenta_user_id,
     au.agencyName AS acenta_user_name,"
             : "
@@ -291,7 +294,7 @@ LEFT  JOIN acenta_kayitlar a ON kayitlar.id = a.kayitId
 LEFT  JOIN acenta_users au ON au.id = a.acentaId"
             : '';
 
-        $sql = " 
+        $sql = "
 SELECT
     COUNT(*) OVER() AS totalCount,
     SUM(tutar.toplam_tutar * tutar.kur_carpan) OVER() AS sumTutar,
@@ -345,8 +348,8 @@ SELECT
     CASE kayitlar.odeme WHEN 1 THEN N'Kredi Kartı' WHEN 2 THEN N'Havale' WHEN 3 THEN N'Western Union' WHEN 4 THEN N'Sanal Kart' WHEN 5 THEN N'Sanal Havale' WHEN 6 THEN N'Nakit' ELSE N'-' END AS odeme_sekli_text,
     kayitlar.tur AS odeme_turu,
     CASE kayitlar.tur WHEN 1 THEN N'Ön Ödeme' WHEN 2 THEN N'Tamamı' ELSE N'-' END AS odeme_turu_text,
-    dolu.durum,
-    CASE dolu.durum WHEN 0 THEN N'Onay Bekliyor' WHEN 1 THEN N'Ödeme Bekliyor' WHEN 2 THEN N'Süre Doldu' WHEN 3 THEN N'Onaylandı' WHEN 4 THEN N'İptal Edildi' WHEN 5 THEN N'Silindi' WHEN 6 THEN N'Açık Rezervasyon' ELSE N'-' END AS durum_text,
+    {$durumSql} AS durum,
+    CASE {$durumSql} WHEN 0 THEN N'Onay Bekliyor' WHEN 1 THEN N'Ödeme Bekliyor' WHEN 2 THEN N'Süre Doldu' WHEN 3 THEN N'Onaylandı' WHEN 4 THEN N'İptal Edildi' WHEN 5 THEN N'Silindi' WHEN 6 THEN N'Açık Rezervasyon' ELSE N'-' END AS durum_text,
     kayitlar.doviz, kayitlar.kur, kayitlar.kazancorani,
     kayitlar.promotionCode AS promosyon,
     kayitlar.satis_kanallari_id AS acenta,
@@ -585,6 +588,21 @@ $orderSql
         return preg_match('/^-?\d+$/', $v) ? (int) $v : $default;
     }
 
+    /**
+     * Virgüllü durum listesindeki 5'i (Silindi) siteye özel silinme koduna çevirir.
+     */
+    private function statusFilterList(string $list): string
+    {
+        $deleted = $this->deletedStatus();
+        $codes = [];
+        foreach (explode(',', $list) as $code) {
+            $code = (int) $code;
+            $codes[] = $code === 5 ? $deleted : $code;
+        }
+
+        return implode(',', array_values(array_unique($codes)));
+    }
+
     private function safeIntList(string $s): string
     {
         if (trim($s) === '') {
@@ -657,33 +675,6 @@ $orderSql
     private function trMoney(float $n): string
     {
         return number_format($n, 2, ',', '.');
-    }
-
-    /**
-     * 7 sanal filtre degeridir; veritabanindaki rezervasyon durumu degildir.
-     * EXISTS birden fazla gecis kaydinin satirlari ve ciroyu cogaltmasini onler.
-     */
-    private function statusFilterSql(string $statuses): string
-    {
-        $values = array_map('intval', explode(',', $statuses));
-        $hasCancelledAfterApproval = in_array(7, $values, true);
-        $regular = array_values(array_filter($values, function (int $value): bool {
-            return $value !== 7;
-        }));
-        $conditions = [];
-        if ($regular) {
-            $conditions[] = 'dolu.durum IN (' . implode(',', $regular) . ')';
-        }
-        if ($hasCancelledAfterApproval && $this->configBool('reservation_filters_use_status_log', false)) {
-            $conditions[] = '(dolu.durum = 4 AND EXISTS (
-                SELECT 1 FROM dbo.reservations_status_log AS status_log
-                WHERE status_log.kayitlarId = kayitlar.id
-                  AND status_log.old_status = 3
-                  AND status_log.current_status = 4
-            ))';
-        }
-
-        return $conditions ? '(' . implode(' OR ', $conditions) . ')' : '1 = 0';
     }
 
     private function configBool(string $key, bool $default): bool
