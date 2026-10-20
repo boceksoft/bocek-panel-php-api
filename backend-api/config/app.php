@@ -43,6 +43,9 @@ return [
     // Rezervasyon filtrelerinde acenta_users tablosundan alt acentalar cekilsin mi?
     'reservation_filters_use_acenta_users' => false,
 
+    // Logda 3 -> 4 gecisi olan iptal rezervasyonlar icin durum=7 filtresi.
+    'reservation_filters_use_status_log' => false,
+
     // Rezervasyon detayinda islem_kaydi tablosundan belge gecmisi cekilsin mi?
     'reservation_detail_use_islem_kaydi' => true,
 
@@ -157,6 +160,7 @@ return [
         'guest_movements_use_caretaker_owner_fallback' => 'bool',
         'links_search_page_url' => 'string',
         'reservation_filters_use_acenta_users' => 'bool',
+        'reservation_filters_use_status_log' => 'bool',
         'reservation_detail_use_islem_kaydi' => 'bool',
         'calculate_param_names' => 'array',
         'calculate_date_formats' => 'array',
@@ -168,7 +172,7 @@ return [
         'calculate_heating_price_is_weekly' => 'bool',
     ],
 
-    // DB bilgileri ($config['db']) ve Domain sabitinin geldiği,
+    // DB bilgileri ($config['db']) ve Domain sabitinin geldiaği,
     // repo dışındaki config dosyasının yolu (backend-api/../api/config.php).
     'external_config_path' => dirname(__DIR__, 2) . '/api/config.php',
 
