@@ -21,6 +21,7 @@ final class ReservationsController extends Controller
      * @query page int Sayfa numarası
      * @query per_page int Sayfa başına kayıt (0 veya "tumu" => tümü)
      * @query durum int Rezervasyon durumu (çoklu olabilir)
+     * durum=7: Ayar aciksa, logda 3 -> 4 gecisi bulunan halen iptal rezervasyonlar.
      * @query musteri string Müşteri adı/kelime araması
      */
     public function index(): void
@@ -294,7 +295,7 @@ LEFT  JOIN acenta_kayitlar a ON kayitlar.id = a.kayitId
 LEFT  JOIN acenta_users au ON au.id = a.acentaId"
             : '';
 
-        $sql = "
+        $sql = " 
 SELECT
     COUNT(*) OVER() AS totalCount,
     SUM(tutar.toplam_tutar * tutar.kur_carpan) OVER() AS sumTutar,
@@ -675,6 +676,33 @@ $orderSql
     private function trMoney(float $n): string
     {
         return number_format($n, 2, ',', '.');
+    }
+
+    /**
+     * 7 sanal filtre degeridir; veritabanindaki rezervasyon durumu degildir.
+     * EXISTS birden fazla gecis kaydinin satirlari ve ciroyu cogaltmasini onler.
+     */
+    private function statusFilterSql(string $statuses): string
+    {
+        $values = array_map('intval', explode(',', $statuses));
+        $hasCancelledAfterApproval = in_array(7, $values, true);
+        $regular = array_values(array_filter($values, function (int $value): bool {
+            return $value !== 7;
+        }));
+        $conditions = [];
+        if ($regular) {
+            $conditions[] = 'dolu.durum IN (' . implode(',', $regular) . ')';
+        }
+        if ($hasCancelledAfterApproval && $this->configBool('reservation_filters_use_status_log', false)) {
+            $conditions[] = '(dolu.durum = 4 AND EXISTS (
+                SELECT 1 FROM dbo.reservations_status_log AS status_log
+                WHERE status_log.kayitlarId = kayitlar.id
+                  AND status_log.old_status = 3
+                  AND status_log.current_status = 4
+            ))';
+        }
+
+        return $conditions ? '(' . implode(' OR ', $conditions) . ')' : '1 = 0';
     }
 
     private function configBool(string $key, bool $default): bool
