@@ -5,7 +5,7 @@ homes-management-detail-data 1
 homes-management-detail-update 1
 filters 1
 availability 1
-reservations 1
+reservations 2
 links 1
 tokens 1
 reservationsCreate 2

@@ -3947,5 +3947,9 @@ RETURN;
 END
 GO
 
-
-
+IF OBJECT_ID(N'[dbo].[sites]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[sites]', N'natsisa_color') IS NULL
+BEGIN
+ALTER TABLE [dbo].[sites] ADD [natsisa_color] nvarchar(20) NULL;
+END;
+GO
