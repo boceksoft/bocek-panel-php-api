@@ -649,6 +649,13 @@ ALTER TABLE [dbo].[kullanici_log_kaydi] ADD [kullanici_id] int NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[kullanici_log_kaydi]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici_log_kaydi]', N'degisiklikler') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici_log_kaydi] ADD [degisiklikler] nvarchar(max) NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[mesafeler]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[mesafeler]', N'id') IS NULL
 BEGIN
@@ -2954,6 +2961,13 @@ IF OBJECT_ID(N'[dbo].[kullanici_log_kaydi]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kullanici_log_kaydi]', N'kullanici_id') IS NULL
 BEGIN
 ALTER TABLE [dbo].[kullanici_log_kaydi] ADD [kullanici_id] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici_log_kaydi]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici_log_kaydi]', N'degisiklikler') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici_log_kaydi] ADD [degisiklikler] nvarchar(max) NULL;
 END;
 GO
 

@@ -152,6 +152,7 @@ VALUES
     (N'dbo', N'kullanici', N'id'),
     (N'dbo', N'kullanici', N'tel'),
     (N'dbo', N'kullanici_log_kaydi', N'kullanici_id'),
+    (N'dbo', N'kullanici_log_kaydi', N'degisiklikler'),
     (N'dbo', N'mesafeler', N'baslik'),
     (N'dbo', N'mesafeler', N'id'),
     (N'dbo', N'mesafelerValues', N'homesId'),

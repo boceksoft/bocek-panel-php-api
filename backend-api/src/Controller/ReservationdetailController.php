@@ -9,7 +9,7 @@ use PDO;
 
 /*
  * Rezervasyon detay kaynaÄŸÄ±.
- * ASP siparis_detaylari.asp ekranÄ±nÄ±n okuduÄŸu verileri JSON olarak dÃ¶ner.
+ * ASP siparis_detaylari.asp  ekranÄ±nÄ±n okuduÄŸu verileri JSON olarak dÃ¶ner.
  */
 final class ReservationdetailController extends Controller
 {
@@ -97,6 +97,8 @@ final class ReservationdetailController extends Controller
             [':id' => $id]
         );
 
+        $activityLogs = $this->fetchActivityLogs($pdo, $id);
+
         $nextReservation = $this->fetchOne(
             $pdo,
             'SELECT id, site FROM kayitlar WHERE AcikRezervasyonId = :id',
@@ -150,13 +152,462 @@ final class ReservationdetailController extends Controller
             'belge_kayitlari' => $documentState,
             'islem_kaydi' => $documentLogs,
             'logend' => $latestLog,
+            // İşlem geçmişi: kullanici_log_kaydi (islm = rezervasyon), yeniden eskiye, en fazla 100 kayıt.
+            'islemGecmisi' => $activityLogs,
             'sonrakiRzKontrol' => $nextReservation,
             'hesaplar_kullanici_0_banka' => $accounts['site'],
             'hesaplar_kullanici_0_siralama' => $accounts['site_ordered'],
             'hesaplar_evsahibi_siralama' => $accounts['owner'],
             'blockList' => $blockInfo,
             'parcaliOdeme' => $partialPayments,
+            // Bildirim şablonları için ödeme linkleri (kart: parametreli, havale: parametresiz).
+            'odemeLinkleri' => $this->paymentLinks($pdo, $reservation),
+            // Müşteri e-posta şablonları için (Natsisa): sitenin sabitleri, sitenin dilinde villa bilgileri,
+            // ödeme türü, panelin ürettiği ödeme satırları ve banka hesapları HTML'i (aktif_pasif.asp siparis_1).
+            'mailBilgileri' => $this->mailInfo($pdo, $reservation),
         ]);
+    }
+
+    /**
+     * Panel (aktif_pasif.asp siparis_1) ile aynı ödeme linkleri. Sayfa yolları sayfalar{dbtable}'dan okunur.
+     *
+     * @param array<string,mixed> $reservation
+     * @return array<string,string>
+     */
+    private function paymentLinks(PDO $pdo, array $reservation): array
+    {
+        $links = ['kartIleOde' => '', 'kartIleOdeParametre' => '', 'havale' => ''];
+
+        $id = (int) ($reservation['id'] ?? 0);
+        if ($id <= 0) {
+            return $links;
+        }
+
+        $siteId = (int) ($reservation['site'] ?? 1);
+        $suffix = $this->siteTableSuffix($pdo, $siteId);
+        $domain = $this->paymentDomain();
+        if ($domain === '') {
+            return $links;
+        }
+
+        $cardPath = $this->pagePath($pdo, $suffix, $this->pageIdSetting('reservation_payment_card_page_id', $siteId, $suffix));
+        if ($cardPath !== '') {
+            $email = (string) ($reservation['email'] ?? '');
+            $params = '_=' . $this->idHash((string) $id) . '&authKey=' . $this->idHash($id . '_' . $email);
+            $links['kartIleOde'] = $domain . '/' . $cardPath . '?' . $params;
+            $links['kartIleOdeParametre'] = $params;
+        }
+
+        $transferPath = $this->pagePath($pdo, $suffix, $this->pageIdSetting('reservation_payment_transfer_page_id', $siteId, $suffix));
+        if ($transferPath !== '') {
+            $links['havale'] = $domain . '/' . $transferPath;
+        }
+
+        return $links;
+    }
+
+    /**
+     * E-posta şablonu bilgileri. Panel: inc/Functions.asp mail_sablon_html + aktif_pasif.asp siparis_1.
+     * Site sabitleri rezervasyonun sitesinin genel tablosundan (genel, genel_s2...), metinler sitenin dilinden okunur.
+     *
+     * @param array<string,mixed> $reservation
+     * @return array<string,mixed>
+     */
+    private function mailInfo(PDO $pdo, array $reservation): array
+    {
+        $siteId = (int) ($reservation['site'] ?? 1);
+        $suffix = $this->siteTableSuffix($pdo, $siteId);
+        $english = $siteId === 2;
+        $doviz = strtolower(trim((string) ($reservation['doviz'] ?? '')));
+
+        // Site sabitleri
+        $genel = [];
+        try {
+            $row = $pdo->query('SELECT TOP 1 * FROM genel' . $suffix)->fetch(PDO::FETCH_ASSOC);
+            $genel = is_array($row) ? $row : [];
+        } catch (\PDOException $e) {
+            $genel = [];
+        }
+        $g = function (string $key) use ($genel): string {
+            return isset($genel[$key]) ? trim((string) $genel[$key]) : '';
+        };
+        $domain = rtrim($g('domain'), '/');
+        $siteName = $g('siteadi');
+
+        // Linkler: "web." -> "www." (panel). CDN: alan adının başı www./web. ise cdn. olur, değilse başına cdn. eklenir
+        // (panel sadece www. -> cdn. yapıyordu; domain web. ile kayıtlıysa CDN yerine web. adresine gidiyordu).
+        $site = [
+            'id' => $siteId,
+            'adi' => $siteName,
+            'domain' => str_replace('web.', 'www.', $domain),
+            'cdn' => $this->cdnFromDomain($domain),
+            'telefon' => $g('telefon'),
+            'gsm' => $g('gsm'),
+            'whatsapp' => $g('whatsapp'),
+            'mail' => $g('sitemail'),
+            'instagram' => $g('instagram'),
+            'facebook' => $g('facebook'),
+            'youtube' => $g('youtube'),
+            'adres' => $g('adres'),
+        ];
+
+        // Mail alt metinleri (panel: ms_fn(id) -> mailsablon.icerik{suffix}): ödeme bekliyor 6, onaylandı 3.
+        // {saat} Natsisa'da opsiyon süresiyle doldurulur.
+        $paymentPendingText = $this->mailText($pdo, 6, $suffix, $siteName);
+        $approvedText = $this->mailText($pdo, 3, $suffix, $siteName);
+
+        // Rezervasyonlarım linki (panel siparis_3: domain/rezervasyonlarimUrl?authKey=idHash(id_email)).
+        // Sayfa yolu ödeme linkleri gibi sayfalar{suffix} tablosundan (ayar: reservation_my_reservations_page_id,
+        // varsayılan 3 = /rezervasyonlarim); bulunamazsa genel tablosundaki rezervasyonlarimUrl alanı denenir.
+        $myReservationsPath = $this->pagePath(
+            $pdo,
+            $suffix,
+            $this->pageIdSetting('reservation_my_reservations_page_id', $siteId, $suffix)
+        );
+        if ($myReservationsPath === '') {
+            $myReservationsPath = trim($g('rezervasyonlarimUrl'), '/');
+        }
+        $linkDomain = $site['domain'] !== '' ? rtrim($site['domain'], '/') : $this->paymentDomain();
+        $myReservationsLink = '';
+        if ($linkDomain !== '' && $myReservationsPath !== '') {
+            $myReservationsLink = $linkDomain . '/' . $myReservationsPath . '?authKey='
+                . $this->idHash((int) ($reservation['id'] ?? 0) . '_' . (string) ($reservation['email'] ?? ''));
+        }
+
+        // Villa: sitenin dilinde ad ve bölge ("Üst bölge / Bölge"), ilk resim (panel: /uploads/400x320/<resim>)
+        $villa = ['adi' => '', 'bolge' => '', 'resim' => '', 'resimUrl' => ''];
+        $homeId = (int) ($reservation['evid'] ?? 0);
+        if ($homeId > 0) {
+            try {
+                $row = $this->fetchOne(
+                    $pdo,
+                    "SELECT h.baslik{$suffix} AS adi, h.resim,
+                            CONCAT(d2.baslik{$suffix}, ' / ', d3.baslik{$suffix}) AS bolge
+                     FROM homes h
+                     LEFT JOIN destinations d3 ON d3.id = h.emlak_bolgesi
+                     LEFT JOIN destinations d2 ON d2.id = d3.cat
+                     WHERE h.id = :id",
+                    [':id' => $homeId]
+                );
+            } catch (\PDOException $e) {
+                $row = false;
+            }
+            if (is_array($row)) {
+                $images = array_values(array_filter(array_map('trim', explode(',', (string) ($row['resim'] ?? '')))));
+                $image = $images !== [] ? '/uploads/400x320/' . $images[0] : '';
+                $villa = [
+                    'adi' => trim((string) ($row['adi'] ?? '')),
+                    'bolge' => trim((string) ($row['bolge'] ?? ''), " /"),
+                    'resim' => $image,
+                    'resimUrl' => $image !== '' && $site['cdn'] !== '' ? rtrim($site['cdn'], '/') . $image : '',
+                ];
+            }
+        }
+
+        // Ödeme türü (kayitlar.odeme): 2 = havale, diğerleri kart. Ön ödemeli (kayitlar.tur = 1).
+        $transfer = (string) ($reservation['odeme'] ?? '') === '2';
+        $partial = (string) ($reservation['tur'] ?? '') === '1';
+
+        $amountDueNow = $partial
+            ? $this->mailMoney($reservation['on_odeme'] ?? '', $doviz)
+            : $this->mailMoney($reservation['toplam_tutar'] ?? '', $doviz);
+
+        return [
+            'site' => $site,
+            'odemeBekliyorMetni' => $paymentPendingText,
+            'onaylandiMetni' => $approvedText,
+            'rezervasyonlarimLinki' => $myReservationsLink,
+            'villa' => $villa,
+            'odemeTuru' => $transfer ? 'havale' : 'kart',
+            'onOdemeli' => $partial,
+            'simdiOdenecek' => $amountDueNow,
+            'hasarDepozitosu' => trim((string) ($reservation['hasar_dep'] ?? '')),
+            'odemeSatirlariHtml' => $this->mailPaymentRowsHtml($pdo, $reservation, $siteId, $english, $doviz, $partial),
+            // Sitenin tüm banka hesapları, her biri panelin mail kutusu (HTML) ile. Hangilerinin maile gireceği
+            // Natsisa bildirim ayarında seçilir (seçim yoksa hepsi).
+            'bankaHesaplari' => $this->mailBankAccounts($pdo, $english, $site['cdn']),
+        ];
+    }
+
+    /**
+     * Panel mail_sablon_html ödeme satırları: ön ödeme, villaya girişte ödenecek (ön ödemeli), temizlik, ısıtmalı havuz,
+     * elektrik, ekstra ödemeler ve (ekstra varsa) girişte ödenecek toplam. Değerler panelde olduğu gibi ham yazılır.
+     *
+     * @param array<string,mixed> $reservation
+     */
+    private function mailPaymentRowsHtml(PDO $pdo, array $reservation, int $siteId, bool $english, string $doviz, bool $partial): string
+    {
+        $labels = $english
+            ? ['on' => 'Advance Payment Amount', 'kalan' => 'Amount to be Paid on Villa Entry', 'temizlik' => 'Cleaning Fee',
+               'elektrik' => 'Electricity Fee', 'isitma' => 'Heated Fee', 'toplam' => 'Total Amount to be Paid on Entry']
+            : ['on' => 'Ön Ödeme Tutarı', 'kalan' => 'Villaya Girişte Ödenecek Tutar', 'temizlik' => 'Temizlik Ücreti',
+               'elektrik' => 'Elektrik Ücreti', 'isitma' => 'Isıtmalı Havuz Ücreti', 'toplam' => 'Girişte Ödenecek Toplam Tutar'];
+
+        $html = '';
+        $remaining = 0.0;
+        $extra = 0.0;
+        $value = function ($v): string {
+            return trim((string) $v);
+        };
+
+        if ($partial) {
+            $remaining = $this->mailNumber($reservation['kalan'] ?? '');
+            $html .= $this->mailRow($labels['on'], $value($reservation['on_odeme'] ?? ''));
+            $html .= $this->mailRow($labels['kalan'], $value($reservation['kalan'] ?? ''));
+        }
+
+        $cleaning = $value($reservation['temizlik'] ?? '');
+        if ($cleaning !== '' && $cleaning !== '0') {
+            $extra += $this->mailNumber($cleaning);
+            $html .= $this->mailRow($labels['temizlik'], $cleaning);
+        }
+
+        $heated = $reservation['isitmaliHavuzBool'] ?? null;
+        if ($heated === true || $heated === 1 || $heated === '1') {
+            $extra += $this->mailNumber($reservation['isitmaliHavuz'] ?? '');
+            $html .= $this->mailRow($labels['isitma'], $value($reservation['isitmaliHavuz'] ?? ''));
+        }
+
+        try {
+            $extras = $this->fetchAll(
+                $pdo,
+                'SELECT * FROM Reservation.vw_ReservationExtraPayments WHERE ReservationId = :id',
+                [':id' => (int) ($reservation['id'] ?? 0)]
+            );
+        } catch (\PDOException $e) {
+            $extras = [];
+        }
+        foreach ($extras as $row) {
+            $extra += $this->mailNumber($row['TotalAmount'] ?? '');
+            $html .= $this->mailRow((string) ($row['Title'] ?? ''), ($row['Symbol'] ?? '') . ($row['TotalAmount'] ?? ''));
+        }
+
+        $electricity = $value($reservation['elektrik'] ?? '');
+        if ($electricity !== '' && $electricity !== '0') {
+            $extra += $this->mailNumber($electricity);
+            $html .= $this->mailRow($labels['elektrik'], $electricity);
+        }
+
+        if ($extra != 0.0) {
+            $color = $siteId === 3 ? '#d84d64' : '#ed7823';
+            $html .= '<tr>'
+                . "<td style='padding: 5px 12px;'><strong style='padding-inline-end: 8px; font-size: 14px; color:" . $color . ";font-weight:700'>"
+                . htmlspecialchars($labels['toplam'], ENT_QUOTES, 'UTF-8') . '</strong></td>'
+                . "<td style='float: right; padding: 5px 12px; text-align: end; font-size: 14px; font-weight: 600; color: #4A4B54;'><strong>"
+                . htmlspecialchars($this->mailMoney((string) ($remaining + $extra), $doviz), ENT_QUOTES, 'UTF-8') . '</strong></td>'
+                . '</tr>';
+        }
+
+        return $html;
+    }
+
+    /** "https://web.site.com" / "https://www.site.com" / "https://site.com" -> "https://cdn.site.com/". */
+    private function cdnFromDomain(string $domain): string
+    {
+        $domain = trim($domain);
+        if ($domain === '') {
+            return '';
+        }
+        if (preg_match('#^https?://#i', $domain) !== 1) {
+            $domain = 'https://' . $domain;
+        }
+        $parts = parse_url($domain);
+        $host = is_array($parts) ? strtolower((string) ($parts['host'] ?? '')) : '';
+        if ($host === '') {
+            return '';
+        }
+        if (strpos($host, 'cdn.') !== 0) {
+            $host = 'cdn.' . preg_replace('/^(www|web)\./', '', $host);
+        }
+
+        return ($parts['scheme'] ?? 'https') . '://' . $host . '/';
+    }
+
+    /** Panel ms_fn: mailsablon.icerik{suffix} ({siteadi} doldurulur). Tablo/kayıt yoksa boş. */
+    private function mailText(PDO $pdo, int $id, string $suffix, string $siteName): string
+    {
+        try {
+            $row = $this->fetchOne($pdo, 'SELECT * FROM mailsablon WHERE id = :id', [':id' => $id]);
+        } catch (\PDOException $e) {
+            return '';
+        }
+        if (!is_array($row)) {
+            return '';
+        }
+
+        return str_replace('{siteadi}', $siteName, (string) ($row['icerik' . $suffix] ?? $row['icerik'] ?? ''));
+    }
+
+    /** Panel htmlSablonItem: başlık / değer satırı. */
+    private function mailRow(string $title, string $value): string
+    {
+        return '<tr>'
+            . "<td style='padding: 5px 12px;'><strong style='padding-inline-end: 8px; font-size: 14px; font-weight: 600; color: #4a4b5499;'>"
+            . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '</strong></td>'
+            . "<td style='float: right; padding: 5px 12px; text-align: end; font-size: 14px; font-weight: 600; color: #4A4B54;'><strong>"
+            . htmlspecialchars($value, ENT_QUOTES, 'UTF-8') . '</strong></td>'
+            . '</tr>';
+    }
+
+    /**
+     * Panel siparis_1 banka hesapları (hesaplar, kullanici = 0: sitenin hesapları, siralama sırasıyla).
+     * Her hesap için panelin mail kutusu (HTML) üretilir; seçim Natsisa'da yapılır.
+     *
+     * @return array<int,array{id:int,banka:string,hesapAdi:string,html:string}>
+     */
+    private function mailBankAccounts(PDO $pdo, bool $english, string $cdn): array
+    {
+        try {
+            $accounts = $this->fetchAll($pdo, 'SELECT * FROM hesaplar WHERE kullanici = 0 ORDER BY siralama ASC');
+        } catch (\PDOException $e) {
+            return [];
+        }
+
+        $t = $english
+            ? ['alici' => 'Recipient', 'sube' => 'Branch code', 'hesap' => 'Account number']
+            : ['alici' => 'Alıcı', 'sube' => 'Şube Kodu', 'hesap' => 'Hesap No'];
+        $e = function ($v): string {
+            return htmlspecialchars(trim((string) $v), ENT_QUOTES, 'UTF-8');
+        };
+        $line = function (string $label, $value) use ($e): string {
+            return "<tr style='display: block; height: 25%; font-size: 14px; color: #4A4B54;'><td>"
+                . '<span>' . $e($label) . ' :</span> <span>' . $e($value) . '</span></td></tr>';
+        };
+
+        $result = [];
+        foreach ($accounts as $a) {
+            $image = rtrim($cdn, '/') . '/uploads/' . trim((string) ($a['resim'] ?? '')) . '?l=0';
+            $rows = $line($t['alici'], $a['hesap_adi'] ?? '');
+            foreach ([
+                [$t['sube'], 'sube_kod'],
+                [$t['hesap'], 'hesap_no'],
+                ['TL IBAN', 'iban_tl'],
+                ['GBP IBAN', 'iban_pound'],
+                ['EUR IBAN', 'iban_euro'],
+                ['USD IBAN', 'iban_dolar'],
+            ] as [$label, $column]) {
+                if (trim((string) ($a[$column] ?? '')) !== '') {
+                    $rows .= $line($label, $a[$column]);
+                }
+            }
+
+            $html = "<tr style='margin-bottom: 36px; display: block;'><td class='sm-ml-0' style='margin-left: 20px; display: block'>"
+                . "<table style='width: 100%;' cellpadding='0' cellspacing='0' role='presentation'><tbody><tr>"
+                . "<td class='sm-float-left sm-w-full' style='float: none; width: 154px'>"
+                . "<div class='sm-w-full sm-mx-0 sm-mb-4' style='margin-left: auto; margin-right: auto; height: 83px; width: 154px; overflow: hidden; border-radius: 4px; border: 1px solid #d1d5db; text-align: center'>"
+                . "<img src='" . $e($image) . "' alt='Resim' width='114' height='78' style='max-width: 100%; vertical-align: middle; line-height: 1; border: 0; object-fit: contain;'>"
+                . '</div></td>'
+                . "<td class='sm-ml-0' style='margin-left: 36px; display: block'>"
+                . "<table style='height: 85px;' cellpadding='0' cellspacing='0' role='presentation'><tbody>" . $rows . '</tbody></table>'
+                . '</td></tr></tbody></table></td></tr>';
+
+            $result[] = [
+                'id' => (int) ($a['id'] ?? 0),
+                'banka' => trim((string) ($a['banka'] ?? '')),
+                'hesapAdi' => trim((string) ($a['hesap_adi'] ?? '')),
+                'html' => $html,
+            ];
+        }
+
+        return $result;
+    }
+
+    /** Panel DovizTemizle: para birimi yazılarını ve ayırıcıları temizleyip sayı döner. */
+    private function mailNumber($value): float
+    {
+        $number = $this->moneyValue($value);
+
+        return $number === null ? 0.0 : (float) $number;
+    }
+
+    /** Panel doviz_cevir_format: binlik ".", kuruş ","; tl -> "x TL", euro/dolar/pound -> "€ x" / "$ x" / "£ x". */
+    private function mailMoney($value, string $doviz): string
+    {
+        $number = $this->moneyValue($value);
+        if ($number === null) {
+            return trim((string) $value);
+        }
+        $decimals = abs($number - floor($number)) > 0.0001 ? 2 : 0;
+        $text = number_format($number, $decimals, ',', '.');
+
+        switch ($doviz) {
+            case 'tl':
+            case 'try':
+                return $text . ' TL';
+            case 'pound':
+                return '£ ' . $text;
+            case 'dolar':
+                return '$ ' . $text;
+            case 'euro':
+                return '€ ' . $text;
+            default:
+                return $text;
+        }
+    }
+
+    /** Panel inc/Functions.asp idHash: Base64("{burasiidkismi_}" + veri). */
+    private function idHash(string $data): string
+    {
+        return base64_encode('{burasiidkismi_}' . $data);
+    }
+
+    /** Panel: replace(qsql("domain"), "web.", "www."). Domain sabiti config.php'den gelir. */
+    private function paymentDomain(): string
+    {
+        $domain = defined('Domain') ? trim((string) constant('Domain')) : '';
+        if ($domain === '') {
+            return '';
+        }
+        if (preg_match('#^https?://#i', $domain) !== 1) {
+            $domain = 'https://' . $domain;
+        }
+
+        return rtrim(str_replace('web.', 'www.', $domain), '/');
+    }
+
+    /** Ayar tek sayı ya da [siteId|dbtable => id] olabilir (homes_management_cancellation_policy_page_id gibi). */
+    private function pageIdSetting(string $key, int $siteId, string $suffix): int
+    {
+        $config = $this->app[$key] ?? 0;
+        if (!is_array($config)) {
+            return is_numeric($config) ? (int) $config : 0;
+        }
+        foreach ([$siteId, (string) $siteId, $suffix] as $k) {
+            if (array_key_exists($k, $config) && is_numeric($config[$k])) {
+                return (int) $config[$k];
+            }
+        }
+
+        return 0;
+    }
+
+    private function siteTableSuffix(PDO $pdo, int $siteId): string
+    {
+        if ($siteId <= 0) {
+            return '';
+        }
+        try {
+            $row = $this->fetchOne($pdo, 'SELECT dbtable FROM sites WHERE id = :id', [':id' => $siteId]);
+        } catch (\PDOException $e) {
+            return '';
+        }
+        $suffix = is_array($row) ? trim((string) ($row['dbtable'] ?? '')) : '';
+
+        return $suffix === '' || preg_match('/^_[A-Za-z0-9]+$/', $suffix) === 1 ? $suffix : '';
+    }
+
+    private function pagePath(PDO $pdo, string $suffix, int $pageId): string
+    {
+        if ($pageId <= 0) {
+            return '';
+        }
+        try {
+            $row = $this->fetchOne($pdo, "SELECT url FROM sayfalar{$suffix} WHERE id = :id", [':id' => $pageId]);
+        } catch (\PDOException $e) {
+            return '';
+        }
+
+        return is_array($row) ? trim(trim((string) ($row['url'] ?? '')), '/') : '';
     }
 
     private function ibansec(): void
@@ -272,8 +723,11 @@ final class ReservationdetailController extends Controller
                 'satisKanali' => $this->firstValueFrom([$reservation], ['satiskanali', 'satis_kanali', 'satisKanali']) ?: 'site',
                 'siteDil' => $this->firstValueFrom([$reservation], ['site_dil', 'siteDil', 'dil', 'lang', 'language']) ?: 'tr',
                 'durum' => [
-                    'id' => $this->intValue($this->firstValueFrom([$dolu, $reservation], ['durum', 'Durum'])),
-                    'text' => $this->reservationStatusText($this->intValue($this->firstValueFrom([$dolu, $reservation], ['durum', 'Durum']))),
+                    // Siteye özel silinme kodu (örn. -1) 5 / Silindi olarak döner.
+                    'id' => (int) $this->normalizeStatus($this->intValue($this->firstValueFrom([$dolu, $reservation], ['durum', 'Durum']))),
+                    'text' => $this->reservationStatusText((int) $this->normalizeStatus($this->intValue($this->firstValueFrom([$dolu, $reservation], ['durum', 'Durum'])))),
+                    // Opsiyon süresi (saat), dolu.saat2. Bitiş kayitlar.saat; başlangıç = bitiş - süre.
+                    'opsiyonSuresiSaat' => $this->optionHours($dolu),
                 ],
             ],
             'rezervasyonDetaylari' => [
@@ -628,6 +1082,27 @@ final class ReservationdetailController extends Controller
         }
     }
 
+    /**
+     * dolu.saat2: opsiyon süresi (saat). Kiralama Takvimi callback'i (OptionReservation) ve
+     * reservation-status (yerel opsiyon) yazar. Sayı değilse null.
+     *
+     * @param array<string,mixed>|false|null $dolu
+     * @return float|null
+     */
+    private function optionHours($dolu)
+    {
+        if (!is_array($dolu)) {
+            return null;
+        }
+        $raw = $dolu['saat2'] ?? null;
+        if ($raw === null || !is_numeric(trim((string) $raw))) {
+            return null;
+        }
+        $hours = (float) trim((string) $raw);
+
+        return $hours > 0 ? $hours : null;
+    }
+
     private function reservationStatusText(int $status): string
     {
         switch ($status) {
@@ -729,6 +1204,75 @@ final class ReservationdetailController extends Controller
         $stmt->execute();
 
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Rezervasyonun işlem geçmişi (kullanici_log_kaydi, islm = 'rezervasyon'). Panel ve Natsisa kayıtları birlikte.
+     * Natsisa kayıtlarında kullanici_id 0'dır; kişi adı degisiklikler JSON'undan (kullaniciAdi) alınır ve açıklamanın
+     * sonuna eklenen "(Ad)" kısmı ayrı gösterildiği için açıklamadan çıkarılır.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function fetchActivityLogs(PDO $pdo, int $id): array
+    {
+        $hasDetails = $this->columnExists($pdo, 'dbo.kullanici_log_kaydi', 'degisiklikler');
+
+        $rows = $this->fetchAll(
+            $pdo,
+            "SELECT TOP 100
+                    l.id,
+                    CONVERT(varchar(19), l.tarih, 120) AS tarih,
+                    l.aciklama,
+                    l.kullanici_id,
+                    (SELECT TOP 1 k.ad + ' ' + k.soyad FROM kullanici k WHERE k.id = l.kullanici_id) AS kullanici_adi"
+                . ($hasDetails ? ', l.degisiklikler' : ', NULL AS degisiklikler') . "
+             FROM kullanici_log_kaydi l
+             WHERE l.islm = 'rezervasyon' AND l.islm_id = :id
+             ORDER BY l.id DESC",
+            [':id' => $id]
+        );
+
+        $result = [];
+        foreach ($rows as $row) {
+            $details = null;
+            $raw = isset($row['degisiklikler']) ? trim((string) $row['degisiklikler']) : '';
+            if ($raw !== '' && $raw[0] === '{') {
+                $decoded = json_decode($raw, true);
+                // Sadece bizim yazdığımız ayrıntılar (kaynak alanı olan) döner; panelin kendi formatı dönmez.
+                if (is_array($decoded) && isset($decoded['kaynak'])) {
+                    $details = $decoded;
+                }
+            }
+
+            $message = (string) ($row['aciklama'] ?? '');
+            $userName = trim((string) ($row['kullanici_adi'] ?? ''));
+            $source = 'panel';
+
+            if ($details !== null) {
+                $source = (string) $details['kaynak'];
+                $detailUser = trim((string) ($details['kullaniciAdi'] ?? ''));
+                if ($detailUser !== '') {
+                    $suffix = ' (' . $detailUser . ')';
+                    if (mb_substr($message, -mb_strlen($suffix)) === $suffix) {
+                        $message = mb_substr($message, 0, mb_strlen($message) - mb_strlen($suffix));
+                    }
+                    if ($userName === '') {
+                        $userName = $detailUser;
+                    }
+                }
+            }
+
+            $result[] = [
+                'id' => (int) $row['id'],
+                'tarih' => $row['tarih'],
+                'aciklama' => $message,
+                'kullanici' => $userName !== '' ? $userName : 'Sistem',
+                'kaynak' => $source,
+                'ayrinti' => $details,
+            ];
+        }
+
+        return $result;
     }
 
     private function columnExists(PDO $pdo, string $table, string $column): bool

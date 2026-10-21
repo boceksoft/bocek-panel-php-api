@@ -71,7 +71,7 @@ final class Updater
                 'changelog'    => $this->fetchRecentCommits($owner, $repo, $token, $sha, 10),
                 'backup'       => null,
             ];
-        }
+        }   
 
         // Ne değişti? previousSha -> sha arasındaki commit özetleri (GitHub compare API).
         // Bilgilendirme amaçlıdır; alınamazsa güncellemeyi engellemez.

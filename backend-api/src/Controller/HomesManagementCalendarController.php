@@ -56,6 +56,8 @@ final class HomesManagementCalendarController extends Controller
         $rezTipColumn = $this->hasColumn($pdo, 'dbo.dolu', 'rez_tip') ? 'd.rez_tip' : 'NULL';
         $colorColumn = $this->hasColumn($pdo, 'dbo.satis_kanallari', 'color') ? 'sk.color' : 'NULL';
 
+        // NULL durum -99 ile ayrılır; siteye özel silinme kodu (örn. -1) da gizlenir.
+        $deletedStatus = $this->deletedStatus();
         $stmt = $pdo->prepare("
             SELECT
                 d.id,
@@ -83,7 +85,7 @@ final class HomesManagementCalendarController extends Controller
             LEFT JOIN dbo.kayitlar k ON k.id = d.kayitid AND ISNULL(d.kayitid, 0) > 0
             LEFT JOIN dbo.satis_kanallari sk ON sk.id = k.satis_kanallari_id
             WHERE d.emlak = :emlak
-              AND ISNULL(d.Durum, -1) NOT IN (2, 4, 5)
+              AND ISNULL(d.Durum, -99) NOT IN (2, 4, 5, {$deletedStatus})
             ORDER BY d.tarih DESC, d.id DESC
         ");
         $stmt->execute([':emlak' => $id]);
@@ -91,7 +93,7 @@ final class HomesManagementCalendarController extends Controller
         $events = [];
         foreach ($stmt->fetchAll() as $row) {
             $kayitId = (int) ($row['kayitid'] ?? 0);
-            $durum = $row['durum'] === null ? null : (int) $row['durum'];
+            $durum = $this->normalizeStatus($row['durum']);
             $rezTip = trim((string) ($row['rez_tip'] ?? ''));
             if ($rezTip === '') {
                 $rezTip = $kayitId > 0 ? 'rezervasyon' : 'kapali';
@@ -252,9 +254,11 @@ final class HomesManagementCalendarController extends Controller
     // Cikis gunu ayni gun giris olabilir; iptal/silinen/suresi dolan kayitlar cakisma sayilmaz.
     private function assertNoOverlap(PDO $pdo, int $emlakId, string $start, string $end, int $exceptId): void
     {
-        $stmt = $pdo->prepare('SELECT COUNT(*) FROM dbo.dolu WITH (UPDLOCK, HOLDLOCK)
-            WHERE emlak = :emlak AND id <> :id AND ISNULL(Durum, -1) NOT IN (2, 4, 5)
-              AND tarih < :end AND tarih2 > :start');
+        // NULL durum -99 ile ayrılır; siteye özel silinme kodu (örn. -1) da çakışma sayılmaz.
+        $deletedStatus = $this->deletedStatus();
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM dbo.dolu WITH (UPDLOCK, HOLDLOCK)
+            WHERE emlak = :emlak AND id <> :id AND ISNULL(Durum, -99) NOT IN (2, 4, 5, {$deletedStatus})
+              AND tarih < :end AND tarih2 > :start");
         $stmt->execute([':emlak' => $emlakId, ':id' => $exceptId, ':start' => $start, ':end' => $end]);
         if ((int) $stmt->fetchColumn() > 0) {
             throw new HttpException('Secilen tarihler baska bir kayitla cakisiyor.', 'OVERLAP', 409);

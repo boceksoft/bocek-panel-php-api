@@ -12,6 +12,11 @@ return [
     // true: hata detayları yanıta eklenir. Canlıda false olmalı.
     'debug' => true,
 
+    // Silinen rezervasyonun dolu.durum kodu. Çoğu sitede 5; bazı sitelerde -1.
+    // -1 kullanan sitede app.local.php içinde 'reservation_deleted_status' => -1 yapılır.
+    // API dışarıya her zaman 5 (Silindi) döner ve 5 kabul eder; veritabanına bu değer yazılır/okunur.
+    'reservation_deleted_status' => 5,
+
     // IIS hata sayfalarını yutmasın diye her yanıtı HTTP 200 döndür.
     // Standart HTTP kodlarına dönmek için false yap.
     'force_http_200' => true,
@@ -57,6 +62,43 @@ return [
     // Homes management iptal sarti select'i icin sayfalar{dbtable}.id degeri.
     // Siteye gore degisirse app.local.php icinde [1 => 4, 2 => 12] gibi override edilebilir.
     'homes_management_cancellation_policy_page_id' => 4,
+
+    // Rezervasyon bildirimlerindeki ödeme linkleri için sayfalar{dbtable}.id değerleri (iptal şartlarıyla aynı yapı).
+    // Siteye göre değişirse app.local.php içinde [1 => 22, 2 => 30] gibi verilebilir. 0: link üretilmez.
+    // Kart: {domain}/{sayfa url}?_={idHash(id)}&authKey={idHash(id_email)} (panel aktif_pasif.asp siparis_1 ile aynı).
+    // Havale: {domain}/{sayfa url} (parametresiz).
+    'reservation_payment_card_page_id' => 22,
+    'reservation_payment_transfer_page_id' => 3,
+    // Onay e-postasındaki "Rezervasyonlarım" / "Misafir Bilgilerini Doldur" linkinin sayfası (sayfalar.id).
+    'reservation_my_reservations_page_id' => 3,
+
+    // Rezervasyon detayindaki POS secimi (GET /virtual-pos). Yapi rezervasyona gore secilir:
+    // kayitlar.isNewSite = 1 (React site) -> new_site, digerleri -> legacy. Her panel farkli oldugu icin
+    // legacy kismi app.local.php icinde siteye gore ayarlanir.
+    //   options:         sabit liste [id => 'Ad']; doluysa options_query calismaz.
+    //   options_query:   ilk iki kolon (ya da id/name alias'lari) id ve ad olarak okunur.
+    //   selected_column: kayitlar'da secili POS'un kolonu ('' = secili yok).
+    //   iyzico_column:   kayitlar'daki Iyzico Aktif/Pasif kolonu ('' = gosterilmez).
+    // hidden_ids_by_site: rezervasyonda secili degilse listelenmeyen POS id'leri (panel: site 3 -> 1, 2, 3).
+    // editable_statuses:  POS'un degistirilebildigi dolu.durum kodlari; 3 + kart odemesi kilitli gosterilir.
+    'reservation_pos' => [
+        'new_site' => [
+            'options' => [],
+            'options_query' => 'SELECT Id AS id, Name AS name FROM Finance.VirtualPos ORDER BY Id',
+            'selected_column' => 'VirtualPosId',
+            'iyzico_column' => '',
+        ],
+        'legacy' => [
+            'options' => [],
+            'options_query' => 'SELECT Id AS id, Name AS name FROM Finance.VirtualPos ORDER BY Id',
+            'selected_column' => 'VirtualPosId',
+            'iyzico_column' => 'iyzico_odeme',
+        ],
+        'hidden_ids_by_site' => [
+            3 => [1, 2, 3],
+        ],
+        'editable_statuses' => [0, 1, 2, 6],
+    ],
 
     // Calculate endpoint parametre adlari ve kabul edilen tarih formatlari.
     // Eski sitelerde app.local.php icinde sadece bu alanlari override ederek
@@ -170,6 +212,7 @@ return [
         'site_languages' => 'array',
         'calculate_prices_same_across_sites' => 'bool',
         'calculate_heating_price_is_weekly' => 'bool',
+        'reservation_pos' => 'array',
     ],
 
     // DB bilgileri ($config['db']) ve Domain sabitinin geldiaği,
