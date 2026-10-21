@@ -149,12 +149,13 @@ final class ReservationsController extends Controller
             $where[] = 'au.id = :altacenta';
             $params[':altacenta'] = $altacentaInt;
         }
-        // Filtrede 5 (Silindi) siteye özel silinme koduna çevrilir (örn. -1).
+        // Filtrede 5 (Silindi) siteye özel silinme koduna çevrilir (örn. -1);
+        // 7 sanal filtredir (onaydan sonra iptal edilenler).
         if ($rezDurumu !== '') {
-            $where[] = 'dolu.durum IN (' . $this->statusFilterList($rezDurumu) . ')';
+            $where[] = $this->statusFilterSql($rezDurumu);
         }
         if ($durum !== '') {
-            $where[] = 'dolu.durum IN (' . $this->statusFilterList($durum) . ')';
+            $where[] = $this->statusFilterSql($durum);
         }
         if ($promosyon !== '') {
             $where[] = 'kayitlar.promotionCode = :promosyon';
@@ -298,6 +299,7 @@ LEFT  JOIN acenta_users au ON au.id = a.acentaId"
         $sql = " 
 SELECT
     COUNT(*) OVER() AS totalCount,
+    ISNULL(sk.baslik, sites.natsisa_color) as natsisa_color,
     SUM(tutar.toplam_tutar * tutar.kur_carpan) OVER() AS sumTutar,
     SUM((CASE WHEN kayitlar.tur = 2 THEN tutar.toplam_tutar ELSE tutar.on_odeme END) * tutar.kur_carpan) OVER() AS sumOnOdeme,
     SUM((CASE WHEN kayitlar.tur = 2 THEN 0 ELSE tutar.kalan END) * tutar.kur_carpan) OVER() AS sumKalan,
@@ -680,6 +682,7 @@ $orderSql
 
     /**
      * 7 sanal filtre degeridir; veritabanindaki rezervasyon durumu degildir.
+     * Diger degerlerde 5 (Silindi) statusFilterList ile siteye ozel koda cevrilir.
      * EXISTS birden fazla gecis kaydinin satirlari ve ciroyu cogaltmasini onler.
      */
     private function statusFilterSql(string $statuses): string
@@ -691,7 +694,8 @@ $orderSql
         }));
         $conditions = [];
         if ($regular) {
-            $conditions[] = 'dolu.durum IN (' . implode(',', $regular) . ')';
+            // 5 (Silindi) siteye özel silinme koduna çevrilir.
+            $conditions[] = 'dolu.durum IN (' . $this->statusFilterList(implode(',', $regular)) . ')';
         }
         if ($hasCancelledAfterApproval && $this->configBool('reservation_filters_use_status_log', false)) {
             $conditions[] = '(dolu.durum = 4 AND EXISTS (
