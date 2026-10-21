@@ -103,11 +103,7 @@ final class CmsPagesController extends Controller
                 }
                 $values['siralama'] = $max + 1;
             }
-            $columns = array_keys($values);
-            $stmt = $pdo->prepare('INSERT INTO dbo.[' . $table . '] ([' . implode('], [', $columns)
-                . ']) OUTPUT INSERTED.id VALUES (:' . implode(', :', $columns) . ')');
-            $this->execute($stmt, $values);
-            $newId = (int) $stmt->fetchColumn();
+            $newId = $this->insertRow($pdo, $table, $values);
             $pdo->commit();
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
@@ -243,6 +239,7 @@ final class CmsPagesController extends Controller
      */
     public function uploadImage(): void
     {
+        $this->assertUploadBody();
         $id = $this->bodyId('id');
         $field = (string) $this->request->input('field', 'gallery');
         if ($field !== 'gallery' && !in_array($field, self::IMAGE_FIELDS, true)) {
@@ -257,12 +254,14 @@ final class CmsPagesController extends Controller
         $filename = Uploads::storeImage('image', self::IMAGE_TYPES);
         $path = Uploads::dir() . DIRECTORY_SEPARATOR . $filename;
         $uploadId = null;
+        // SQL'e kayit olmazsa (hata, 0 satir, id yok) dosya uploads/ klasorunden silinir; kayitsiz dosya kalmaz.
         try {
             if ($field === 'gallery') {
                 $uploadId = $this->insertUpload($pdo, $id, $filename, (int) @filesize($path));
             } else {
                 $stmt = $pdo->prepare('UPDATE dbo.[' . $table . '] SET [' . $field . '] = :filename WHERE id = :id');
                 $this->execute($stmt, ['filename' => $filename, 'id' => $id]);
+                if ($stmt->rowCount() === 0) throw new HttpException('Sayfa bulunamadi.', 'NOT_FOUND', 404);
             }
         } catch (\Throwable $e) {
             @unlink($path);
@@ -396,6 +395,35 @@ final class CmsPagesController extends Controller
         throw new HttpException('Site bulunamadi.', 'SITE_NOT_FOUND', 404);
     }
 
+    // DEBUG: multipart govde PHP'ye bos ulastiysa (id yok) PHP'nin yukleme durumunu hata mesajina ekler.
+    private function assertUploadBody(): void
+    {
+        if (empty($this->app['debug']) || $this->request->input('id') !== null) return;
+        $tmpDir = (string) ini_get('upload_tmp_dir');
+        $file = $_FILES['image'] ?? null;
+        $info = [
+            'request_method' => $_SERVER['REQUEST_METHOD'] ?? null,
+            'content_type' => $_SERVER['CONTENT_TYPE'] ?? null,
+            'content_length' => $_SERVER['CONTENT_LENGTH'] ?? null,
+            'post_keys' => array_keys($_POST),
+            'files_keys' => array_keys($_FILES),
+            'files_image' => is_array($file) ? ['name' => $file['name'] ?? null, 'size' => $file['size'] ?? null, 'error' => $file['error'] ?? null] : null,
+            'enable_post_data_reading' => ini_get('enable_post_data_reading'),
+            'file_uploads' => ini_get('file_uploads'),
+            'post_max_size' => ini_get('post_max_size'),
+            'upload_max_filesize' => ini_get('upload_max_filesize'),
+            'max_file_uploads' => ini_get('max_file_uploads'),
+            'upload_tmp_dir' => $tmpDir,
+            'upload_tmp_dir_exists' => $tmpDir !== '' ? @is_dir($tmpDir) : null,
+            'upload_tmp_dir_writable' => $tmpDir !== '' ? @is_writable($tmpDir) : null,
+            'open_basedir' => ini_get('open_basedir'),
+            'last_error' => error_get_last(),
+            'php_ini' => php_ini_loaded_file(),
+            'php_version' => PHP_VERSION,
+        ];
+        throw new HttpException('Istek govdesi PHP\'ye bos ulasti. | DEBUG: ' . json_encode($info, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), 'UPLOAD_NO_BODY', 400);
+    }
+
     // Sayfa bu ekranda listeleniyorsa tablo adini dondurur.
     private function requireListedPage(PDO $pdo, int $id): string
     {
@@ -431,12 +459,69 @@ final class CmsPagesController extends Controller
         foreach (['aciklama', 'aciklama4', 'url'] as $column) {
             if (in_array($column, $columns, true)) $values[$column] = '';
         }
-        $names = array_keys($values);
-        $date = in_array('dateofupload', $columns, true) ? ', DateOfUpload' : '';
-        $stmt = $pdo->prepare('INSERT INTO dbo.upload ([' . implode('], [', $names) . ']' . $date . ') OUTPUT INSERTED.uploadID VALUES (:'
-            . implode(', :', $names) . ($date !== '' ? ', GETDATE()' : '') . ')');
-        $this->execute($stmt, $values);
-        return (int) $stmt->fetchColumn();
+        $raw = in_array('dateofupload', $columns, true) ? ['DateOfUpload' => 'GETDATE()'] : [];
+        return $this->insertRow($pdo, 'upload', $values, $raw);
+    }
+
+    /**
+     * Satir ekler ve yeni kimligi dondurur. OUTPUT INSERTED trigger'li tablolarda hata verdigi icin
+     * ayni batch'te SCOPE_IDENTITY() okunur. Gonderilmeyen NOT NULL + varsayilansiz kolonlar
+     * eski panel kayitlari gibi bos deger alir ('' / 0 / GETDATE()).
+     *
+     * @param array<string,mixed> $values kolon => deger (parametreli)
+     * @param array<string,string> $raw kolon => SQL ifadesi (ornek GETDATE())
+     */
+    private function insertRow(PDO $pdo, string $table, array $values, array $raw = []): int
+    {
+        $given = array_map('strtolower', array_merge(array_keys($values), array_keys($raw)));
+        foreach ($this->requiredColumns($pdo, $table) as $column) {
+            if (in_array(strtolower($column['name']), $given, true)) continue;
+            $type = strtolower((string) $column['type']);
+            if (in_array($type, ['char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext'], true)) {
+                $values[$column['name']] = '';
+            } elseif (in_array($type, ['bit', 'tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney'], true)) {
+                $values[$column['name']] = 0;
+            } elseif (in_array($type, ['date', 'datetime', 'datetime2', 'smalldatetime', 'datetimeoffset'], true)) {
+                $raw[$column['name']] = 'GETDATE()';
+            }
+        }
+
+        $names = array_merge(array_keys($values), array_keys($raw));
+        $params = [];
+        $placeholders = [];
+        $index = 0;
+        foreach ($values as $value) {
+            $key = 'p' . $index++;
+            $params[$key] = $value;
+            $placeholders[] = ':' . $key;
+        }
+        $placeholders = array_merge($placeholders, array_values($raw));
+
+        $stmt = $pdo->prepare('SET NOCOUNT ON; INSERT INTO dbo.[' . $table . '] ([' . implode('], [', $names) . ']) VALUES ('
+            . implode(', ', $placeholders) . '); SELECT CAST(SCOPE_IDENTITY() AS INT) AS id;');
+        $this->execute($stmt, $params);
+        // Trigger ek sonuc kumesi dondurse bile son kolonlu sonuc SCOPE_IDENTITY'dir.
+        $id = 0;
+        do {
+            if ($stmt->columnCount() > 0) {
+                $value = $stmt->fetchColumn();
+                if ($value !== false && $value !== null) $id = (int) $value;
+            }
+        } while ($stmt->nextRowset());
+        if ($id <= 0) throw new HttpException('Kayit eklendi ancak kimligi okunamadi.', 'INSERT_ID_MISSING', 500);
+        return $id;
+    }
+
+    /** @return array<int,array{name:string,type:string}> */
+    private function requiredColumns(PDO $pdo, string $table): array
+    {
+        $stmt = $pdo->prepare("SELECT c.COLUMN_NAME AS name, c.DATA_TYPE AS type
+            FROM INFORMATION_SCHEMA.COLUMNS c
+            WHERE c.TABLE_SCHEMA = 'dbo' AND c.TABLE_NAME = :t AND c.IS_NULLABLE = 'NO' AND c.COLUMN_DEFAULT IS NULL
+              AND COLUMNPROPERTY(OBJECT_ID('dbo.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') = 0
+              AND COLUMNPROPERTY(OBJECT_ID('dbo.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsComputed') = 0");
+        $stmt->execute([':t' => $table]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     private function uploadColumns(PDO $pdo): array
