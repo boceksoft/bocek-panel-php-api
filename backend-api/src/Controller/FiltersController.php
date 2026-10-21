@@ -107,16 +107,15 @@ final class FiltersController extends Controller
         try {
             $sitesRaw = $pdo->query(
                 "SELECT id, site
-                 FROM tip
-                 WHERE aktif = 1
-                   AND cat = 0
+                 FROM sites
+                  
                  ORDER BY id ASC"
             )->fetchAll();
 
             $sites = array_map(function (array $row): array {
                 return [
-                    'id'    => 'site_' . $row['id'],
-                    'label' => 'Site [' . $row['site'] . ']',
+                    'id'    => $row['id'],
+                    'label' => $row['site'],
                 ];
             }, $sitesRaw);
         } catch (\PDOException $e) {
