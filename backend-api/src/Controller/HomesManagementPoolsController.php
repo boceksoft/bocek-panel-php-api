@@ -509,6 +509,12 @@ final class HomesManagementPoolsController extends Controller
 
     private function poolTypeExists(PDO $pdo, int $tipId): bool
     {
+        // Ilanlarda simdilik sadece homes kolonlarina bagli sabit tipler (1 yuzme, 2 cocuk, 3 kapali) kullanilir;
+        // Tanimlamalar'dan eklenen yeni tipler kabul edilmez.
+        if (!in_array($tipId, [1, 2, 3], true)) {
+            return false;
+        }
+
         $stmt = $pdo->prepare('SELECT COUNT(*) FROM dbo.havuztipitanimlari WHERE id = :id');
         $stmt->execute([':id' => $tipId]);
 

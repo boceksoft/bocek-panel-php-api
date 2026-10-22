@@ -259,10 +259,13 @@ final class HomesManagementDetailDataController extends Controller
             'distance' => $distanceOptions,
             'mesafe_secenekleri' => $distanceOptions,
             'iptal_sartlari' => $this->iptalSartlari($pdo, $sites),
+            // Sadece homes kolonlarina bagli sabit tipler (1 yuzme, 2 cocuk, 3 kapali); Tanimlamalar'dan
+            // eklenen yeni tipler simdilik ilan detayinda secilemez (sadece tanimlamalarda listelenir).
             'havuz_tipleri' => $this->fetchOptions(
                 $pdo,
                 "SELECT id, baslik AS title
                  FROM dbo.havuztipitanimlari
+                 WHERE id IN (1, 2, 3)
                  ORDER BY id ASC"
             ),
             'oda_yatak_tipleri' => $this->fetchOptions(
