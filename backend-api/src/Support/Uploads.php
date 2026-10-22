@@ -82,10 +82,8 @@ final class Uploads
             throw new HttpException('Dosya boyutu 10MB limitini asiyor.', 'FILE_TOO_LARGE', 400);
         }
 
-        $finfo = finfo_open(FILEINFO_MIME_TYPE);
-        $mime = finfo_file($finfo, $_FILES[$field]['tmp_name']);
-        finfo_close($finfo);
-        if (!isset($allowed[$mime])) {
+        $mime = self::imageMime($_FILES[$field]['tmp_name']);
+        if (!is_string($mime) || !isset($allowed[$mime])) {
             throw new HttpException('Desteklenmeyen gorsel formati.', 'INVALID_FILE_TYPE', 400);
         }
 
@@ -105,5 +103,22 @@ final class Uploads
         }
 
         return $filename;
+    }
+
+    /**
+     * Dosyanin gercek MIME turu. fileinfo eklentisi kapali sunucularda getimagesize() (PHP cekirdegi)
+     * kullanilir; gorsel degilse null doner.
+     */
+    public static function imageMime(string $path): ?string
+    {
+        if (function_exists('finfo_open')) {
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            $mime = $finfo ? finfo_file($finfo, $path) : false;
+            if ($finfo) finfo_close($finfo);
+            if (is_string($mime) && $mime !== '') return $mime;
+        }
+
+        $info = @getimagesize($path);
+        return is_array($info) && isset($info['mime']) ? (string) $info['mime'] : null;
     }
 }

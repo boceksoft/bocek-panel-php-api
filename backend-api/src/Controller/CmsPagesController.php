@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\LegacySql;
 use App\Support\Uploads;
 use PDO;
 
@@ -19,10 +20,16 @@ use PDO;
  *   ekstra resimler           -> upload tablosu (islm='sayfa', islm_id, site, sira)
  *   GET  /backend-api/cms-pages/images?site=1&id=5
  *   POST /backend-api/cms-pages/images/upload | update | delete | sort | clear
+ * BlogPostsController bu sinifi genisletir (blog=1, islm='blog'); sabitler ve scope() alt sinifta degisir.
  */
-final class CmsPagesController extends Controller
+class CmsPagesController extends Controller
 {
-    private const FIELDS = [
+    use LegacySql;
+
+    // upload tablosundaki islm degeri (ekstra resimler).
+    protected const ISLM = 'sayfa';
+
+    protected const FIELDS = [
         'baslik' => 'string', 'url' => 'string', 'cat' => 'int', 'siralama' => 'int',
         'aktif' => 'bit', 'favori' => 'bit', 'menu' => 'bit', 'menu2' => 'bit', 'sitemap' => 'bit',
         'kisa_baslik' => 'string', 'kisa_icerik' => 'string', 'icerik' => 'string', 'title' => 'string',
@@ -31,12 +38,12 @@ final class CmsPagesController extends Controller
     ];
 
     // Upload endpoint'i ile doldurulan tekil gorsel kolonlari (formdan dogrudan yazilmaz).
-    private const IMAGE_FIELDS = ['resim', 'kapak', 'video_kapak'];
+    protected const IMAGE_FIELDS = ['resim', 'kapak', 'video_kapak'];
 
-    private const IMAGE_TYPES = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
+    protected const IMAGE_TYPES = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
 
     // Liste agacinda icerik metinleri tasinmaz.
-    private const LIST_FIELDS = ['baslik', 'url', 'cat', 'siralama', 'aktif', 'favori', 'menu', 'menu2', 'sitemap', 'static'];
+    protected const LIST_FIELDS = ['baslik', 'url', 'cat', 'siralama', 'aktif', 'favori', 'menu', 'menu2', 'sitemap', 'static'];
 
     /**
      * @Get
@@ -47,7 +54,7 @@ final class CmsPagesController extends Controller
         $pdo = $this->db->pdo();
         $table = $this->table($pdo);
         $present = $this->presentColumns($pdo, $table);
-        $columns = array_values(array_intersect(self::LIST_FIELDS, $present));
+        $columns = array_values(array_intersect(static::LIST_FIELDS, $present));
         $select = implode(', ', array_map(function ($field) { return '[' . $field . ']'; }, $columns));
         $stmt = $pdo->prepare('SELECT id, ' . $select . ' FROM dbo.[' . $table . '] WHERE '
             . $this->scope($present) . ' ORDER BY siralama, id');
@@ -69,7 +76,7 @@ final class CmsPagesController extends Controller
         $pdo = $this->db->pdo();
         $table = $this->table($pdo);
         $present = $this->presentColumns($pdo, $table);
-        $columns = array_values(array_intersect(array_merge(array_keys(self::FIELDS), ['static'], self::IMAGE_FIELDS), $present));
+        $columns = array_values(array_intersect(array_merge(array_keys(static::FIELDS), ['static'], static::IMAGE_FIELDS), $present));
         $select = implode(', ', array_map(function ($field) { return '[' . $field . ']'; }, $columns));
         $stmt = $pdo->prepare('SELECT id, ' . $select . ' FROM dbo.[' . $table . '] WHERE id = :id AND '
             . $this->scope($present));
@@ -142,7 +149,7 @@ final class CmsPagesController extends Controller
     }
 
     /**
-     * Kayit silinmez; disabled = 1 ile listeden kaldirilir.
+     * Sayfa satirini tablodan siler (eski paneldeki gibi). Sabit sayfa ve alt sayfasi olan sayfa silinmez.
      * @Post("delete")
      */
     public function delete(): void
@@ -151,9 +158,6 @@ final class CmsPagesController extends Controller
         $pdo = $this->db->pdo();
         $table = $this->table($pdo);
         $present = $this->presentColumns($pdo, $table);
-        if (!in_array('disabled', $present, true)) {
-            throw new HttpException('Sayfa tablosunda disabled kolonu yok.', 'DELETE_UNSUPPORTED', 409);
-        }
         $pdo->beginTransaction();
         try {
             $rows = $this->hierarchy($pdo, $table, $present);
@@ -164,7 +168,7 @@ final class CmsPagesController extends Controller
                     throw new HttpException('Once alt sayfalari tasiyin veya silin.', 'CHILD_PAGES', 409);
                 }
             }
-            $this->execute($pdo->prepare('UPDATE dbo.[' . $table . '] SET disabled = 1 WHERE id = :id'), ['id' => $id]);
+            $this->execute($pdo->prepare('DELETE FROM dbo.[' . $table . '] WHERE id = :id'), ['id' => $id]);
             $pdo->commit();
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
@@ -227,8 +231,8 @@ final class CmsPagesController extends Controller
         foreach (['aciklama', 'url'] as $column) {
             if (in_array($column, $columns, true)) $select .= ', [' . $column . ']';
         }
-        $stmt = $pdo->prepare('SELECT ' . $select . " FROM dbo.upload WHERE islm = 'sayfa' AND islm_id = :id AND site = :site ORDER BY sira, uploadID");
-        $this->execute($stmt, ['id' => $id, 'site' => $this->siteId()]);
+        $stmt = $pdo->prepare('SELECT ' . $select . ' FROM dbo.upload WHERE islm = :islm AND islm_id = :id AND site = :site ORDER BY sira, uploadID');
+        $this->execute($stmt, ['islm' => static::ISLM, 'id' => $id, 'site' => $this->siteId()]);
         $this->response->success(['images' => $stmt->fetchAll(PDO::FETCH_ASSOC), 'imageBase' => $this->imageBase()]);
     }
 
@@ -242,7 +246,7 @@ final class CmsPagesController extends Controller
         $this->assertUploadBody();
         $id = $this->bodyId('id');
         $field = (string) $this->request->input('field', 'gallery');
-        if ($field !== 'gallery' && !in_array($field, self::IMAGE_FIELDS, true)) {
+        if ($field !== 'gallery' && !in_array($field, static::IMAGE_FIELDS, true)) {
             throw new HttpException('Gecersiz gorsel alani.', 'VALIDATION', 422);
         }
         $pdo = $this->db->pdo();
@@ -251,7 +255,8 @@ final class CmsPagesController extends Controller
             throw new HttpException('Sayfa tablosunda bu gorsel kolonu yok.', 'VALIDATION', 422);
         }
 
-        $filename = Uploads::storeImage('image', self::IMAGE_TYPES);
+        $this->assertUploadedFile();
+        $filename = Uploads::storeImage('image', static::IMAGE_TYPES);
         $path = Uploads::dir() . DIRECTORY_SEPARATOR . $filename;
         $uploadId = null;
         // SQL'e kayit olmazsa (hata, 0 satir, id yok) dosya uploads/ klasorunden silinir; kayitsiz dosya kalmaz.
@@ -330,11 +335,11 @@ final class CmsPagesController extends Controller
         if (!is_array($order) || $order === []) throw new HttpException('Sira listesi gereklidir.', 'VALIDATION', 422);
         $pdo = $this->db->pdo();
         $this->requireListedPage($pdo, $id);
-        $stmt = $pdo->prepare("UPDATE dbo.upload SET sira = :sira WHERE uploadID = :uploadId AND islm = 'sayfa' AND islm_id = :id AND site = :site");
+        $stmt = $pdo->prepare('UPDATE dbo.upload SET sira = :sira WHERE uploadID = :uploadId AND islm = :islm AND islm_id = :id AND site = :site');
         $pdo->beginTransaction();
         try {
             foreach (array_values($order) as $offset => $raw) {
-                $this->execute($stmt, ['sira' => $offset + 1, 'uploadId' => $this->validId($raw), 'id' => $id, 'site' => $this->siteId()]);
+                $this->execute($stmt, ['sira' => $offset + 1, 'uploadId' => $this->validId($raw), 'islm' => static::ISLM, 'id' => $id, 'site' => $this->siteId()]);
             }
             $pdo->commit();
         } catch (\Throwable $e) {
@@ -352,7 +357,7 @@ final class CmsPagesController extends Controller
     {
         $id = $this->bodyId('id');
         $field = (string) $this->request->input('field', '');
-        if (!in_array($field, self::IMAGE_FIELDS, true)) throw new HttpException('Gecersiz gorsel alani.', 'VALIDATION', 422);
+        if (!in_array($field, static::IMAGE_FIELDS, true)) throw new HttpException('Gecersiz gorsel alani.', 'VALIDATION', 422);
         $pdo = $this->db->pdo();
         $table = $this->requireListedPage($pdo, $id);
         if (!in_array($field, $this->presentColumns($pdo, $table), true)) {
@@ -362,70 +367,71 @@ final class CmsPagesController extends Controller
         $this->response->success(['message' => 'Gorsel kaldirildi']);
     }
 
-    private function siteId(): int
-    {
-        $value = $this->request->query('site', $this->request->input('site', 1));
-        $site = filter_var($value, FILTER_VALIDATE_INT);
-        if ($site === false || $site <= 0) throw new HttpException('Gecersiz site.', 'VALIDATION', 422);
-        return $site;
-    }
-
     // Site tablosu sonekini sites tablosundan (yoksa global $SITES'ten) okur.
-    private function table(PDO $pdo): string
+    protected function table(PDO $pdo): string
     {
-        $siteId = $this->siteId();
-        $sites = [];
-        try {
-            $sites = $pdo->query('SELECT id, dbtable FROM sites')->fetchAll(PDO::FETCH_ASSOC);
-        } catch (\PDOException $e) {
-            global $SITES;
-            if (isset($SITES) && is_array($SITES)) {
-                foreach ($SITES as $id => $site) {
-                    if (is_array($site)) $sites[] = ['id' => $id, 'dbtable' => $site['dbtable'] ?? ''];
-                }
-            }
-        }
-        if ($sites === [] && $siteId === 1) return 'sayfalar';
-        foreach ($sites as $site) {
-            if ((int) $site['id'] !== $siteId) continue;
-            $suffix = trim((string) ($site['dbtable'] ?? ''));
-            if ($suffix !== '' && preg_match('/^_[A-Za-z0-9]+$/', $suffix) !== 1) break;
-            return 'sayfalar' . $suffix;
-        }
-        throw new HttpException('Site bulunamadi.', 'SITE_NOT_FOUND', 404);
+        return 'sayfalar' . $this->siteSuffix($pdo);
     }
 
     // DEBUG: multipart govde PHP'ye bos ulastiysa (id yok) PHP'nin yukleme durumunu hata mesajina ekler.
-    private function assertUploadBody(): void
+    protected function assertUploadBody(): void
     {
         if (empty($this->app['debug']) || $this->request->input('id') !== null) return;
+        throw new HttpException('Istek govdesi PHP\'ye bos ulasti.' . $this->uploadState(), 'UPLOAD_NO_BODY', 400);
+    }
+
+    // DEBUG: $_FILES['image'] yok veya hatali ise PHP hata kodunun anlamini ve yukleme durumunu dondurur.
+    protected function assertUploadedFile(): void
+    {
+        if (empty($this->app['debug'])) return;
+        if (!isset($_FILES['image'])) {
+            throw new HttpException('Dosya PHP\'ye ulasmadi ($_FILES bos).' . $this->uploadState(), 'UPLOAD_NO_FILE', 400);
+        }
+        $error = (int) $_FILES['image']['error'];
+        if ($error === UPLOAD_ERR_OK) return;
+        $reasons = [
+            UPLOAD_ERR_INI_SIZE => 'upload_max_filesize limiti asildi',
+            UPLOAD_ERR_FORM_SIZE => 'MAX_FILE_SIZE limiti asildi',
+            UPLOAD_ERR_PARTIAL => 'dosya yarim geldi',
+            UPLOAD_ERR_NO_FILE => 'dosya secilmedi',
+            UPLOAD_ERR_NO_TMP_DIR => 'gecici klasor yok veya erisilemiyor (upload_tmp_dir / open_basedir)',
+            UPLOAD_ERR_CANT_WRITE => 'gecici klasore yazilamadi (izin)',
+            UPLOAD_ERR_EXTENSION => 'bir PHP eklentisi yuklemeyi durdurdu',
+        ];
+        throw new HttpException('Dosya yuklenemedi: PHP hata kodu ' . $error . ' - ' . ($reasons[$error] ?? 'bilinmiyor') . '.'
+            . $this->uploadState(), 'UPLOAD_FAILED', 400);
+    }
+
+    protected function uploadState(): string
+    {
         $tmpDir = (string) ini_get('upload_tmp_dir');
         $file = $_FILES['image'] ?? null;
         $info = [
-            'request_method' => $_SERVER['REQUEST_METHOD'] ?? null,
             'content_type' => $_SERVER['CONTENT_TYPE'] ?? null,
             'content_length' => $_SERVER['CONTENT_LENGTH'] ?? null,
             'post_keys' => array_keys($_POST),
             'files_keys' => array_keys($_FILES),
-            'files_image' => is_array($file) ? ['name' => $file['name'] ?? null, 'size' => $file['size'] ?? null, 'error' => $file['error'] ?? null] : null,
-            'enable_post_data_reading' => ini_get('enable_post_data_reading'),
+            'files_image' => is_array($file) ? [
+                'name' => $file['name'] ?? null, 'size' => $file['size'] ?? null,
+                'error' => $file['error'] ?? null, 'tmp_name' => $file['tmp_name'] ?? null,
+            ] : null,
             'file_uploads' => ini_get('file_uploads'),
             'post_max_size' => ini_get('post_max_size'),
             'upload_max_filesize' => ini_get('upload_max_filesize'),
-            'max_file_uploads' => ini_get('max_file_uploads'),
             'upload_tmp_dir' => $tmpDir,
             'upload_tmp_dir_exists' => $tmpDir !== '' ? @is_dir($tmpDir) : null,
             'upload_tmp_dir_writable' => $tmpDir !== '' ? @is_writable($tmpDir) : null,
+            'sys_get_temp_dir' => sys_get_temp_dir(),
             'open_basedir' => ini_get('open_basedir'),
             'last_error' => error_get_last(),
             'php_ini' => php_ini_loaded_file(),
             'php_version' => PHP_VERSION,
         ];
-        throw new HttpException('Istek govdesi PHP\'ye bos ulasti. | DEBUG: ' . json_encode($info, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), 'UPLOAD_NO_BODY', 400);
+        return ' | DEBUG: ' . json_encode($info, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     }
 
     // Sayfa bu ekranda listeleniyorsa tablo adini dondurur.
-    private function requireListedPage(PDO $pdo, int $id): string
+    protected function requireListedPage(PDO $pdo, int $id): string
     {
         $table = $this->table($pdo);
         $stmt = $pdo->prepare('SELECT COUNT(*) FROM dbo.[' . $table . '] WHERE id = :id AND ' . $this->scope($this->presentColumns($pdo, $table)));
@@ -435,24 +441,24 @@ final class CmsPagesController extends Controller
     }
 
     // Sadece bu sitedeki, listelenen bir sayfaya ait ekstra resim.
-    private function requireUpload(PDO $pdo, int $uploadId): void
+    protected function requireUpload(PDO $pdo, int $uploadId): void
     {
-        $stmt = $pdo->prepare("SELECT islm_id FROM dbo.upload WHERE uploadID = :uploadId AND islm = 'sayfa' AND site = :site");
-        $this->execute($stmt, ['uploadId' => $uploadId, 'site' => $this->siteId()]);
+        $stmt = $pdo->prepare('SELECT islm_id FROM dbo.upload WHERE uploadID = :uploadId AND islm = :islm AND site = :site');
+        $this->execute($stmt, ['uploadId' => $uploadId, 'islm' => static::ISLM, 'site' => $this->siteId()]);
         $pageId = $stmt->fetchColumn();
         if ($pageId === false) throw new HttpException('Resim bulunamadi.', 'NOT_FOUND', 404);
         $this->requireListedPage($pdo, (int) $pageId);
     }
 
-    // ImgDownloadController ile ayni kayit bicimi; islm='sayfa', sira dizinin sonu.
-    private function insertUpload(PDO $pdo, int $pageId, string $filename, int $size): int
+    // ImgDownloadController ile ayni kayit bicimi; islm=static::ISLM, sira dizinin sonu.
+    protected function insertUpload(PDO $pdo, int $pageId, string $filename, int $size): int
     {
         $columns = $this->uploadColumns($pdo);
         $site = $this->siteId();
-        $stmt = $pdo->prepare("SELECT ISNULL(MAX(sira), 0) FROM dbo.upload WHERE islm = 'sayfa' AND islm_id = :id AND site = :site");
-        $this->execute($stmt, ['id' => $pageId, 'site' => $site]);
+        $stmt = $pdo->prepare('SELECT ISNULL(MAX(sira), 0) FROM dbo.upload WHERE islm = :islm AND islm_id = :id AND site = :site');
+        $this->execute($stmt, ['islm' => static::ISLM, 'id' => $pageId, 'site' => $site]);
         $values = [
-            'FileName' => $filename, 'FileSize' => $size, 'islm' => 'sayfa', 'islm_id' => $pageId,
+            'FileName' => $filename, 'FileSize' => $size, 'islm' => static::ISLM, 'islm_id' => $pageId,
             'sira' => (int) $stmt->fetchColumn() + 1, 'site' => $site,
         ];
         // NOT NULL olabilen metin kolonlari eski kayitlardaki gibi bos string.
@@ -463,80 +469,14 @@ final class CmsPagesController extends Controller
         return $this->insertRow($pdo, 'upload', $values, $raw);
     }
 
-    /**
-     * Satir ekler ve yeni kimligi dondurur. OUTPUT INSERTED trigger'li tablolarda hata verdigi icin
-     * ayni batch'te SCOPE_IDENTITY() okunur. Gonderilmeyen NOT NULL + varsayilansiz kolonlar
-     * eski panel kayitlari gibi bos deger alir ('' / 0 / GETDATE()).
-     *
-     * @param array<string,mixed> $values kolon => deger (parametreli)
-     * @param array<string,string> $raw kolon => SQL ifadesi (ornek GETDATE())
-     */
-    private function insertRow(PDO $pdo, string $table, array $values, array $raw = []): int
-    {
-        $given = array_map('strtolower', array_merge(array_keys($values), array_keys($raw)));
-        foreach ($this->requiredColumns($pdo, $table) as $column) {
-            if (in_array(strtolower($column['name']), $given, true)) continue;
-            $type = strtolower((string) $column['type']);
-            if (in_array($type, ['char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext'], true)) {
-                $values[$column['name']] = '';
-            } elseif (in_array($type, ['bit', 'tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney'], true)) {
-                $values[$column['name']] = 0;
-            } elseif (in_array($type, ['date', 'datetime', 'datetime2', 'smalldatetime', 'datetimeoffset'], true)) {
-                $raw[$column['name']] = 'GETDATE()';
-            }
-        }
-
-        $names = array_merge(array_keys($values), array_keys($raw));
-        $params = [];
-        $placeholders = [];
-        $index = 0;
-        foreach ($values as $value) {
-            $key = 'p' . $index++;
-            $params[$key] = $value;
-            $placeholders[] = ':' . $key;
-        }
-        $placeholders = array_merge($placeholders, array_values($raw));
-
-        $stmt = $pdo->prepare('SET NOCOUNT ON; INSERT INTO dbo.[' . $table . '] ([' . implode('], [', $names) . ']) VALUES ('
-            . implode(', ', $placeholders) . '); SELECT CAST(SCOPE_IDENTITY() AS INT) AS id;');
-        $this->execute($stmt, $params);
-        // Trigger ek sonuc kumesi dondurse bile son kolonlu sonuc SCOPE_IDENTITY'dir.
-        $id = 0;
-        do {
-            if ($stmt->columnCount() > 0) {
-                $value = $stmt->fetchColumn();
-                if ($value !== false && $value !== null) $id = (int) $value;
-            }
-        } while ($stmt->nextRowset());
-        if ($id <= 0) throw new HttpException('Kayit eklendi ancak kimligi okunamadi.', 'INSERT_ID_MISSING', 500);
-        return $id;
-    }
-
-    /** @return array<int,array{name:string,type:string}> */
-    private function requiredColumns(PDO $pdo, string $table): array
-    {
-        $stmt = $pdo->prepare("SELECT c.COLUMN_NAME AS name, c.DATA_TYPE AS type
-            FROM INFORMATION_SCHEMA.COLUMNS c
-            WHERE c.TABLE_SCHEMA = 'dbo' AND c.TABLE_NAME = :t AND c.IS_NULLABLE = 'NO' AND c.COLUMN_DEFAULT IS NULL
-              AND COLUMNPROPERTY(OBJECT_ID('dbo.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity') = 0
-              AND COLUMNPROPERTY(OBJECT_ID('dbo.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsComputed') = 0");
-        $stmt->execute([':t' => $table]);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    private function uploadColumns(PDO $pdo): array
+    protected function uploadColumns(PDO $pdo): array
     {
         $stmt = $pdo->query("SELECT LOWER(COLUMN_NAME) AS c FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'upload'");
         return array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'c');
     }
 
-    private function imageBase(): string
-    {
-        return Uploads::cdnDomain() . '/uploads/small/';
-    }
-
     // yeni_sayfa_ekle.asp: kampanya alanlari sadece qsql("kampanyalarID") altindaki sayfalarda gosterilir.
-    private function kampanyalarId(PDO $pdo): int
+    protected function kampanyalarId(PDO $pdo): int
     {
         $table = $this->siteId() === 2 ? 'genel_s2' : 'genel';
         try {
@@ -547,7 +487,7 @@ final class CmsPagesController extends Controller
         return is_array($row) ? (int) ($row['kampanyalarID'] ?? reset($row)) : 0;
     }
 
-    private function presentColumns(PDO $pdo, string $table): array
+    protected function presentColumns(PDO $pdo, string $table): array
     {
         $stmt = $pdo->prepare("SELECT LOWER(COLUMN_NAME) AS c FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = :t");
         $stmt->execute([':t' => $table]);
@@ -557,7 +497,7 @@ final class CmsPagesController extends Controller
     }
 
     // sayfalar.asp'deki liste filtresi.
-    private function scope(array $present): string
+    protected function scope(array $present): string
     {
         $where = ['1 = 1'];
         if (in_array('haber', $present, true)) $where[] = 'ISNULL(haber, 0) = 0';
@@ -566,17 +506,27 @@ final class CmsPagesController extends Controller
         return implode(' AND ', $where);
     }
 
-    private function values(): array
+    protected function values(): array
     {
         $input = $this->request->json();
         $values = [];
-        foreach (self::FIELDS as $field => $type) {
+        foreach (static::FIELDS as $field => $type) {
             if (!array_key_exists($field, $input)) continue;
             $value = $input[$field];
             if ($type === 'string') {
                 if ($value !== null && !is_string($value)) throw new HttpException('Gecersiz metin alani.', 'VALIDATION', 422);
                 $values[$field] = trim((string) $value);
                 if ($field === 'baslik' && $values[$field] === '') throw new HttpException('Sayfa basligi gereklidir.', 'VALIDATION', 422);
+            } elseif ($type === 'datetime') {
+                // "2026-10-21 14:30", "2026-10-21T14:30" veya saniyeli; SQL'e dil ayarindan bagimsiz ISO 8601 (2026-10-21T14:30:00) gider.
+                $text = is_string($value) ? str_replace('T', ' ', trim($value)) : '';
+                $date = false;
+                foreach (['Y-m-d H:i:s', 'Y-m-d H:i', 'Y-m-d'] as $format) {
+                    $date = \DateTime::createFromFormat('!' . $format, $text);
+                    if ($date !== false) break;
+                }
+                if ($date === false) throw new HttpException('Gecersiz tarih.', 'VALIDATION', 422);
+                $values[$field] = $date->format('Y-m-d\TH:i:s');
             } else {
                 if ($type === 'bit' && is_bool($value)) $value = (int) $value;
                 $number = filter_var($value, FILTER_VALIDATE_INT);
@@ -589,30 +539,7 @@ final class CmsPagesController extends Controller
         return $values;
     }
 
-    private function queryId(string $key): int
-    {
-        return $this->validId($this->request->query($key));
-    }
-
-    private function bodyId(string $key): int
-    {
-        return $this->validId($this->request->input($key));
-    }
-
-    private function validId($raw): int
-    {
-        $value = filter_var($raw, FILTER_VALIDATE_INT);
-        if ($value === false || $value <= 0 || $value > 2147483647) throw new HttpException('Gecersiz ID.', 'VALIDATION', 422);
-        return $value;
-    }
-
-    private function execute(\PDOStatement $stmt, array $values): void
-    {
-        foreach ($values as $key => $value) $stmt->bindValue(':' . $key, $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
-        $stmt->execute();
-    }
-
-    private function hierarchy(PDO $pdo, string $table, array $present): array
+    protected function hierarchy(PDO $pdo, string $table, array $present): array
     {
         $static = in_array('static', $present, true) ? ', static' : '';
         // Eszamanli tasimalar dongu olusturmasin diye hiyerarsi kilitlenir.
@@ -622,13 +549,13 @@ final class CmsPagesController extends Controller
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    private function requirePage(array $rows, int $id): array
+    protected function requirePage(array $rows, int $id): array
     {
         foreach ($rows as $row) if ((int) $row['id'] === $id) return $row;
         throw new HttpException('Sayfa bulunamadi.', 'NOT_FOUND', 404);
     }
 
-    private function validateParent(array $rows, int $id, int $parentId): void
+    protected function validateParent(array $rows, int $id, int $parentId): void
     {
         $parents = [];
         foreach ($rows as $row) $parents[(int) $row['id']] = (int) $row['cat'];

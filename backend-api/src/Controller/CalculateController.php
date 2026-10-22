@@ -547,7 +547,7 @@ WHERE h.id = {$entityId}";
                     "SELECT TOP 1 *
                      FROM dolu
                      WHERE emlak = :entityId
-                       AND durum IN (1, 3, 5)
+                       AND durum IN (1, 3)
                        AND :day BETWEEN DATEADD(day, 1, tarih) AND DATEADD(day, -1, tarih2)"
                 );
                 $stmt->execute(['entityId' => $entityId, 'day' => $day]);

@@ -298,6 +298,28 @@ WHERE {$whereSql}
         ]);
     }
 
+    /**
+     * Villayi siler: sadece homes tablosundaki ilgili satir (bagli tablolara dokunulmaz).
+     *   POST /backend-api/homes-management/delete  { "id": 123 }
+     *
+     * @Post("delete")
+     */
+    public function delete(): void
+    {
+        $id = (int) $this->request->query('id', $this->request->input('id', 0));
+        if ($id <= 0) {
+            throw new \App\Core\HttpException('Gecersiz villa ID', 'VALIDATION', 422);
+        }
+
+        $stmt = $this->db->pdo()->prepare('DELETE FROM dbo.homes WHERE id = :id');
+        $stmt->execute([':id' => $id]);
+        if ($stmt->rowCount() === 0) {
+            throw new \App\Core\HttpException('Villa bulunamadi.', 'NOT_FOUND', 404);
+        }
+
+        $this->response->success(['message' => 'Villa silindi', 'id' => $id]);
+    }
+
     private function p(string $key, string $default = ''): string
     {
         $val = $_GET[$key] ?? ($_POST[$key] ?? $default);
