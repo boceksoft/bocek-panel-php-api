@@ -35,6 +35,53 @@ abstract class Controller
     }
 
     /**
+     * Belge sure tipinin tutuldugu kanun7464 kolonu (ayar: gavel_duration_column, panelde elle yazilir).
+     * Bos veya gecersiz kolon adinda varsayilan belgeSuresiTipi kullanilir.
+     */
+    protected function gavelDurationColumn(): string
+    {
+        $column = trim((string) ($this->app['gavel_duration_column'] ?? ''));
+
+        return preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $column) === 1 ? $column : 'belgeSuresiTipi';
+    }
+
+    /**
+     * GavelBelgeSureli kolonu 0 suresiz / 1 sureli tutar; diger kolonlar 1 suresiz / 2 sureli.
+     */
+    protected function gavelDurationIsZeroBased(): bool
+    {
+        return strcasecmp($this->gavelDurationColumn(), 'GavelBelgeSureli') === 0;
+    }
+
+    /**
+     * SQL ifadesi: ayardaki kolondan sure tipini API degerine cevirir (1 suresiz, 2 sureli).
+     * 1/2 tutan kolon bossa NULL doner; 0/1 tutan kolonda (GavelBelgeSureli) bos deger suresiz sayilir.
+     */
+    protected function gavelDurationSql(string $alias): string
+    {
+        $column = $this->gavelDurationColumn();
+
+        return $this->gavelDurationIsZeroBased()
+            ? "(CASE WHEN ISNULL({$alias}.[{$column}], 0) = 1 THEN 2 ELSE 1 END)"
+            : "{$alias}.[{$column}]";
+    }
+
+    /**
+     * API sure tipini (1 suresiz, 2 sureli) ayardaki kolonun degerine cevirir; bos/gecersizse null.
+     *
+     * @param mixed $value
+     */
+    protected function gavelDurationDbValue($value): ?int
+    {
+        $value = trim((string) $value);
+        if ($value !== '1' && $value !== '2') {
+            return null;
+        }
+
+        return $this->gavelDurationIsZeroBased() ? ((int) $value - 1) : (int) $value;
+    }
+
+    /**
      * Silinen rezervasyonun veritabanındaki dolu.durum kodu (ayar: reservation_deleted_status, varsayılan 5).
      */
     protected function deletedStatus(): int

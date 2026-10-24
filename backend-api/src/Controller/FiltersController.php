@@ -343,16 +343,21 @@ final class FiltersController extends Controller
                     ['id' => '0', 'title' => 'Sezon Var'],
                     ['id' => '1', 'title' => 'Sezon Yok'],
                 ],
-                'gavelBelge' => [
+                'gavelBelge' => array_merge([
                     ['id' => 'active', 'title' => 'Belge Aktif'],
                     ['id' => 'passive', 'title' => 'Belge Pasif'],
                     ['id' => 'document', 'title' => 'Belge Numarasi Var'],
                     ['id' => 'document-no', 'title' => 'Belge Numarasi Yok'],
+                    ['id' => 'verified', 'title' => 'Belge Numarasi Var - Suresiz'],
+                    ['id' => 'unverified', 'title' => 'Belge Numarasi Var - Sureli'],
                     ['id' => 'application', 'title' => 'Basvuru Numarasi Var'],
                     ['id' => 'application-no', 'title' => 'Basvuru Numarasi Yok'],
                     ['id' => 'temporary', 'title' => 'Sureli Belge'],
                     ['id' => 'permanent', 'title' => 'Suresiz Belge'],
-                ],
+                ], $this->gavelDurationIsZeroBased()
+                    // 0/1 tutan kolonda bos deger suresiz sayildigi icin "belirtilmemis" secenegi yok
+                    ? []
+                    : [['id' => 'unspecified', 'title' => 'Sure Belirtilmemis']]),
                 'sira' => [
                     ['id' => '1', 'title' => 'Siralama Artan'],
                     ['id' => '2', 'title' => 'Siralama Azalan'],

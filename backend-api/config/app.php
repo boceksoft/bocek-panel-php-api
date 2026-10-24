@@ -17,6 +17,11 @@ return [
     // API dışarıya her zaman 5 (Silindi) döner ve 5 kabul eder; veritabanına bu değer yazılır/okunur.
     'reservation_deleted_status' => 5,
 
+    // Belge sure tipinin tutuldugu kanun7464 kolonu (ilan listesi filtresi, ilan detayi, belge yonetimi).
+    // 'belgeSuresiTipi': 1 suresiz, 2 sureli (varsayilan).
+    // 'GavelBelgeSureli': 0 suresiz, 1 sureli. Villa Kiralama > Config ekranindan degistirilir.
+    'gavel_duration_column' => 'belgeSuresiTipi',
+
     // IIS hata sayfalarını yutmasın diye her yanıtı HTTP 200 döndür.
     // Standart HTTP kodlarına dönmek için false yap.
     'force_http_200' => true,
@@ -213,6 +218,7 @@ return [
         'calculate_prices_same_across_sites' => 'bool',
         'calculate_heating_price_is_weekly' => 'bool',
         'reservation_pos' => 'array',
+        'gavel_duration_column' => 'string',
     ],
 
     // DB bilgileri ($config['db']) ve Domain sabitinin geldiaği,

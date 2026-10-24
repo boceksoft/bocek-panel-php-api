@@ -24,6 +24,11 @@ final class HomesManagementDetailUpdateController extends Controller
      * @query emlaktipi int Emlak tipi ID
      * @query kategori string Virgulle ayrilmis kategori ID listesi
      * @query ozellikler string Virgulle ayrilmis ozellik ID listesi
+     * @query gavelbelgeno string Bakanlik belge numarasi (gonderilirse kanun7464 guncellenir)
+     * @query gavelbelgetipi int Belge tipi (1: Konak, 2: Basit Konak)
+     * @query belgesuresitipi int Belge suresi tipi (1: Suresiz, 2: Sureli)
+     * @query belgesahibiunvani string Belge sahibi unvani
+     * @query belgejson string Belge sorgu sonucu (JSON)
      * @body id int required Emlak ID
      */
     public function index(): void
@@ -41,7 +46,8 @@ final class HomesManagementDetailUpdateController extends Controller
         $updates = $this->homesUpdates($payload);
         $mesafeler = $this->mesafelerPayload($payload);
         $hasBakimciContactPayload = $this->hasBakimciContactPayload($payload);
-        if ($updates === [] && $mesafeler === [] && !$hasBakimciContactPayload) {
+        $belge = $this->belgePayload($payload);
+        if ($updates === [] && $mesafeler === [] && !$hasBakimciContactPayload && $belge === null) {
             throw new HttpException('Guncellenecek alan bulunamadi.', 'VALIDATION', 422);
         }
 
@@ -53,6 +59,9 @@ final class HomesManagementDetailUpdateController extends Controller
             $mesafelerResult = $this->updateMesafeler($pdo, $id, $mesafeler);
             $bakimciAssignmentResult = $this->safeSyncBakimciAssignment($pdo, $id, $updates);
             $bakimciResult = $this->safeUpdateBakimciContact($pdo, $id, $payload);
+            $belgeResult = $belge !== null
+                ? $this->upsertBelge($pdo, $id, $belge)
+                : ['updated' => 0, 'skipped' => []];
             $pdo->commit();
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) {
@@ -67,18 +76,21 @@ final class HomesManagementDetailUpdateController extends Controller
             'updated' => count($updateResult['updated_columns']) > 0
                 || $mesafelerResult['updated'] > 0
                 || $bakimciAssignmentResult['updated'] > 0
-                || $bakimciResult['updated'] > 0,
+                || $bakimciResult['updated'] > 0
+                || $belgeResult['updated'] > 0,
             'updated_columns' => $updateResult['updated_columns'],
             'skipped_columns' => $updateResult['skipped_columns'],
             'updated_related_sections' => [
                 'mesafeler' => $mesafelerResult['updated'],
                 'bakimci_assignment' => $bakimciAssignmentResult['updated'],
                 'bakimci' => $bakimciResult['updated'],
+                'belge' => $belgeResult['updated'],
             ],
             'skipped_related_rows' => array_merge(
                 $mesafelerResult['skipped'],
                 $bakimciAssignmentResult['skipped'],
-                $bakimciResult['skipped']
+                $bakimciResult['skipped'],
+                $belgeResult['skipped']
             ),
             'skipped_related_sections' => $this->skippedRelatedSections($payload),
         ]);
@@ -130,6 +142,168 @@ final class HomesManagementDetailUpdateController extends Controller
     private function payload(): array
     {
         return array_merge($this->request->json(), $_GET);
+    }
+
+    /**
+     * Ilan detayindaki belge bilgilerini kanun7464 kolonlarina cevirir.
+     * Detay sayfasi yalnizca degisen alanlari gonderir; sadece gelen alanlar yazilir.
+     * Hicbir belge alani gelmediyse null doner; belge kaydina dokunulmaz.
+     * Basvuru, dosya, pasif durumu ve Kiralama Takvimi aktarimi eski panelde kalir.
+     *
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>|null
+     */
+    private function belgePayload(array $payload): ?array
+    {
+        $values = [];
+
+        $optional = [
+            'gavelbelgeno' => 'gavelBelgeNo',
+            'gavelbelgetipi' => 'GavelBelgeTipi',
+            'belgesahibiunvani' => 'belgeSahibiUnvani',
+        ];
+        foreach ($optional as $key => $column) {
+            if (array_key_exists($key, $payload)) {
+                $values[$column] = $this->normalizeScalar($payload[$key]);
+            }
+        }
+
+        // Sure tipi (1 suresiz, 2 sureli) ayardaki kolona o kolonun degeriyle yazilir (gavel_duration_column)
+        if (array_key_exists('belgesuresitipi', $payload)) {
+            $values[$this->gavelDurationColumn()] = $this->gavelDurationDbValue($payload['belgesuresitipi']);
+        }
+
+        // Sorgu sonucu ve ondan cikan alanlar (eski panelde gizli inputlarla gonderilenler).
+        // Sonuc bos/gecersizse mevcut veriye dokunulmaz; toplu guncellemenin doldurdugu alanlar silinmesin.
+        $raw = $payload['belgejson'] ?? '';
+        $json = is_array($raw) ? (string) json_encode($raw, JSON_UNESCAPED_UNICODE) : trim((string) $raw);
+        $data = $json !== '' ? json_decode($json, true) : null;
+        if (is_array($data) && $data !== []) {
+            // Eski paneldeki gibi girintili (4 bosluk), Turkce karakterler kacislanmadan saklanir
+            $values['gavelBelgeData'] = (string) json_encode(
+                $data,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            );
+            $fromData = [
+                'BelgeSahip' => 'gavelBelgeSahip',
+                'Il' => 'gavelIl',
+                'Ilce' => 'gavelIlce',
+                'BelgeKonutTip' => 'gavelBelgeKonutTip',
+                'Adres' => 'gavelAdres',
+                'OdaSayi' => 'gavelOdaSayi',
+                'YatakSayi' => 'gavelYatakSayi',
+                'KonutAdet' => 'gavelKonutAdet',
+            ];
+            foreach ($fromData as $key => $column) {
+                $values[$column] = $this->normalizeScalar($data[$key] ?? '');
+            }
+        }
+
+        return $values === [] ? null : $values;
+    }
+
+    /**
+     * Emlagin kanun7464 kaydini gunceller, yoksa olusturur. Tabloda olmayan kolonlar atlanir.
+     *
+     * @param array<string,mixed> $values
+     * @return array{updated:int,skipped:array<int,array<string,string>>}
+     */
+    private function upsertBelge(PDO $pdo, int $homeId, array $values): array
+    {
+        if (!$this->tableExists($pdo, 'dbo', 'kanun7464')) {
+            return [
+                'updated' => 0,
+                'skipped' => [['section' => 'belge', 'reason' => 'kanun7464 tablosu bulunamadi.']],
+            ];
+        }
+
+        $stmt = $pdo->query("SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'kanun7464'");
+        $columns = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $columns[strtolower((string) $row['COLUMN_NAME'])] = [
+                'name' => (string) $row['COLUMN_NAME'],
+                'data_type' => strtolower((string) $row['DATA_TYPE']),
+            ];
+        }
+
+        $intTypes = ['bigint', 'int', 'smallint', 'tinyint', 'bit'];
+        $set = [];
+        $skipped = [];
+        foreach ($values as $column => $value) {
+            $info = $columns[strtolower($column)] ?? null;
+            if ($info === null || !$this->safeColumn($info['name'])) {
+                $skipped[] = ['section' => 'belge', 'column' => $column, 'reason' => 'Kolon bulunamadi.'];
+                continue;
+            }
+
+            if (in_array($info['data_type'], $intTypes, true)) {
+                $text = trim((string) $value);
+                if ($text !== '' && !is_numeric($text)) {
+                    $skipped[] = ['section' => 'belge', 'column' => $column, 'reason' => 'Sayisal olmayan deger int kolona yazilamaz.'];
+                    continue;
+                }
+                // Bos sayisal deger NULL yazilir (0 "secili" anlamina gelmesin)
+                $value = $text === '' ? null : (int) $text;
+            }
+
+            $set[$info['name']] = $value;
+        }
+
+        if ($set === []) {
+            return ['updated' => 0, 'skipped' => $skipped];
+        }
+
+        $exists = $pdo->prepare('SELECT COUNT(*) FROM kanun7464 WHERE homeId = :homeId');
+        $exists->bindValue(':homeId', $homeId, PDO::PARAM_INT);
+        $exists->execute();
+
+        $params = [];
+        $i = 0;
+        foreach ($set as $column => $value) {
+            $params[$column] = ':b' . $i++;
+        }
+
+        $hasRow = (int) $exists->fetchColumn() > 0;
+        if (!$hasRow) {
+            // Belgesi olmayan ilan her kaydedildiginde bos kanun7464 satiri acilmasin
+            $hasValue = false;
+            foreach ($set as $value) {
+                if ($value !== null && trim((string) $value) !== '') {
+                    $hasValue = true;
+                    break;
+                }
+            }
+            if (!$hasValue) {
+                return ['updated' => 0, 'skipped' => $skipped];
+            }
+        }
+
+        if ($hasRow) {
+            $assignments = [];
+            foreach ($params as $column => $param) {
+                $assignments[] = '[' . $column . '] = ' . $param;
+            }
+            $sql = 'UPDATE kanun7464 SET ' . implode(', ', $assignments) . ' WHERE homeId = :homeId';
+        } else {
+            $sql = 'INSERT INTO kanun7464 (homeId, [' . implode('], [', array_keys($params)) . ']) VALUES (:homeId, '
+                . implode(', ', $params) . ')';
+        }
+
+        $write = $pdo->prepare($sql);
+        $write->bindValue(':homeId', $homeId, PDO::PARAM_INT);
+        foreach ($params as $column => $param) {
+            $value = $set[$column];
+            if ($value === null) {
+                $write->bindValue($param, null, PDO::PARAM_NULL);
+            } elseif (is_int($value)) {
+                $write->bindValue($param, $value, PDO::PARAM_INT);
+            } else {
+                $write->bindValue($param, (string) $value, PDO::PARAM_STR);
+            }
+        }
+        $write->execute();
+
+        return ['updated' => 1, 'skipped' => $skipped];
     }
 
     /**

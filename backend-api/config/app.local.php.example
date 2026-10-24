@@ -95,6 +95,9 @@ return [
     // Ornek: site 2 depozito_s2 yoksa ortak depozito kolonunu kullan:
     // 'site_field_suffixes' => [2 => ['depozito' => '']],
 
+    // Belge süre tipi GavelBelgeSureli kolonunda (0 süresiz, 1 süreli) tutuluyorsa:
+    // 'gavel_duration_column' => 'GavelBelgeSureli',
+
     // Bu sitede farklı IP kısıtı gerekiyorsa override et.
     // 'allowed_ips' => ['1.2.3.4'],
 

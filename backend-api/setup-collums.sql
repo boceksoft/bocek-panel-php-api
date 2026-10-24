@@ -376,6 +376,146 @@ ALTER TABLE [dbo].[kanun7464] ADD [belgeSuresiTipi] int NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelBelgeSahip') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelBelgeSahip] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelIl') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelIl] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelBelgeKonutTip') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelBelgeKonutTip] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelYatakSayi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelYatakSayi] nvarchar(100) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelOdaSayi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelOdaSayi] nvarchar(100) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelIlce') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelIlce] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelBelgeNo') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelBelgeNo] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelAdres') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelAdres] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelKonutAdet') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelKonutAdet] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelFileName') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelFileName] nvarchar(200) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelBasvuruNo') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelBasvuruNo] nvarchar(200) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelBasvuruAdSoyad') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelBasvuruAdSoyad] nvarchar(150) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelBelgeData') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelBelgeData] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelBelgeDataMin') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelBelgeDataMin] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'gavelKiralamaTakvimi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [gavelKiralamaTakvimi] bit NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'OzNot') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [OzNot] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'GavelBelgeTipi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [GavelBelgeTipi] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'GavelBelgeSureli') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [GavelBelgeSureli] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'belgeSahibiUnvani') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [belgeSahibiUnvani] nvarchar(500) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kanun7464]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kanun7464]', N'isSavedToApi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kanun7464] ADD [isSavedToApi] bit NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kayitlar]', N'id') IS NULL
 BEGIN

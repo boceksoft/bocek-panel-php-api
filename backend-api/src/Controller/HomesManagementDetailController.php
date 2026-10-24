@@ -139,6 +139,7 @@ final class HomesManagementDetailController extends Controller
                 'yoneticiBilgileri' => [
                     'ilan_notlari' => $this->firstValueFrom($rs, ['not2', 'not']),
                 ],
+                'belgeBilgileri' => $this->belgeBilgileri($pdo, $id),
                 'detayliAciklama' => [
                     'icerik' => $this->firstValueFrom($rs, ['icerik']),
                 ],
@@ -808,6 +809,62 @@ final class HomesManagementDetailController extends Controller
         ]);
 
         return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /**
+     * Emlagin bakanlik belge bilgileri (kanun7464). Kayit yoksa alanlar bos doner.
+     *
+     * @return array<string,mixed>
+     */
+    private function belgeBilgileri(PDO $pdo, int $homeId): array
+    {
+        $row = [];
+        if ($this->columnExists($pdo, 'dbo', 'kanun7464', 'homeId')) {
+            $found = $this->fetchOne($pdo, 'SELECT TOP 1 * FROM kanun7464 WHERE homeId = :id', [':id' => $homeId]);
+            if (is_array($found)) {
+                // Kolon adlari eski panelde karisik harfli; buyuk/kucuk harf duyarsiz okunur
+                $row = array_change_key_case($found, CASE_LOWER);
+            }
+        }
+
+        return [
+            'gavel_belge_no' => $this->firstValueFrom($row, ['gavelbelgeno']),
+            'gavel_belge_tipi' => $this->firstValueFrom($row, ['gavelbelgetipi']),
+            'belge_suresi_tipi' => $this->belgeSuresiTipi($row),
+            'belge_sahibi_unvani' => $this->firstValueFrom($row, ['belgesahibiunvani']),
+            'belge_json' => $this->firstValueFrom($row, ['gavelbelgedata']),
+            // Tabloda kayitli sorgu alanlari (toplu guncelleme bunlari doldurur); detayda sonuc olarak gosterilir
+            'sonuc' => [
+                'BelgeNo' => $this->firstValueFrom($row, ['gavelbelgeno']),
+                'BelgeSahip' => $this->firstValueFrom($row, ['gavelbelgesahip']),
+                'Il' => $this->firstValueFrom($row, ['gavelil']),
+                'Ilce' => $this->firstValueFrom($row, ['gavelilce']),
+                'BelgeKonutTip' => $this->firstValueFrom($row, ['gavelbelgekonuttip']),
+                'Adres' => $this->firstValueFrom($row, ['gaveladres']),
+                'KonutAdet' => $this->firstValueFrom($row, ['gavelkonutadet']),
+                'OdaSayi' => $this->firstValueFrom($row, ['gavelodasayi']),
+                'YatakSayi' => $this->firstValueFrom($row, ['gavelyataksayi']),
+            ],
+        ];
+    }
+
+    /**
+     * Sure tipi ayardaki kolondan (gavel_duration_column) okunur; API degeri 1 suresiz, 2 sureli.
+     * 0/1 tutan kolonda (GavelBelgeSureli) bos deger suresiz sayilir.
+     *
+     * @param array<string,mixed> $row Kucuk harfli kolon adlari
+     */
+    private function belgeSuresiTipi(array $row): string
+    {
+        $column = strtolower($this->gavelDurationColumn());
+        if (!$this->gavelDurationIsZeroBased()) {
+            return $this->firstValueFrom($row, [$column]);
+        }
+        if ($row === []) {
+            return '';
+        }
+
+        return trim((string) ($row[$column] ?? '')) === '1' ? '2' : '1';
     }
 
     private function columnExists(PDO $pdo, string $schema, string $table, string $column): bool

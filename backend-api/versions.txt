@@ -1,9 +1,9 @@
 offers 1
 homes 1
-homes-management-detail 1
+homes-management-detail 2
 homes-management-detail-data 1
-homes-management-detail-update 1
-filters 1
+homes-management-detail-update 2
+filters 2
 availability 1
 reservations 2
 links 1
@@ -15,3 +15,5 @@ guest-movements 1
 guestMovements 1
 bank-accounts 1
 virtual-pos 1
+gavel-management 1
+homes-management 1

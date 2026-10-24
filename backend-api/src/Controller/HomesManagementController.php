@@ -137,6 +137,8 @@ final class HomesManagementController extends Controller
         }
 
         $document = $this->p('document') !== '' ? $this->p('document') : $this->p('gavelBelge');
+        // Sure tipi ayardaki kolondan okunur (gavel_duration_column); 1 suresiz, 2 sureli
+        $durationSql = $this->gavelDurationSql('gavel');
         foreach ($this->stringList($document) as $documentFilter) {
             switch ($documentFilter) {
                 case 'active':
@@ -155,6 +157,23 @@ final class HomesManagementController extends Controller
                 case 'belge-no':
                     $where[] = "ISNULL(gavel.gavelBelgeNo, '') = ''";
                     break;
+                // Belge sahibi bakanlik sorgusundan dolar; toplu guncellemede bulunamayan belgelerde bosaltilir
+                case 'owner':
+                case 'ok':
+                    $where[] = "ISNULL(gavel.gavelBelgeSahip, '') <> ''";
+                    break;
+                case 'owner-no':
+                case 'no':
+                    $where[] = "ISNULL(gavel.gavelBelgeSahip, '') = ''";
+                    break;
+                // Belge Yonetimi sonuc listeleri: toplu guncelleme bakanlikta bulunan belgeyi suresiz,
+                // bulunamayani sureli yapar. Basarili = belge no var + suresiz, hatali = belge no var + sureli.
+                case 'verified':
+                    $where[] = "ISNULL(gavel.gavelBelgeNo, '') <> '' AND ISNULL({$durationSql}, 0) = 1";
+                    break;
+                case 'unverified':
+                    $where[] = "ISNULL(gavel.gavelBelgeNo, '') <> '' AND ISNULL({$durationSql}, 0) = 2";
+                    break;
                 case 'application':
                 case 'basvuru':
                     $where[] = "ISNULL(gavel.gavelBasvuruNo, '') <> ''";
@@ -165,11 +184,16 @@ final class HomesManagementController extends Controller
                     break;
                 case 'temporary':
                 case 'sureli':
-                    $where[] = 'ISNULL(gavel.GavelBelgeSureli, 0) = 1';
+                    $where[] = "ISNULL({$durationSql}, 0) = 2";
                     break;
                 case 'permanent':
                 case 'sureli-no':
-                    $where[] = 'ISNULL(gavel.GavelBelgeSureli, 0) = 0';
+                case 'suresiz':
+                    $where[] = "ISNULL({$durationSql}, 0) = 1";
+                    break;
+                case 'unspecified':
+                case 'sure-belirtilmemis':
+                    $where[] = "ISNULL({$durationSql}, 0) NOT IN (1, 2)";
                     break;
             }
         }
