@@ -21,7 +21,8 @@ final class GavelManagementController extends Controller
     private const DB_FALLBACK_MESSAGE = 'Bakanlık sitesinde kayıt bulunamadı, veritabanından sonuçlar getirildi.';
 
     /**
-     * Belgeli/belgesiz ilan sayilari ve toplu guncellemede sorgulanacak belge numaralari.
+     * Belgeli/belgesiz ilan sayilari, toplu guncellemede sorgulanacak belge numaralari ve
+     * birden fazla ilanda kullanilan belge numaralari.
      *
      * @Get
      */
@@ -40,6 +41,7 @@ final class GavelManagementController extends Controller
         $numbers = $pdo->query('SELECT gavelBelgeNo FROM kanun7464 WHERE LEN(gavelBelgeNo) > 1')->fetchAll(PDO::FETCH_COLUMN);
 
         $this->response->success([
+            'duplicate_numbers' => $this->duplicateNumbers($pdo),
             'stats' => [
                 'with_document' => (int) ($stats['ToplamBelgeli'] ?? 0),
                 'without_document' => (int) ($stats['ToplamBelgesiz'] ?? 0),
@@ -47,6 +49,53 @@ final class GavelManagementController extends Controller
             ],
             'document_numbers' => array_values(array_map('strval', $numbers)),
         ]);
+    }
+
+    /**
+     * Birden fazla kanun7464 satirinda (bosluklar yok sayilarak) gecen belge numaralari; en cok kullanilan basta.
+     * hatali: numaranin en az bir satirinda belge sureli ve belge sahibi bos (bakanlikta bulunamadi).
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function duplicateNumbers(PDO $pdo): array
+    {
+        $durationSql = $this->gavelDurationSql('k');
+        $rows = $pdo->query(
+            "SELECT
+                REPLACE(k.gavelBelgeNo, ' ', '') AS no,
+                k.homeId,
+                ISNULL(h.baslik, '') AS baslik,
+                CASE WHEN ISNULL({$durationSql}, 0) = 2 AND ISNULL(k.gavelBelgeSahip, '') = '' THEN 1 ELSE 0 END AS hatali
+             FROM kanun7464 k
+             LEFT JOIN homes h ON h.id = k.homeId
+             WHERE LEN(k.gavelBelgeNo) > 1
+               AND REPLACE(k.gavelBelgeNo, ' ', '') IN (
+                   SELECT REPLACE(gavelBelgeNo, ' ', '')
+                   FROM kanun7464
+                   WHERE LEN(gavelBelgeNo) > 1
+                   GROUP BY REPLACE(gavelBelgeNo, ' ', '')
+                   HAVING COUNT(*) > 1
+               )
+             ORDER BY REPLACE(k.gavelBelgeNo, ' ', ''), k.homeId"
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        $groups = [];
+        foreach ($rows as $row) {
+            $no = (string) $row['no'];
+            if (!isset($groups[$no])) {
+                $groups[$no] = ['number' => $no, 'count' => 0, 'not_found' => false, 'listings' => []];
+            }
+            $groups[$no]['count']++;
+            $groups[$no]['not_found'] = $groups[$no]['not_found'] || (int) $row['hatali'] === 1;
+            $groups[$no]['listings'][] = ['id' => (int) $row['homeId'], 'title' => (string) $row['baslik']];
+        }
+
+        $result = array_values($groups);
+        usort($result, function (array $a, array $b): int {
+            return $b['count'] <=> $a['count'] ?: strcmp($a['number'], $b['number']);
+        });
+
+        return $result;
     }
 
     /**
