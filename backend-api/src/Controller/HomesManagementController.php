@@ -166,13 +166,16 @@ final class HomesManagementController extends Controller
                 case 'no':
                     $where[] = "ISNULL(gavel.gavelBelgeSahip, '') = ''";
                     break;
-                // Belge Yonetimi sonuc listeleri: toplu guncelleme bakanlikta bulunan belgeyi suresiz,
-                // bulunamayani sureli yapar. Basarili = belge no var + suresiz, hatali = belge no var + sureli.
+                // Belge Yonetimi sonuc listeleri. Basarili = belge no var + suresiz.
                 case 'verified':
                     $where[] = "ISNULL(gavel.gavelBelgeNo, '') <> '' AND ISNULL({$durationSql}, 0) = 1";
                     break;
+                // Hatali (bakanlikta bulunamadi) = belge no var + sureli + belge sahibi bos. Toplu guncelleme bu
+                // belgelerde bakanlik alanlarini bosaltip sureli yapar; gecici belgelerde bakanlik verisi dolu kalir.
                 case 'unverified':
-                    $where[] = "ISNULL(gavel.gavelBelgeNo, '') <> '' AND ISNULL({$durationSql}, 0) = 2";
+                case 'not-found':
+                    $where[] = "ISNULL(gavel.gavelBelgeNo, '') <> '' AND ISNULL({$durationSql}, 0) = 2"
+                        . " AND ISNULL(gavel.gavelBelgeSahip, '') = ''";
                     break;
                 case 'application':
                 case 'basvuru':
