@@ -17,6 +17,7 @@ final class AvailabilityController extends Controller
     /**
      * @Get
      * @query EntityId int required Emlak/home kimliği (alternatif: id)
+     * @query excludeReservationId int Panel: dolu/opsiyon günlerinden hariç tutulacak rezervasyon (kayitlar.id) — düzenlenen rezervasyon kendi günlerini dolu görmesin.
      */
     public function index(): void
     {
@@ -46,6 +47,21 @@ final class AvailabilityController extends Controller
         $ruleshomesHomesIdSql = $this->qualifiedExistingColumn($pdo, 'dbo.ruleshomes', 'rh', ['homesid', 'homesId'], 'Ruleshomes homes id kolonu bulunamadi.');
         $rulesruletypesRulesIdSql = $this->qualifiedExistingColumn($pdo, 'dbo.rulesruletypes', 'rulesruletypes', ['rulesid', 'rulesId'], 'Rulesruletypes rules id kolonu bulunamadi.');
 
+        // Panel: düzenlenen rezervasyonun kendi dolu satırı ve KT'den içe aktarılmış kopyası (aynı ReservationId) hariç.
+        $excludeId = max(0, (int) $this->request->query('excludeReservationId', 0));
+        $excludeSql = '';
+        if ($excludeId > 0) {
+            $excludeSql = " AND ({$doluKayitIdSql} IS NULL OR {$doluKayitIdSql} <> {$excludeId})";
+            if ($this->columnExists($pdo, 'dbo.dolu', 'ReservationId')) {
+                $calStmt = $pdo->prepare("SELECT TOP 1 dolu.ReservationId FROM dolu WHERE {$doluKayitIdSql} = :id AND dolu.ReservationId > 0");
+                $calStmt->execute(['id' => $excludeId]);
+                $calendarReservationId = (int) ($calStmt->fetchColumn() ?: 0);
+                if ($calendarReservationId > 0) {
+                    $excludeSql .= " AND (dolu.ReservationId IS NULL OR dolu.ReservationId <> {$calendarReservationId})";
+                }
+            }
+        }
+
         $results = [];
         foreach ($entityIds as $entityId) {
             // Home bilgisi (döviz + sembol)
@@ -66,7 +82,7 @@ final class AvailabilityController extends Controller
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS doluGirisler,
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS doluCikislar,
             ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS doluGunler
-            FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId;
+            FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId . $excludeSql;
 
         // Oda tipi (hotel availability) kontrolü
         $doluTarihlerSqlWith = '';
@@ -128,7 +144,7 @@ final class AvailabilityController extends Controller
                     ISNULL(STRING_AGG(CONCAT(YEAR(dolu.tarih2),'-',FORMAT(dolu.tarih2,'MM'),'-',FORMAT(dolu.tarih2,'dd')),','),'') AS odemeCikislar,
                     ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(dolu.tarih,dolu.tarih2),','),'') AS odemeGunler,
                     ISNULL(STRING_AGG(CONCAT(REPLICATE(CONCAT(DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,kayitlar.saat,103)),','),DATEDIFF(day,CONVERT(date,dolu.tarih,103),CONVERT(date,dolu.tarih2,103))),DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,kayitlar.saat,103))),','),'') AS odemeSaatler
-                    FROM dolu LEFT JOIN kayitlar ON kayitlar.id = " . $doluKayitIdSql . " WHERE CONVERT(date,dolu.tarih2,103) > CONVERT(date,GETDATE(),103) AND dolu.durum = 1 AND dolu.emlak = " . $entityId . ") AS odeme,
+                    FROM dolu LEFT JOIN kayitlar ON kayitlar.id = " . $doluKayitIdSql . " WHERE CONVERT(date,dolu.tarih2,103) > CONVERT(date,GETDATE(),103) AND dolu.durum = 1 AND dolu.emlak = " . $entityId . $excludeSql . ") AS odeme,
                 (SELECT
                     ISNULL((SELECT r.baslik,
                     CONVERT(VARCHAR, r.date1, 103) AS date1,

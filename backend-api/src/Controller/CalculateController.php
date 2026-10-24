@@ -14,6 +14,15 @@ use PDO;
  */
 final class CalculateController extends Controller
 {
+    /** Doluluk kontrolünde hariç tutulacak rezervasyon (kayitlar.id, dolu.kayitid). 0: yok. */
+    private $excludeReservationId = 0;
+
+    /** Hariç tutulan rezervasyonun Kiralama Takvimi numarası (dolu.ReservationId). KT'den içe aktarılan kopya satırlar da bununla hariç tutulur. */
+    private $excludeCalendarReservationId = 0;
+
+    /** @var array<string,bool> */
+    private $columnCache = [];
+
     /**
      * Villa fiyatini hesaplar.
      *
@@ -25,6 +34,8 @@ final class CalculateController extends Controller
      * @query pool_fee bool Havuz isitma ucreti eklensin mi
      * @query selectedServices string Secili ekstra servis id listesi
      * @query site int Site kimligi
+     * @query excludeReservationId int Doluluk kontrolunde haric tutulacak rezervasyon (kayitlar.id). Panelde mevcut rezervasyon duzenlenirken kendi kaydina takilmamasi icin.
+     * @query checkCalendar bool 1 ise villa Kiralama Takvimi'ne bagliysa panel API'si uzerinden Reservation/CheckFromPanel kontrolu de yapilir (sadece panel kullanir).
      */
     public function index(): void
     {
@@ -44,6 +55,15 @@ final class CalculateController extends Controller
 
         $pdo = $this->db->pdo();
         $site = $this->siteId();
+        $this->excludeReservationId = max(0, (int) $this->param('excludeReservationId', 0));
+        if ($this->excludeReservationId > 0 && $this->hasColumn($pdo, 'dbo.dolu', 'ReservationId')) {
+            $row = $this->fetchRow(
+                $pdo,
+                'SELECT TOP 1 ReservationId FROM dolu WHERE kayitid = :id AND ReservationId IS NOT NULL AND ReservationId > 0',
+                ['id' => $this->excludeReservationId]
+            );
+            $this->excludeCalendarReservationId = $row ? (int) $row['ReservationId'] : 0;
+        }
         $calendarHome = $this->calendarHome($pdo, $entityId);
         $availability = $this->localAvailability($pdo, $entityId, $start, $end, $calendarHome);
 
@@ -80,8 +100,174 @@ final class CalculateController extends Controller
             }
         }
 
+        // Panel: Kiralama Takvimi'ne bağlı villada asıl doluluk KT'dedir (eski panel Reservation/CheckFromPanel).
+        if ($calendarHome && (string) $this->param('checkCalendar', '') === '1') {
+            $calendarCheck = $this->calendarCheck($pdo, $calendarHome, $start, $end);
+            $json['calendarCheck'] = $calendarCheck;
+            if ($calendarCheck['checked'] && !$calendarCheck['available'] && !empty($json['success'])) {
+                $calendarMessage = $calendarCheck['description'] !== '' ? $calendarCheck['description'] : 'Secilen tarihler Kiralama Takvimi\'nde musait degil.';
+                if ($this->excludeReservationId > 0) {
+                    // Panel: mevcut rezervasyonda KT durumu (sıra, opsiyon vb.) fiyatı engellemez; uyarı olarak döner.
+                    $json['warnings'][] = 'Kiralama Takvimi: ' . $calendarMessage;
+                } else {
+                    unset($json['success']);
+                    $json['error'] = $calendarMessage;
+                }
+            }
+        }
+
         $json['apiResponse'] = $availability;
         $this->response->success($json);
+    }
+
+    /**
+     * Kiralama Takvimi kontrolü: panel API'si /Reservation/CheckFromPanel (eski panel KiralamaTakvimiScripts.asp ile aynı).
+     * Sadece okuma yapar. Yanıt "0;/Status;/Açıklama;/..." (müsait) veya "1;/Status;/Açıklama;/..." biçimindedir;
+     * WhatsApp opsiyonu varsa "1;/WhatsappOption;/rezId;/waRezId;/giriş;/çıkış;/numara".
+     * KT'ye ulaşılamazsa hesap bozulmaz; checked=false döner.
+     *
+     * @param array<string,mixed> $calendarHome
+     * @return array{checked:bool,available:bool,status:string,description:string}
+     */
+    private function calendarCheck(PDO $pdo, array $calendarHome, string $start, string $end): array
+    {
+        $result = ['checked' => false, 'available' => true, 'status' => '', 'description' => ''];
+
+        $calendarReservationId = $this->excludeCalendarReservationId;
+
+        try {
+            $raw = $this->panelApiPost('Reservation/CheckFromPanel', [
+                'estateId' => (int) ($calendarHome['EstateId'] ?? 0),
+                'checkInDate' => $start,
+                'checkOutDate' => $end,
+                'ReservationId' => $calendarReservationId,
+            ]);
+        } catch (HttpException $e) {
+            $result['status'] = 'Unreachable';
+            $result['description'] = $e->getMessage();
+            return $result;
+        }
+
+        $parts = explode(';/', $raw);
+        if (!isset($parts[1])) {
+            $result['status'] = 'InvalidResponse';
+            $result['description'] = $this->app['debug'] ? $raw : 'Kiralama Takvimi yanıtı okunamadı.';
+            return $result;
+        }
+
+        $result['checked'] = true;
+        $result['status'] = (string) $parts[1];
+        $result['available'] = trim((string) $parts[0]) === '0';
+        if ($result['status'] === 'WhatsappOption') {
+            $result['description'] = 'Bu tarihlerde WhatsApp üzerinden açılmış bir opsiyon var ('
+                . trim(($parts[4] ?? '') . ' - ' . ($parts[5] ?? ''), ' -')
+                . (!empty($parts[6]) ? ', ' . $parts[6] : '') . ').';
+        } else {
+            $result['description'] = (string) ($parts[2] ?? '');
+        }
+
+        return $result;
+    }
+
+    /**
+     * Panel API'sine POST (ReservationStatusController::panelApi ile aynı kural ve ayarlar).
+     *
+     * @param array<string,mixed> $data
+     */
+    private function panelApiPost(string $path, array $data): string
+    {
+        $url = trim((string) ($this->app['kiralamatakvimi_panel_api_url'] ?? ''));
+        if ($url === '') {
+            $url = defined('URL') ? trim((string) constant('URL')) : '';
+            if ($url === '') {
+                throw new HttpException('Panel API adresi tanımlı değil (config URL sabiti yok).', 'PANEL_UNREACHABLE', 500);
+            }
+            if (preg_match('#^https?://#i', $url) !== 1) {
+                $url = 'https://' . $url;
+            }
+        }
+        $url = rtrim($url, '/') . '/' . $path;
+
+        $headers = array_values((array) ($this->app['kiralamatakvimi_panel_api_headers'] ?? []));
+        $headers[] = 'Content-Type: application/x-www-form-urlencoded';
+
+        $curl = curl_init($url);
+        curl_setopt_array($curl, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => http_build_query($data),
+            CURLOPT_HTTPHEADER => $headers,
+        ]);
+        $raw = curl_exec($curl);
+        $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        $error = curl_error($curl);
+        curl_close($curl);
+
+        if ($raw === false || $status === 0) {
+            throw new HttpException(
+                'Kiralama Takvimi (panel API) adresine ulaşılamadı.' . ($this->app['debug'] ? ' | ' . $url . ' | ' . $error : ''),
+                'PANEL_UNREACHABLE',
+                502
+            );
+        }
+
+        return trim((string) $raw);
+    }
+
+    /**
+     * @param array<string,mixed> $params
+     * @return array<string,mixed>|null
+     */
+    private function fetchRow(PDO $pdo, string $sql, array $params)
+    {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ?: null;
+    }
+
+    /** Tablo kolonu var mı (panelden panele şema farkı; sonuç istek boyunca önbellekte). */
+    private function hasColumn(PDO $pdo, string $table, string $column): bool
+    {
+        $key = strtolower($table . '.' . $column);
+        if (!array_key_exists($key, $this->columnCache)) {
+            $stmt = $pdo->prepare('SELECT CASE WHEN COL_LENGTH(:t, :c) IS NULL THEN 0 ELSE 1 END AS v');
+            $stmt->execute(['t' => $table, 'c' => $column]);
+            $this->columnCache[$key] = (int) $stmt->fetchColumn() === 1;
+        }
+
+        return $this->columnCache[$key];
+    }
+
+    /** Doluluk sorgularına eklenecek "kendi rezervasyonu hariç" koşulu. */
+    private function excludeSql(): string
+    {
+        $sql = $this->excludeReservationId > 0 ? ' AND (kayitid IS NULL OR kayitid <> :excludeId)' : '';
+        // KT'den içe aktarılan kopya (kayitid = -1, aynı ReservationId) da kendi rezervasyonudur.
+        if ($this->excludeCalendarReservationId > 0) {
+            $sql .= ' AND (ReservationId IS NULL OR ReservationId <> :excludeCalId)';
+        }
+
+        return $sql;
+    }
+
+    /**
+     * @param array<string,mixed> $params
+     * @return array<string,mixed>
+     */
+    private function withExclude(array $params): array
+    {
+        if ($this->excludeReservationId > 0) {
+            $params['excludeId'] = $this->excludeReservationId;
+        }
+        if ($this->excludeCalendarReservationId > 0) {
+            $params['excludeCalId'] = $this->excludeCalendarReservationId;
+        }
+
+        return $params;
     }
 
     /**
@@ -271,27 +457,47 @@ final class CalculateController extends Controller
                 ];
             }
         } else {
+            $reservationIdColumn = $this->hasColumn($pdo, 'dbo.dolu', 'ReservationId') ? 'ReservationId' : 'CAST(NULL AS int) AS ReservationId';
             $stmt = $pdo->prepare(
-                'SELECT TOP 1 id
+                "SELECT TOP 1 id, kayitid, {$reservationIdColumn},
+                        CONVERT(varchar(10), CONVERT(date, tarih, 104), 23) AS tarih,
+                        CONVERT(varchar(10), CONVERT(date, tarih2, 104), 23) AS tarih2
                  FROM dolu
                  WHERE emlak = :entityId
                    AND durum = 3
                    AND CONVERT(date, tarih, 104) < CONVERT(date, :endDate, 23)
-                   AND CONVERT(date, tarih2, 104) > CONVERT(date, :startDate, 23)'
+                   AND CONVERT(date, tarih2, 104) > CONVERT(date, :startDate, 23)" . $this->excludeSql()
             );
-            $stmt->execute([
+            $stmt->execute($this->withExclude([
                 'entityId' => $entityId,
                 'startDate' => $start,
                 'endDate' => $end,
-            ]);
+            ]));
 
-            if ($stmt->fetch(PDO::FETCH_ASSOC)) {
-                return [
+            $conflict = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($conflict) {
+                $response = [
                     'Status' => 'UnavailableHasApproved',
                     'StatusDescription' => 'Secilen tarihler musait degil.',
                     'IsRequestAllowed' => false,
                     'Source' => 'local',
                 ];
+                // Panel (excludeReservationId) veya debug: hangi dolu satırına takıldığı. Site ön yüzüne açılmaz.
+                if ($this->excludeReservationId > 0 || !empty($this->app['debug'])) {
+                    $response['Conflict'] = [
+                        'doluId' => (int) $conflict['id'],
+                        'kayitid' => $conflict['kayitid'] !== null ? (int) $conflict['kayitid'] : null,
+                        'ReservationId' => $conflict['ReservationId'] !== null ? (int) $conflict['ReservationId'] : null,
+                        'tarih' => $conflict['tarih'],
+                        'tarih2' => $conflict['tarih2'],
+                    ];
+                    $response['Excluded'] = [
+                        'kayitid' => $this->excludeReservationId,
+                        'ReservationId' => $this->excludeCalendarReservationId,
+                    ];
+                }
+
+                return $response;
             }
         }
 
@@ -412,7 +618,9 @@ WHERE h.id = {$entityId}";
         if ((string) $this->param('currentRoutingTypeId', '') === 'Reservation' && (string) $home['sitemap'] === '0') {
             $home['aktif'] = 0;
         }
-        if ((string) $home['aktif'] !== '1') {
+        // Panelde mevcut rezervasyon düzenlenirken (excludeReservationId) villa yayından kalkmış olsa da fiyat hesaplanır; uyarı döner.
+        $inactiveHome = (string) $home['aktif'] !== '1';
+        if ($inactiveHome && $this->excludeReservationId <= 0) {
             return ['error' => 'Villa aktif degil.'];
         }
 
@@ -447,6 +655,11 @@ WHERE h.id = {$entityId}";
         }
 
         $json['result']['PromotionDiscountPrice'] = $promotionDiscountPrice;
+        // Panel için açık kırılım (old_price'a dokunulmaz; promosyonsuz durumda old_price sadece dönem indirimi tutarını taşır):
+        // period_discount = villa dönem indirimi (indirimler), price_before_discounts = promosyon + dönem indirimi öncesi konaklama.
+        $json['result']['period_discount'] = (float) $home['indirimTutari'] > 0 ? (int) $home['indirimTutari'] : 0;
+        $json['result']['price_before_discounts'] = $price + $promotionDiscountPrice + $json['result']['period_discount'];
+        $json['result']['promotion_code_valid'] = $promotionCode !== '' ? $promotionDiscountPrice > 0 : null;
         if ((float) $home['indirimTutari'] > 0) {
             $oldPrice += (int) $home['indirimTutari'];
         }
@@ -476,6 +689,10 @@ WHERE h.id = {$entityId}";
         }
 
         $json['success'] = 200;
+        if ($inactiveHome) {
+            $json['inactiveHome'] = true;
+            $json['warnings'][] = 'Villa yayında değil (pasif); fiyat yine de hesaplandı.';
+        }
         if ($oldPrice > 0) {
             $json['result']['old_price'] = $oldPrice;
         }
@@ -507,6 +724,10 @@ WHERE h.id = {$entityId}";
         $json['result']['daily_price'] = (int) ($price / $night);
         $json['result']['night'] = $night;
         $json['result']['home_title'] = (string) $home['baslik'];
+        // Panel: villa değişince rezervasyonun komisyon / depozito oranı villanınkine çekilir (site sonekli kolonlar).
+        $commissionRaw = str_replace(',', '.', trim((string) ($home['kazancorani'] ?? '')));
+        $json['result']['commission_rate'] = is_numeric($commissionRaw) ? (float) $commissionRaw : 0.0;
+        $json['result']['deposit_rate'] = $depositRate;
         $json['result']['reservation_url'] = $this->reservationUrl($entityId, $start, $end, $site);
 
         $this->applyExtraServicePrices($json);
@@ -538,6 +759,9 @@ WHERE h.id = {$entityId}";
         $heatingFees = [];
         $extraServices = [];
         $heatingPriceDivisor = !empty($this->app['calculate_heating_price_is_weekly']) ? 7 : 1;
+        // Isıtmalı havuz her panelde yok: sezonlar.isitmaFiyat yoksa ısıtma ücreti hesaplanmaz (eski IsitmaVar sabiti).
+        $hasHeating = $this->hasColumn($pdo, 'dbo.sezonlar', 'isitmaFiyat');
+        $heatingOutColumn = $this->hasColumn($pdo, 'dbo.sezonlar', 'isitmaHizmetDisi') ? 'isitmaHizmetDisi' : 'CAST(0 AS int) AS isitmaHizmetDisi';
 
         while ($date <= $last) {
             $day = $date->format('Y-m-d');
@@ -548,29 +772,32 @@ WHERE h.id = {$entityId}";
                      FROM dolu
                      WHERE emlak = :entityId
                        AND durum IN (1, 3, 5)
-                       AND :day BETWEEN DATEADD(day, 1, tarih) AND DATEADD(day, -1, tarih2)"
+                       AND :day BETWEEN DATEADD(day, 1, tarih) AND DATEADD(day, -1, tarih2)" . $this->excludeSql()
                 );
-                $stmt->execute(['entityId' => $entityId, 'day' => $day]);
+                $stmt->execute($this->withExclude(['entityId' => $entityId, 'day' => $day]));
                 $control = $stmt->fetch(PDO::FETCH_ASSOC);
             }
 
             if ($day !== $end) {
-                $stmt = $pdo->prepare(
-                    "SELECT :day AS tarih,
-                            CAST((ISNULL(TRY_CONVERT(float, NULLIF(REPLACE(CONVERT(nvarchar(64), isitmaFiyat), ',', '.'), '')), 0) / {$heatingPriceDivisor}) * :buy AS int) AS isitmaFiyat,
-                            isitmaHizmetDisi
-                     FROM sezonlar
-                     WHERE site = {$site}
-                       AND islem_id = {$entityId}
-                       AND islem = 'emlak'
-                       AND :day2 BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)"
-                );
-                $stmt->execute([
-                    'day' => $day,
-                    'day2' => $day,
-                    'buy' => (float) $home['Buy'],
-                ]);
-                $heatingFee = $stmt->fetch(PDO::FETCH_ASSOC);
+                $heatingFee = false;
+                if ($hasHeating) {
+                    $stmt = $pdo->prepare(
+                        "SELECT :day AS tarih,
+                                CAST((ISNULL(TRY_CONVERT(float, NULLIF(REPLACE(CONVERT(nvarchar(64), isitmaFiyat), ',', '.'), '')), 0) / {$heatingPriceDivisor}) * :buy AS int) AS isitmaFiyat,
+                                {$heatingOutColumn}
+                         FROM sezonlar
+                         WHERE site = {$site}
+                           AND islem_id = {$entityId}
+                           AND islem = 'emlak'
+                           AND :day2 BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)"
+                    );
+                    $stmt->execute([
+                        'day' => $day,
+                        'day2' => $day,
+                        'buy' => (float) $home['Buy'],
+                    ]);
+                    $heatingFee = $stmt->fetch(PDO::FETCH_ASSOC);
+                }
                 if ($heatingFee) {
                     $heatingFees[] = $heatingFee;
                 }

@@ -272,7 +272,7 @@ final class ReservationStatusController extends Controller
     {
         $id = (int) $reservation['id'];
         $oldDurum = $reservation['durum'] !== null ? (int) $reservation['durum'] : null;
-
+        $sendGroup = $this->sendWhatsappGroup();
         $calendar = $this->calendarResult();
         if ($this->calendarHome($pdo, (int) $reservation['evid'])) {
             $calendar['bagli'] = true;
@@ -285,6 +285,7 @@ final class ReservationStatusController extends Controller
                 'reservationId' => $reservationId,
                 'estateId' => (int) $mapping['EstateId'],
                 'callbackParam' => $callbackParam,
+                'sendWhatsappGroup' => $sendGroup ? '1' : '0',
             ]);
             if (trim($raw) !== 'success') {
                 throw new HttpException(
@@ -295,6 +296,7 @@ final class ReservationStatusController extends Controller
             }
             $calendar['islem'] = 'release';
             $calendar['reservation_id'] = $reservationId;
+            $calendar['whatsapp_grup_bildirimi'] = $sendGroup;
         }
 
         // Panel (siparis_6): eşleşme silinir, dolu.ReservationId her durumda boşaltılır. 0 ve 5'te sadece kayıt
@@ -506,7 +508,9 @@ final class ReservationStatusController extends Controller
         if ($mapping) {
             $calendar['bagli'] = true;
             $reservationId = (int) $mapping['ReservationId'];
-            $this->calendarAction('Reservation/Cancel', $reservationId, (int) $mapping['EstateId'], 'KT_CANCEL_FAILED', 'Kiralama Takvimi iptal işlemi başarısız.');
+            $sendGroup = $this->sendWhatsappGroup();
+            $this->calendarAction('Reservation/Cancel', $reservationId, (int) $mapping['EstateId'], 'KT_CANCEL_FAILED', 'Kiralama Takvimi iptal işlemi başarısız.', ['sendWhatsappGroup' => $sendGroup ? '1' : '0']);
+            $calendar['whatsapp_grup_bildirimi'] = $sendGroup;
             $calendar['islem'] = 'cancel';
             $calendar['gonderildi'] = true;
             $calendar['reservation_id'] = $reservationId;

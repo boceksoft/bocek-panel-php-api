@@ -100,6 +100,52 @@ return [
         'editable_statuses' => [0, 1, 2, 6],
     ],
 
+    // Rezervasyon ek ücretleri (reservationdetail -> ekUcretler). Kolon/tablo adları panelden panele farklı;
+    // farklı panelde app.local.php içinde sadece değişen anahtarlar yazılır (controller varsayılanlarla derin birleştirir).
+    //   enabled: 'auto' (kolon/tablo varsa açık) | true | false (panelde yok, gösterilmez)
+    //   *_column: kayitlar tablosundaki kolon adı
+    //   extra_payments.sources: sırayla denenen tablo/view'lar; ilk bulunan kullanılır.
+    //   extra_payments.columns: kaynak kolon adları (id, title, type 0 gecelik/1 konaklama boyu, night, amount, total, symbol)
+    'reservation_extras' => [
+        'cleaning' => ['enabled' => 'auto', 'amount_column' => 'temizlik'],
+        'electricity' => ['enabled' => 'auto', 'amount_column' => 'elektrik'],
+        'pool' => ['enabled' => 'auto', 'flag_column' => 'isitmaliHavuzBool', 'amount_column' => 'isitmaliHavuz'],
+        'extra_payments' => [
+            'enabled' => 'auto',
+            'sources' => ['Reservation.vw_ReservationExtraPayments', 'Reservation.ReservationExtraPayments'],
+            'reservation_column' => 'ReservationId',
+            'columns' => [
+                'id' => 'PaymentId',
+                'title' => 'Title',
+                'type' => 'Type',
+                'night' => 'Night',
+                'amount' => 'Amount',
+                'total' => 'TotalAmount',
+                'symbol' => 'Symbol',
+                'currency' => 'CurrencyCode',
+            ],
+        ],
+        // Eski sistem: kayitlar.ekucretler = "başlık;/tutar&&başlık;/tutar" (salt okunur).
+        'legacy' => ['enabled' => 'auto', 'column' => 'ekucretler', 'item_separator' => '&&', 'field_separator' => ';/'],
+    ],
+
+    // Rezervasyon indirimi (reservationdetail -> indirim). Kolon adları panelden panele farklıysa app.local.php'de
+    // sadece değişen anahtar yazılır (controller varsayılanlarla derin birleştirir).
+    'reservation_discount' => [
+        'old_price_column' => 'eskifiyat',          // indirimsiz fiyat
+        'total_column' => 'toplam_tutar',           // indirimli fiyat
+        'promo_column' => 'promotionCode',
+        'owner_column' => 'indirimevsahibi',        // 1: indirimi ev sahibi karşılar, 0: site sahibi
+        'commission_column' => 'kazancorani',
+        'villa_commission_column' => 'kazancorani', // rezervasyonda oran yoksa villanın (homes, site sonekli) oranı
+        'villa_down_payment_column' => 'depozito',  // villanın ön ödeme oranı (homes; site_field_suffixes.depozito)
+        'promo_table' => 'promotionCodes',
+        'promo_columns' => [
+            'code' => 'code', 'value' => 'value', 'is_price' => 'isPrice',
+            'stock' => 'stock', 'start' => 'startDate', 'end' => 'endDate',
+        ],
+    ],
+
     // Calculate endpoint parametre adlari ve kabul edilen tarih formatlari.
     // Eski sitelerde app.local.php icinde sadece bu alanlari override ederek
     // ProductId/checkin/checkout veya 17.09.2026, 2026-09-17 gibi varyasyonlar desteklenir.
@@ -213,6 +259,8 @@ return [
         'calculate_prices_same_across_sites' => 'bool',
         'calculate_heating_price_is_weekly' => 'bool',
         'reservation_pos' => 'array',
+        'reservation_extras' => 'array',
+        'reservation_discount' => 'array',
     ],
 
     // DB bilgileri ($config['db']) ve Domain sabitinin geldiaği,
