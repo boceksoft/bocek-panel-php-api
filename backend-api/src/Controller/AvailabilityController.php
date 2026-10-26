@@ -65,6 +65,11 @@ final class AvailabilityController extends Controller
             }
         }
 
+        // separateManual'da rezervasyon sayilan satirlar: panel rezervasyonu (kayitid > 0) ya da Kiralama Takvimi'nden
+        // ice aktarilan kayit (kayitid -1, ReservationId > 0). Geri kalan rezervasyonsuz satirlar manuel kapatmadir.
+        $hasDoluReservationId = $separateManual && $this->columnExists($pdo, 'dbo.dolu', 'ReservationId');
+        $reservationRowSql = '(ISNULL(' . $doluKayitIdSql . ', -1) > 0' . ($hasDoluReservationId ? ' OR ISNULL(dolu.ReservationId, 0) > 0' : '') . ')';
+
         $results = [];
         foreach ($entityIds as $entityId) {
             // Home bilgisi (döviz + sembol)
@@ -86,7 +91,7 @@ final class AvailabilityController extends Controller
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS doluCikislar,
             ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS doluGunler
             FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId . $excludeSql
-            . ($separateManual ? " AND ISNULL(" . $doluKayitIdSql . ", -1) > 0" : '');
+            . ($separateManual ? " AND " . $reservationRowSql : '');
 
         // separateManual: rezervasyonsuz kapatmalar (takvimden: durum 0, eski panel: durum 3; kayitid -1 / NULL) ayri liste.
         $manuelSql = $separateManual ? "
@@ -95,7 +100,7 @@ final class AvailabilityController extends Controller
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS manuelCikislar,
                     ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS manuelGunler
                     FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum IN (0, 3)
-                    AND ISNULL(" . $doluKayitIdSql . ", -1) <= 0 AND emlak = " . $entityId . $excludeSql . ") AS manuel," : '';
+                    AND NOT " . $reservationRowSql . " AND emlak = " . $entityId . $excludeSql . ") AS manuel," : '';
 
         // Oda tipi (hotel availability) kontrolü
         $doluTarihlerSqlWith = '';
@@ -184,7 +189,7 @@ final class AvailabilityController extends Controller
                 WHERE site = " . $siteVal . " AND islem_id = " . $entityId . " AND islem = 'emlak' AND CONVERT(date,tarih2,103) >= CONVERT(date,GETDATE(),103)) AS fiyatlar";
 
         $bindRateId = defined('RATE_ID')
-            ? constant('RATE_ID')
+            ? constant('RATE_ID') 
             : (class_exists('Rate') ? \Rate::GetLastRate() : 1);
 
         $stmt = $pdo->prepare($verisql);
@@ -206,6 +211,8 @@ final class AvailabilityController extends Controller
             $results[$entityId] = [
                 'symbol' => $home['Symbol'],
                 'data'   => $data,
+                // Kiralama Takvimi'ne bagliysa KT ilan id'si (doluluk takviminde opsiyon/kapatma KT'den yapilir).
+                'ktEstateId' => ($calendarHomes && !empty($calendarHomes['EstateId'])) ? (int) $calendarHomes['EstateId'] : null,
             ];
         }
 

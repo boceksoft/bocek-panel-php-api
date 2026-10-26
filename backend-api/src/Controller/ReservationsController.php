@@ -15,7 +15,7 @@ use PDO;
  */
 final class ReservationsController extends Controller
 {
-    /**
+    /** 
      * @Get
      * @Post
      * @query page int Sayfa numarası
@@ -23,10 +23,16 @@ final class ReservationsController extends Controller
      * @query durum int Rezervasyon durumu (çoklu olabilir)
      * durum=7: Ayar aciksa, logda 3 -> 4 gecisi bulunan halen iptal rezervasyonlar.
      * @query musteri string Müşteri adı/kelime araması
+     * @query hizliArama int 1 ise sadece arama sonucu döner (üst bar araması): no, müşteri, villa, tarih, durum.
      */
     public function index(): void
     {
         $pdo = $this->db->pdo();
+
+        if ($this->p('hizliArama') === '1') {
+            $this->quickSearch($pdo);
+            return;
+        }
         $useAcentaUsers = !empty($this->app['reservation_filters_use_acenta_users']);
         $useMaliyetColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'maliyet');
         $hasMigrationStatusColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'MigrationStatus');
@@ -257,6 +263,62 @@ final class ReservationsController extends Controller
 
             'data' => $rows,
         ]);
+    }
+
+
+    /**
+     * Üst bar araması: müşteri adı, villa adı ya da rezervasyon no ile son rezervasyonlar.
+     * Liste sorgusundaki ciro/opsiyon hesapları yapılmaz; tarih filtresi yoktur (eski kayıtlar da gelir).
+     */
+    private function quickSearch(\PDO $pdo): void
+    {
+        $term = $this->p('musteri') !== '' ? $this->p('musteri') : $this->p('kelime');
+        $limit = min(20, max(1, $this->pInt('per_page', 6)));
+        if ($term === '') {
+            $this->response->success(['items' => [], 'total' => 0]);
+            return;
+        }
+
+        $durumSql = $this->normalizedStatusSql('d.durum');
+        $where = ['kayitlar.musteri LIKE :musteriAdi', 'homes.baslik LIKE :musteriVilla'];
+        $params = [':musteriAdi' => '%' . $term . '%', ':musteriVilla' => '%' . $term . '%'];
+        if (preg_match('/^\d{1,10}$/', $term) === 1) {
+            $where[] = 'kayitlar.id = :rezId';
+            $params[':rezId'] = (int) $term;
+        }
+
+        $sql = "SELECT TOP {$limit}
+                kayitlar.id,
+                kayitlar.musteri AS musteri_adi,
+                homes.id AS home_id,
+                homes.baslik AS villa_adi,
+                ISNULL(homes.resim, '') AS villa_resim,
+                kayitlar.adi AS silinen_emlak_adi,
+                CONVERT(varchar(10), kayitlar.rez_tarihi, 104) AS giris_tarihi,
+                CONVERT(varchar(10), kayitlar.gelecek_tarih, 104) AS cikis_tarihi,
+                {$durumSql} AS durum,
+                CASE {$durumSql} WHEN 0 THEN N'Onay Bekliyor' WHEN 1 THEN N'Ödeme Bekliyor' WHEN 2 THEN N'Süre Doldu' WHEN 3 THEN N'Onaylandı' WHEN 4 THEN N'İptal Edildi' WHEN 5 THEN N'Silindi' WHEN 6 THEN N'Açık Rezervasyon' ELSE N'-' END AS durum_text
+            FROM kayitlar
+            LEFT JOIN homes ON homes.id = kayitlar.evid
+            OUTER APPLY (SELECT TOP 1 dolu.durum FROM dolu WHERE dolu.kayitid = kayitlar.id ORDER BY dolu.id DESC) AS d
+            WHERE (" . implode(' OR ', $where) . ")
+            ORDER BY kayitlar.id DESC";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+        // Villanin ilk resmi, ilanlar listesindeki gibi kucuk boyut CDN adresiyle.
+        $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
+        foreach ($rows as &$row) {
+            $images = array_values(array_filter(array_map('trim', explode(',', (string) $row['villa_resim']))));
+            $row['villa_resim'] = $images ? $cdnBase . $images[0] : '';
+        }
+        unset($row);
+
+        // 'data' yerine 'items': .NET getreservations yanitindaki data listesini rezervasyon senkron kuyruguna atar;
+        // bu eksik alanli arama satirlari oraya girmesin.
+        $this->response->success(['items' => $rows, 'total' => count($rows)]);
     }
 
     private function buildSql(

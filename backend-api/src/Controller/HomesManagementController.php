@@ -13,7 +13,7 @@ use PDO;
  * This is the API version of the old emlak_yonetimi.asp AJAX list.
  */
 final class HomesManagementController extends Controller
-{    
+{
     /**
      * @Get
      * @query page int Page number
@@ -100,6 +100,22 @@ final class HomesManagementController extends Controller
             $regionIds = $this->safeIntList($region);
             if ($regionIds !== '') {
                 $where[] = "(d.id IN ({$regionIds}) OR d.cat IN ({$regionIds}))";
+            }
+        }
+
+        // Kisi sayisi araligi ve ozellikler: villa arama (/homes) ile ayni mantik (doluluk takvimi filtreleri).
+        $guest = $this->pInt('kisi', 0);
+        if ($guest === 1) {
+            $where[] = '(h.kisi = 1 OR h.kisi = 2)';
+        } elseif ($guest > 1 && $guest % 2 === 0) {
+            $where[] = 'h.kisi BETWEEN ' . $guest . ' AND ' . ($guest + 2);
+        } elseif ($guest > 1) {
+            $where[] = 'h.kisi BETWEEN ' . ($guest - 1) . ' AND ' . ($guest + 1);
+        }
+        $featureIds = $this->safeIntList($this->p('ozellik'));
+        if ($featureIds !== '') {
+            foreach (explode(',', $featureIds) as $featureId) {
+                $where[] = "'#' + REPLACE(ISNULL(h.ozellikler, ''), ' ', '') + '#' LIKE '%#" . (int) $featureId . "#%'";
             }
         }
 
@@ -203,6 +219,11 @@ final class HomesManagementController extends Controller
 
         $whereSql = implode(' AND ', $where);
         $orderSql = $this->orderSql($this->pInt('sort', $this->pInt('sira', 0)), $hasTypeFilter);
+        // Aranan deger sadece rakamsa id'si birebir tutan villa basa gelir (belge no / kod icinde gecenler sonra).
+        if ($search !== '' && preg_match('/^\d{1,10}$/', trim($search)) === 1) {
+            $orderSql = preg_replace('/^ORDER BY /', 'ORDER BY CASE WHEN h.id = :keywordExactOrder THEN 0 ELSE 1 END, ', $orderSql, 1);
+            $params[':keywordExactOrder'] = (int) trim($search);
+        }
         $pagingSql = $allRows ? '' : 'OFFSET :offset ROWS FETCH NEXT :perPage ROWS ONLY';
 
         $sql = "
@@ -233,10 +254,18 @@ SELECT
     CASE WHEN ISNULL(gavel.gavel, 0) = 0 THEN 'default' ELSE '' END AS document_button_class,
     calendar.exists_value AS rental_calendar,
     calendar.auto_price_update AS rental_calendar_price_sync,
-    season.exists_value AS has_season
+    season.exists_value AS has_season,
+    price.min_price AS min_price,
+    ISNULL(h.doviz, '') AS currency 
 FROM homes h
 INNER JOIN destinations d ON d.id = h.emlak_bolgesi
 LEFT JOIN kanun7464 gavel ON gavel.homeId = h.id
+OUTER APPLY (
+    SELECT MIN(fiyat_num.v) AS min_price
+    FROM sezonlar sz
+    CROSS APPLY (SELECT TRY_CONVERT(float, REPLACE(CONVERT(varchar(64), sz.fiyat), ',', '.')) AS v) AS fiyat_num
+    WHERE sz.islem_id = h.id AND sz.islem = 'emlak' AND sz.site = 1 AND fiyat_num.v > 0
+) AS price
 OUTER APPLY (
     SELECT
         CASE WHEN EXISTS (SELECT 1 FROM KiralamaTakvimi.CalendarHomes ch WHERE ch.homesId = h.id) THEN 1 ELSE 0 END AS exists_value,
@@ -308,6 +337,9 @@ WHERE {$whereSql}
                 'rental_calendar' => (int) $row['rental_calendar'],
                 'rental_calendar_price_sync' => (int) $row['rental_calendar_price_sync'],
                 'has_season' => (int) $row['has_season'],
+                // En dusuk sezon fiyati (villanin kendi para biriminde); sezon yoksa null.
+                'min_price' => $row['min_price'] !== null ? (int) round((float) $row['min_price']) : null,
+                'currency' => (string) $row['currency'],
             ];
         }
         unset($row);
