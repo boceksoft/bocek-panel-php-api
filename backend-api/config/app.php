@@ -69,13 +69,27 @@ return [
     'homes_management_cancellation_policy_page_id' => 4,
 
     // Rezervasyon bildirimlerindeki ödeme linkleri için sayfalar{dbtable}.id değerleri (iptal şartlarıyla aynı yapı).
-    // Siteye göre değişirse app.local.php içinde [1 => 22, 2 => 30] gibi verilebilir. 0: link üretilmez.
+    // Siteye göre değişirse app.local.php içinde [1 => 22, 2 => 30] gibi verilebilir. 0 ya da sayfa bulunamazsa
+    // genel{dbtable} tablosundaki kartileodeUrl / havaleUrl alanı denenir (ovillam paneli linkleri oradan kurar).
     // Kart: {domain}/{sayfa url}?_={idHash(id)}&authKey={idHash(id_email)} (panel aktif_pasif.asp siparis_1 ile aynı).
-    // Havale: {domain}/{sayfa url} (parametresiz).
+    // Havale: {domain}/{sayfa url} (parametresiz) ve aynı parametrelerle havaleParametreli (ovillam: Havale Bildirim Formu).
     'reservation_payment_card_page_id' => 22,
     'reservation_payment_transfer_page_id' => 3,
     // Onay e-postasındaki "Rezervasyonlarım" / "Misafir Bilgilerini Doldur" linkinin sayfası (sayfalar.id).
     'reservation_my_reservations_page_id' => 3,
+
+    // Rezervasyon e-postalarındaki panel farkları (reservationdetail mailBilgileri). app.local.php içinde verilir;
+    // verilmeyen alt anahtar varsayılanda kalır.
+    //   bank_html_style:           'modern' (vv: odeme_bekliyor.txt kutuları) | 'classic' (ovillam:
+    //                              odemeBekliyorMailSablonGetir tablo satırları; dış tablo ve başlık şablonda).
+    //   active_bank_accounts_only: true ise sadece hesaplar.aktif = 1 olanlar (ovillam paneli böyle).
+    //   relative_url_base:         mailsablon metnindeki "../../../../../" yerine yazılan adres (panel UrlDuzenle,
+    //                              örn. 'https://web.ovillam.com/'). Boşsa sitenin adresi (genel.domain) kullanılır.
+    'reservation_mail' => [
+        'bank_html_style' => 'modern',
+        'active_bank_accounts_only' => false,
+        'relative_url_base' => '',
+    ],
 
     // Rezervasyon detayindaki POS secimi (GET /virtual-pos). Yapi rezervasyona gore secilir:
     // kayitlar.isNewSite = 1 (React site) -> new_site, digerleri -> legacy. Her panel farkli oldugu icin
@@ -266,6 +280,7 @@ return [
         'reservation_pos' => 'array',
         'reservation_extras' => 'array',
         'reservation_discount' => 'array',
+        'reservation_mail' => 'array',
         'gavel_duration_column' => 'string',
     ],
 

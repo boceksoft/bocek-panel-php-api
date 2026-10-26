@@ -536,7 +536,7 @@ final class ReservationdetailController extends Controller
      */
     private function paymentLinks(PDO $pdo, array $reservation): array
     {
-        $links = ['kartIleOde' => '', 'kartIleOdeParametre' => '', 'havale' => ''];
+        $links = ['kartIleOde' => '', 'kartIleOdeParametre' => '', 'havale' => '', 'havaleParametreli' => ''];
 
         $id = (int) ($reservation['id'] ?? 0);
         if ($id <= 0) {
@@ -550,17 +550,28 @@ final class ReservationdetailController extends Controller
             return $links;
         }
 
+        $email = (string) ($reservation['email'] ?? '');
+        $params = '_=' . $this->idHash((string) $id) . '&authKey=' . $this->idHash($id . '_' . $email);
+
+        // Sayfa yolu: sayfalar{dbtable}.id ayarı; 0 ya da bulunamazsa genel{dbtable} alanı (ovillam: qsql("kartileodeUrl")).
         $cardPath = $this->pagePath($pdo, $suffix, $this->pageIdSetting('reservation_payment_card_page_id', $siteId, $suffix));
+        if ($cardPath === '') {
+            $cardPath = $this->genelPath($pdo, $suffix, 'kartileodeUrl');
+        }
         if ($cardPath !== '') {
-            $email = (string) ($reservation['email'] ?? '');
-            $params = '_=' . $this->idHash((string) $id) . '&authKey=' . $this->idHash($id . '_' . $email);
-            $links['kartIleOde'] = $domain . '/' . $cardPath . '?' . $params;
+            $links['kartIleOde'] = $domain . '/' . $cardPath . (strpos($cardPath, '?') === false ? '?' : '&') . $params;
             $links['kartIleOdeParametre'] = $params;
         }
 
         $transferPath = $this->pagePath($pdo, $suffix, $this->pageIdSetting('reservation_payment_transfer_page_id', $siteId, $suffix));
+        if ($transferPath === '') {
+            $transferPath = $this->genelPath($pdo, $suffix, 'havaleUrl');
+        }
         if ($transferPath !== '') {
             $links['havale'] = $domain . '/' . $transferPath;
+            // Ovillam "Havale Bildirim Formu": havaleUrl?_=idHash(id)&authKey=idHash(id_email)
+            $links['havaleParametreli'] = $domain . '/' . $transferPath
+                . (strpos($transferPath, '?') === false ? '?' : '&') . $params;
         }
 
         return $links;
@@ -584,13 +595,16 @@ final class ReservationdetailController extends Controller
         $genel = [];
         try {
             $row = $pdo->query('SELECT TOP 1 * FROM genel' . $suffix)->fetch(PDO::FETCH_ASSOC);
-            $genel = is_array($row) ? $row : [];
+            // Kolon adları harf duyarsız (panel ASP: qsql("iptalUrl")).
+            $genel = is_array($row) ? array_change_key_case($row, CASE_LOWER) : [];
         } catch (\PDOException $e) {
             $genel = [];
         }
         $g = function (string $key) use ($genel): string {
+            $key = strtolower($key);
             return isset($genel[$key]) ? trim((string) $genel[$key]) : '';
         };
+        $mailSettings = $this->mailSettings();
         $domain = rtrim($g('domain'), '/');
         $siteName = $g('siteadi');
 
@@ -608,13 +622,21 @@ final class ReservationdetailController extends Controller
             'instagram' => $g('instagram'),
             'facebook' => $g('facebook'),
             'youtube' => $g('youtube'),
+            'twitter' => $g('twitter'),
             'adres' => $g('adres'),
+            'unvan' => $g('unvan'),
         ];
 
         // Mail alt metinleri (panel: ms_fn(id) -> mailsablon.icerik{suffix}): ödeme bekliyor 6, onaylandı 3.
         // {saat} Natsisa'da opsiyon süresiyle doldurulur.
-        $paymentPendingText = $this->mailText($pdo, 6, $suffix, $siteName);
-        $approvedText = $this->mailText($pdo, 3, $suffix, $siteName);
+        // Panel UrlDuzenle: metindeki "../../../../../" -> relative_url_base (boşsa sitenin adresi).
+        $urlBase = $mailSettings['relative_url_base'] !== ''
+            ? rtrim($mailSettings['relative_url_base'], '/') . '/'
+            : ($domain !== '' ? $domain . '/' : '');
+        $paymentPendingText = $this->mailText($pdo, 6, $suffix, $siteName, $urlBase);
+        $approvedText = $this->mailText($pdo, 3, $suffix, $siteName, $urlBase);
+        // İptal (ovillam paneli bngmail/default.txt dalı: ms_fn("16")).
+        $cancelledText = $this->mailText($pdo, 16, $suffix, $siteName, $urlBase);
 
         // Rezervasyonlarım linki (panel siparis_3: domain/rezervasyonlarimUrl?authKey=idHash(id_email)).
         // Sayfa yolu ödeme linkleri gibi sayfalar{suffix} tablosundan (ayar: reservation_my_reservations_page_id,
@@ -635,7 +657,7 @@ final class ReservationdetailController extends Controller
         }
 
         // Villa: sitenin dilinde ad ve bölge ("Üst bölge / Bölge"), ilk resim (panel: /uploads/400x320/<resim>)
-        $villa = ['adi' => '', 'bolge' => '', 'resim' => '', 'resimUrl' => ''];
+        $villa = ['adi' => '', 'bolge' => '', 'resim' => '', 'resimUrl' => '', 'no' => ''];
         $homeId = (int) ($reservation['evid'] ?? 0);
         if ($homeId > 0) {
             try {
@@ -660,6 +682,8 @@ final class ReservationdetailController extends Controller
                     'bolge' => trim((string) ($row['bolge'] ?? ''), " /"),
                     'resim' => $image,
                     'resimUrl' => $image !== '' && $site['cdn'] !== '' ? rtrim($site['cdn'], '/') . $image : '',
+                    // Panel {-urun-no-} ("İlan No") = homes.id
+                    'no' => (string) $homeId,
                 ];
             }
         }
@@ -672,10 +696,33 @@ final class ReservationdetailController extends Controller
             ? $this->mailMoney($reservation['on_odeme'] ?? '', $doviz)
             : $this->mailMoney($reservation['toplam_tutar'] ?? '', $doviz);
 
+        // İptal şartları linki (panel: qsql("domain") & "/" & qsql("iptalUrl")).
+        $cancellationPath = trim($g('iptalUrl'), '/');
+        $cancellationLink = $linkDomain !== '' && $cancellationPath !== '' ? $linkDomain . '/' . $cancellationPath : '';
+
+        $classic = $this->mailClassicPayment($pdo, $reservation, $doviz, $partial);
+
         return [
             'site' => $site,
+            'iptalSartlariLinki' => $cancellationLink,
+            // Panel {-konaklama-tutari-}: kayitlar.toplam_tutar olduğu gibi.
+            'konaklamaTutari' => trim((string) ($reservation['toplam_tutar'] ?? '')),
+            // Panel {-TotalPayments-}: konaklama + temizlik + elektrik + (varsa) ısıtmalı havuz + ekstra ödemeler.
+            // Hasar depozitosu dahil değil.
+            'genelToplam' => $classic['genelToplam'],
+            // Panel {-toplam-tutar-}: konaklama tutarı doviz_cevir biçiminde ("₺ 45.000").
+            'konaklamaTutariBicimli' => $classic['konaklamaTutari'],
+            // Ovillam şablonu (mail_sablon_html) satırları. Opsiyon: {-on-odeme-html-}{-giriste-odenecek-html-} ve
+            // {-temizlik-ucreti-html-}{-elektrik-ucreti-html-}{-ReservationExtraPaymentsHtml-}.
+            // Onay: {-temizlik-ucreti-html-new-}{-ReservationExtraPaymentsHtml-}{-TotalPaymentsHtml-}{-odenen-html-}{-KalanHtml-}.
+            'klasikOdemeSatirlari' => [
+                'onOdemeHtml' => $classic['onOdemeHtml'],
+                'ekstraHtml' => $classic['ekstraHtml'],
+                'onayHtml' => $classic['onayHtml'],
+            ],
             'odemeBekliyorMetni' => $paymentPendingText,
             'onaylandiMetni' => $approvedText,
+            'iptalMetni' => $cancelledText,
             'rezervasyonlarimLinki' => $myReservationsLink,
             'villa' => $villa,
             'odemeTuru' => $transfer ? 'havale' : 'kart',
@@ -685,8 +732,146 @@ final class ReservationdetailController extends Controller
             'odemeSatirlariHtml' => $this->mailPaymentRowsHtml($pdo, $reservation, $siteId, $english, $doviz, $partial),
             // Sitenin tüm banka hesapları, her biri panelin mail kutusu (HTML) ile. Hangilerinin maile gireceği
             // Natsisa bildirim ayarında seçilir (seçim yoksa hepsi).
-            'bankaHesaplari' => $this->mailBankAccounts($pdo, $english, $site['cdn']),
+            'bankaHesaplari' => $this->mailBankAccounts($pdo, $english, $site['cdn'], $mailSettings),
         ];
+    }
+
+    /**
+     * config reservation_mail (varsayılanlarla birleştirilmiş).
+     *
+     * @return array{bank_html_style:string,active_bank_accounts_only:bool,relative_url_base:string}
+     */
+    private function mailSettings(): array
+    {
+        $config = isset($this->app['reservation_mail']) && is_array($this->app['reservation_mail'])
+            ? $this->app['reservation_mail']
+            : [];
+
+        return [
+            'bank_html_style' => strtolower(trim((string) ($config['bank_html_style'] ?? 'modern'))) === 'classic' ? 'classic' : 'modern',
+            'active_bank_accounts_only' => !empty($config['active_bank_accounts_only']),
+            'relative_url_base' => trim((string) ($config['relative_url_base'] ?? '')),
+        ];
+    }
+
+    /**
+     * Ovillam paneli (inc/Functions.asp mail_sablon_html) ödeme satırları ve tutarları. Satırlardaki ücretler panelde
+     * olduğu gibi ham, toplamlar doviz_cevir biçiminde ("₺ 47.500") yazılır; etiketler panelle aynı.
+     *
+     * @param array<string,mixed> $reservation
+     * @return array{onOdemeHtml:string,ekstraHtml:string,onayHtml:string,genelToplam:string,konaklamaTutari:string}
+     */
+    private function mailClassicPayment(PDO $pdo, array $reservation, string $doviz, bool $partial): array
+    {
+        $badge = function (string $text): string {
+            return " <span style='display:inline-block; margin-left:6px; font-size:11px; color:#555; background:#fff;"
+                . " border:1px solid #ddd; padding:2px 7px; border-radius:10px;'>" . htmlspecialchars($text, ENT_QUOTES, 'UTF-8') . '</span>';
+        };
+        $value = function ($v): string {
+            return trim((string) $v);
+        };
+
+        $prepaid = '';
+        if ($partial) {
+            $prepaid .= $this->mailClassicRow('Ön Ödeme Tutarı' . $badge('Kredi Kartı - Havale'), $value($reservation['on_odeme'] ?? ''));
+            $prepaid .= $this->mailClassicRow('Villaya Girişte Ödenecek Tutar' . $badge('Nakit - Havale'), $value($reservation['kalan'] ?? ''));
+        }
+
+        $stay = $this->feeNumber($reservation['toplam_tutar'] ?? '');
+        $extraTotal = 0.0;
+        $cleaningRow = '';
+        $electricityRow = '';
+        $heatedRow = '';
+        $extraPaymentRows = '';
+
+        $cleaning = $value($reservation['temizlik'] ?? '');
+        if ($cleaning !== '' && $cleaning !== '0' && $this->feeNumber($cleaning) > 0) {
+            $extraTotal += $this->feeNumber($cleaning);
+            $cleaningRow = $this->mailClassicRow('Kısa Süreli K. Ödemesi', $cleaning);
+        }
+
+        $electricity = $value($reservation['elektrik'] ?? '');
+        if ($electricity !== '' && $electricity !== '0' && $this->feeNumber($electricity) > 0) {
+            $extraTotal += $this->feeNumber($electricity);
+            $electricityRow = $this->mailClassicRow('Elektrik Ücreti', $electricity);
+        }
+
+        // Ovillam panelinde ısıtmalı havuz satırı yok ({-isitma-ucreti-html-} boş); kolon varsa ve seçiliyse eklenir.
+        $heated = $reservation['isitmaliHavuzBool'] ?? null;
+        if ($heated === true || $heated === 1 || $heated === '1') {
+            $extraTotal += $this->feeNumber($reservation['isitmaliHavuz'] ?? '');
+            $heatedRow = $this->mailClassicRow('Isıtmalı Havuz Ücreti', $value($reservation['isitmaliHavuz'] ?? ''));
+        }
+
+        try {
+            $extras = $this->fetchAll(
+                $pdo,
+                'SELECT * FROM Reservation.vw_ReservationExtraPayments WHERE ReservationId = :id',
+                [':id' => (int) ($reservation['id'] ?? 0)]
+            );
+        } catch (\PDOException $e) {
+            $extras = [];
+        }
+        foreach ($extras as $row) {
+            $extraTotal += $this->feeNumber($row['TotalAmount'] ?? '');
+            $extraPaymentRows .= $this->mailClassicRow(
+                htmlspecialchars((string) ($row['Title'] ?? ''), ENT_QUOTES, 'UTF-8'),
+                ($row['Symbol'] ?? '') . ($row['TotalAmount'] ?? '')
+            );
+        }
+
+        // Panel {-TotalPayments-} / {-odenen-html-} / {-KalanHtml-}: genel toplam = konaklama + ek ücretler (hasar hariç);
+        // ödenen = ön ödemeliyse ön ödeme, değilse konaklama tutarı; kalan = genel toplam - ödenen.
+        $total = $stay + $extraTotal;
+        $paid = $partial ? $this->feeNumber($reservation['on_odeme'] ?? '') : $stay;
+
+        // Onay maili: panel şablonunda elektrik satırı yoktu ama tutarı genel toplama giriyordu; burada satır da gösterilir.
+        $approved = $cleaningRow . $electricityRow . $heatedRow . $extraPaymentRows
+            . $this->mailClassicRow('Genel Toplam', $this->mailClassicMoney($total, $doviz))
+            . $this->mailClassicRow('Ödenen', $this->mailClassicMoney($paid, $doviz))
+            . $this->mailClassicRow('Kalan Tutar', $this->mailClassicMoney($total - $paid, $doviz));
+
+        return [
+            'onOdemeHtml' => $prepaid,
+            'ekstraHtml' => $cleaningRow . $electricityRow . $heatedRow . $extraPaymentRows,
+            'onayHtml' => $approved,
+            'genelToplam' => $this->mailClassicMoney($total, $doviz),
+            'konaklamaTutari' => $this->mailClassicMoney($stay, $doviz),
+        ];
+    }
+
+    /** Panel doviz_cevir(tutar, d, d, true, "0"): "₺ 45.000" / "€ 1.200" (kuruşsuz, binlik "."). */
+    private function mailClassicMoney(float $amount, string $doviz): string
+    {
+        $symbols = ['tl' => '₺ ', 'try' => '₺ ', 'euro' => '€ ', 'eur' => '€ ', 'dolar' => '$ ', 'usd' => '$ ', 'pound' => '£ ', 'gbp' => '£ '];
+        $text = number_format(round($amount), 0, ',', '.');
+
+        return ($symbols[$doviz] ?? '') . $text;
+    }
+
+    /** Ovillam panel htmlSablonItem. Başlık HTML olarak (etiket içerebilir), değer kaçışlı yazılır. */
+    private function mailClassicRow(string $titleHtml, string $value): string
+    {
+        return '<tr>'
+            . "<td width='217'><font style='font-size: 14px' size='2'>" . $titleHtml . '</font></td>'
+            . "<td width='63'><font style='font-size: 14px' size='2'>" . htmlspecialchars($value, ENT_QUOTES, 'UTF-8') . '</font></td>'
+            . '</tr>';
+    }
+
+    /** genel{suffix} tablosundaki sayfa yolu alanı (panel qsql("kartileodeUrl") vb.); kolon yoksa boş. */
+    private function genelPath(PDO $pdo, string $suffix, string $column): string
+    {
+        try {
+            $row = $pdo->query('SELECT TOP 1 * FROM genel' . $suffix)->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            return '';
+        }
+        if (!is_array($row)) {
+            return '';
+        }
+        $row = array_change_key_case($row, CASE_LOWER);
+
+        return trim(trim((string) ($row[strtolower($column)] ?? '')), '/');
     }
 
     /**
@@ -783,8 +968,8 @@ final class ReservationdetailController extends Controller
         return ($parts['scheme'] ?? 'https') . '://' . $host . '/';
     }
 
-    /** Panel ms_fn: mailsablon.icerik{suffix} ({siteadi} doldurulur). Tablo/kayıt yoksa boş. */
-    private function mailText(PDO $pdo, int $id, string $suffix, string $siteName): string
+    /** Panel ms_fn + UrlDuzenle: mailsablon.icerik{suffix} ({siteadi}, "../../../../../" doldurulur). Tablo/kayıt yoksa boş. */
+    private function mailText(PDO $pdo, int $id, string $suffix, string $siteName, string $urlBase = ''): string
     {
         try {
             $row = $this->fetchOne($pdo, 'SELECT * FROM mailsablon WHERE id = :id', [':id' => $id]);
@@ -795,7 +980,12 @@ final class ReservationdetailController extends Controller
             return '';
         }
 
-        return str_replace('{siteadi}', $siteName, (string) ($row['icerik' . $suffix] ?? $row['icerik'] ?? ''));
+        $text = (string) ($row['icerik' . $suffix] ?? $row['icerik'] ?? '');
+        if ($urlBase !== '') {
+            $text = str_ireplace('../../../../../', $urlBase, $text);
+        }
+
+        return str_replace('{siteadi}', $siteName, $text);
     }
 
     /** Panel htmlSablonItem: başlık / değer satırı. */
@@ -812,15 +1002,24 @@ final class ReservationdetailController extends Controller
     /**
      * Panel siparis_1 banka hesapları (hesaplar, kullanici = 0: sitenin hesapları, siralama sırasıyla).
      * Her hesap için panelin mail kutusu (HTML) üretilir; seçim Natsisa'da yapılır.
+     * reservation_mail.bank_html_style = classic: ovillam (odemeBekliyorMailSablonGetir) satırları.
      *
+     * @param array{bank_html_style:string,active_bank_accounts_only:bool,relative_url_base:string}|null $settings
      * @return array<int,array{id:int,banka:string,hesapAdi:string,html:string}>
      */
-    private function mailBankAccounts(PDO $pdo, bool $english, string $cdn): array
+    private function mailBankAccounts(PDO $pdo, bool $english, string $cdn, ?array $settings = null): array
     {
+        $settings = $settings ?? $this->mailSettings();
+        $sql = 'SELECT * FROM hesaplar WHERE kullanici = 0'
+            . ($settings['active_bank_accounts_only'] ? ' AND aktif = 1' : '')
+            . ' ORDER BY siralama ASC';
         try {
-            $accounts = $this->fetchAll($pdo, 'SELECT * FROM hesaplar WHERE kullanici = 0 ORDER BY siralama ASC');
+            $accounts = $this->fetchAll($pdo, $sql);
         } catch (\PDOException $e) {
             return [];
+        }
+        if ($settings['bank_html_style'] === 'classic') {
+            return $this->mailBankAccountsClassic($accounts, $english, $cdn);
         }
 
         $t = $english
@@ -860,6 +1059,68 @@ final class ReservationdetailController extends Controller
                 . "<td class='sm-ml-0' style='margin-left: 36px; display: block'>"
                 . "<table style='height: 85px;' cellpadding='0' cellspacing='0' role='presentation'><tbody>" . $rows . '</tbody></table>'
                 . '</td></tr></tbody></table></td></tr>';
+
+            $result[] = [
+                'id' => (int) ($a['id'] ?? 0),
+                'banka' => trim((string) ($a['banka'] ?? '')),
+                'hesapAdi' => trim((string) ($a['hesap_adi'] ?? '')),
+                'html' => $html,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Ovillam paneli banka satırları (inc/Functions.asp odemeBekliyorMailSablonGetir). Her hesap: logo + Alıcı,
+     * TL / EURO / GBP / USD IBAN, Şube Kodu, Hesap No. Şablonda dış tablo ve "Banka Hesap Bilgilerimiz" başlığı olur.
+     *
+     * @param array<int,array<string,mixed>> $accounts
+     * @return array<int,array{id:int,banka:string,hesapAdi:string,html:string}>
+     */
+    private function mailBankAccountsClassic(array $accounts, bool $english, string $cdn): array
+    {
+        $t = $english
+            ? ['alici' => 'Recipient', 'sube' => 'Branch Code', 'hesap' => 'Account No']
+            : ['alici' => 'Alıcı', 'sube' => 'Şube Kodu', 'hesap' => 'Hesap No'];
+        $e = function ($v): string {
+            return htmlspecialchars(trim((string) $v), ENT_QUOTES, 'UTF-8');
+        };
+        $cell = 'font-family: sans-serif; font-size: 14px; vertical-align: top;';
+        $line = function (string $label, $value) use ($e, $cell): string {
+            return '<tr>'
+                . '<td style="' . $cell . '"><span style="font-size: 10px; color: #4e4e4e; font-weight: 500; font-style: normal;">' . $e($label) . '</span></td>'
+                . '<td style="' . $cell . '"><span style="font-size: 10px; color: #4e4e4e; font-weight: 700; font-style: normal;">:</span></td>'
+                . '<td style="' . $cell . ' width: 17px;">&nbsp;</td>'
+                . '<td style="' . $cell . '"><span style="font-size: 10px; color: #4e4e4e; font-weight: 700; font-style: normal;">' . $e($value) . '</span></td>'
+                . '</tr>';
+        };
+
+        $result = [];
+        foreach ($accounts as $a) {
+            $image = rtrim($cdn, '/') . '/uploads/' . trim((string) ($a['resim'] ?? '')) . '?l=0';
+            $rows = $line($t['alici'], $a['hesap_adi'] ?? '');
+            foreach ([
+                ['TL IBAN', 'iban_tl'],
+                ['EURO IBAN', 'iban_euro'],
+                ['GBP IBAN', 'iban_pound'],
+                ['USD IBAN', 'iban_dolar'],
+                [$t['sube'], 'sube_kod'],
+                [$t['hesap'], 'hesap_no'],
+            ] as [$label, $column]) {
+                if (trim((string) ($a[$column] ?? '')) !== '') {
+                    $rows .= $line($label, $a[$column]);
+                }
+            }
+
+            $html = '<tr><td style="font-family: sans-serif; font-size: 14px; vertical-align: middle;">'
+                . '<div style="margin-top: 12px; width: max-content; border-radius: 12px; background-color: #fff; padding: 9px; border: 2px solid #b9b9b9; margin-right: 10px;">'
+                . '<img src="' . $e($image) . '" width="138" height="40" alt="" style="vertical-align: middle; line-height: 1; border: none; -ms-interpolation-mode: bicubic; max-width: 100%; object-fit: contain;">'
+                . '</div></td>'
+                . '<td style="font-family: sans-serif; font-size: 14px; vertical-align: middle;">'
+                . '<table style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt;" cellpadding="0" cellspacing="0" role="none">'
+                . $rows . '</table></td></tr>'
+                . '<tr style="height: 20px;"><td colspan="2"></td></tr>';
 
             $result[] = [
                 'id' => (int) ($a['id'] ?? 0),
