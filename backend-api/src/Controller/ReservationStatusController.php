@@ -272,7 +272,7 @@ final class ReservationStatusController extends Controller
     {
         $id = (int) $reservation['id'];
         $oldDurum = $reservation['durum'] !== null ? (int) $reservation['durum'] : null;
-
+        $sendGroup = $this->sendWhatsappGroup();
         $calendar = $this->calendarResult();
         if ($this->calendarHome($pdo, (int) $reservation['evid'])) {
             $calendar['bagli'] = true;
@@ -285,6 +285,7 @@ final class ReservationStatusController extends Controller
                 'reservationId' => $reservationId,
                 'estateId' => (int) $mapping['EstateId'],
                 'callbackParam' => $callbackParam,
+                'sendWhatsappGroup' => $sendGroup ? '1' : '0',
             ]);
             if (trim($raw) !== 'success') {
                 throw new HttpException(
@@ -295,6 +296,7 @@ final class ReservationStatusController extends Controller
             }
             $calendar['islem'] = 'release';
             $calendar['reservation_id'] = $reservationId;
+            $calendar['whatsapp_grup_bildirimi'] = $sendGroup;
         }
 
         // Panel (siparis_6): eşleşme silinir, dolu.ReservationId her durumda boşaltılır. 0 ve 5'te sadece kayıt
@@ -302,6 +304,7 @@ final class ReservationStatusController extends Controller
         // CancelReservation callback'i ReservationId ile eşleştiği için bırakılan rezervasyonu artık bulamaz.
         $clearLink = $mapping || $durum === 6;
 
+        $this->calendarLog($calendar);
         $this->transaction($pdo, function () use ($pdo, $id, $durum, $logText, $clearLink) {
             if ($clearLink) {
                 $stmt = $pdo->prepare('DELETE FROM KiralamaTakvimi.Response WHERE kayitlarId = :id');
@@ -384,7 +387,7 @@ final class ReservationStatusController extends Controller
         $this->logDetails['opsiyonSure'] = $saat;
         $this->logDetails['opsiyonSureBirim'] = $isMinute ? 'dakika' : 'saat';
         $this->logDetails['opsiyonBitis'] = $optionEndText;
-        $this->logDetails['kiralamaTakvimi'] = $calendar['gonderildi'] ? (string) $calendar['islem'] : null;
+        $this->calendarLog($calendar);
 
         $this->transaction($pdo, function () use ($pdo, $id, $optionEndText, $optionHoursText) {
             if ($optionEndText !== null) {
@@ -461,6 +464,7 @@ final class ReservationStatusController extends Controller
         // (ApproveReservation) yazar.
         $approvedOn = $calendar['gonderildi'] ? null : $now->format('Y-m-d');
 
+        $this->calendarLog($calendar);
         $this->transaction($pdo, function () use ($pdo, $id, $reservation, $kur, $saatText, $approvedOn) {
             $stmt = $pdo->prepare('UPDATE kayitlar SET saat = :saat WHERE id = :id');
             $stmt->execute([':saat' => $saatText, ':id' => $id]);
@@ -506,7 +510,9 @@ final class ReservationStatusController extends Controller
         if ($mapping) {
             $calendar['bagli'] = true;
             $reservationId = (int) $mapping['ReservationId'];
-            $this->calendarAction('Reservation/Cancel', $reservationId, (int) $mapping['EstateId'], 'KT_CANCEL_FAILED', 'Kiralama Takvimi iptal işlemi başarısız.');
+            $sendGroup = $this->sendWhatsappGroup();
+            $this->calendarAction('Reservation/Cancel', $reservationId, (int) $mapping['EstateId'], 'KT_CANCEL_FAILED', 'Kiralama Takvimi iptal işlemi başarısız.', ['sendWhatsappGroup' => $sendGroup ? '1' : '0']);
+            $calendar['whatsapp_grup_bildirimi'] = $sendGroup;
             $calendar['islem'] = 'cancel';
             $calendar['gonderildi'] = true;
             $calendar['reservation_id'] = $reservationId;
@@ -514,6 +520,7 @@ final class ReservationStatusController extends Controller
             $calendar['bagli'] = true;
         }
 
+        $this->calendarLog($calendar);
         $sent = $calendar['gonderildi'];
         $this->transaction($pdo, function () use ($pdo, $id, $sent) {
             if (!$sent) {
@@ -960,6 +967,20 @@ final class ReservationStatusController extends Controller
             'guncel_durum' => $currentDurum,
             'guncel_durum_text' => $currentDurum !== null ? (self::STATUSES[$currentDurum] ?? '-') : '-',
         ], $extra));
+    }
+
+    /**
+     * İşlem geçmişi ayrıntısı: Kiralama Takvimi'ne gidildiyse işlem (option, option_extend, approve, cancel, release)
+     * ve WhatsApp grubuna bildirim tercihi (kiralamaTakvimiGrup: true gönderildi / false gönderilmedi; gidilmediyse yok).
+     */
+    private function calendarLog(array $calendar): void
+    {
+        $this->logDetails['kiralamaTakvimi'] = !empty($calendar['gonderildi']) || $calendar['islem'] === 'release'
+            ? (string) $calendar['islem']
+            : null;
+        if ($calendar['whatsapp_grup_bildirimi'] !== null) {
+            $this->logDetails['kiralamaTakvimiGrup'] = (bool) $calendar['whatsapp_grup_bildirimi'];
+        }
     }
 
     private function calendarResult(): array

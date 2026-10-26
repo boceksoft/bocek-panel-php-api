@@ -40,6 +40,7 @@ final class ReservationsController extends Controller
 
         // Filtreler
         $promosyon  = $this->p('promosyon');
+        $villaId  = $this->p('villa');
         $musteriAra = $this->p('musteri') !== '' ? $this->p('musteri') : $this->p('kelime');
 
         $rezTarih1   = $this->parseTrDate($this->p('rezTarih1'));
@@ -137,7 +138,10 @@ final class ReservationsController extends Controller
             $params[':musteriIp']    = $musteriAra;
         }
 
-
+        if ($villaId !== '') {
+            $where[] = "homes.id=:villaId";
+            $params[':villaId'] = $villaId;
+        }
         if ($acenta !== '') {
             $where[] = "kayitlar.satis_kanallari_id IN ($acenta)";
         }

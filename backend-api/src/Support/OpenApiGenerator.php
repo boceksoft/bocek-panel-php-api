@@ -29,6 +29,9 @@ final class OpenApiGenerator
     /** @var string */
     private $basePath;
 
+    /** @var string[] */
+    private $loadErrors = [];
+
     public function __construct(string $controllerDir, string $basePath = '')
     {
         $this->controllerDir = rtrim($controllerDir, '/');
@@ -42,7 +45,14 @@ final class OpenApiGenerator
 
         foreach (glob($this->controllerDir . '/*Controller.php') ?: [] as $file) {
             $class = $this->namespace . basename($file, '.php');
-            if (!class_exists($class)) {
+            // Bir controller yüklenemezse (ParseError vb.) diğerleri yine dokümante edilsin;
+            // sebep "x-load-errors" alanında görünür.
+            try {
+                if (!class_exists($class)) {
+                    continue;
+                }
+            } catch (\Throwable $e) {
+                $this->loadErrors[] = basename($file) . ':' . $e->getLine() . ' ' . get_class($e) . ': ' . $e->getMessage();
                 continue;
             }
 
@@ -254,7 +264,7 @@ final class OpenApiGenerator
 
     private function document(array $paths): array
     {
-        return [
+        $document = [
             'openapi' => '3.0.3',
             'info' => [
                 'title' => 'Bocek Panel API',
@@ -274,5 +284,11 @@ final class OpenApiGenerator
             ],
             'paths' => $paths,
         ];
+
+        if ($this->loadErrors !== []) {
+            $document['x-load-errors'] = $this->loadErrors;
+        }
+
+        return $document;
     }
 }
