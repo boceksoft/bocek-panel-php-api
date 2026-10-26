@@ -13,7 +13,7 @@ use PDO;
  * This is the API version of the old emlak_yonetimi.asp AJAX list.
  */
 final class HomesManagementController extends Controller
-{
+{    
     /**
      * @Get
      * @query page int Page number
@@ -345,6 +345,50 @@ WHERE {$whereSql}
         }
 
         $this->response->success(['message' => 'Villa silindi', 'id' => $id]);
+    }
+
+    /**
+     * Villayi aktif/pasif yapar: listedeki ile ayni site kolonu (aktif, aktif_s2...) guncellenir.
+     *   POST /backend-api/homes-management/active  { "id": 123, "active": 1, "site": 2 }
+     *
+     * @Post("active")
+     */
+    public function active(): void
+    {
+        $id = (int) $this->request->query('id', $this->request->input('id', 0));
+        if ($id <= 0) {
+            throw new \App\Core\HttpException('Gecersiz villa ID', 'VALIDATION', 422);
+        }
+
+        $raw = $this->request->query('active', $this->request->input('active', null));
+        if ($raw === null || $raw === '') {
+            throw new \App\Core\HttpException('active alani zorunludur.', 'VALIDATION', 422);
+        }
+        $active = in_array(strtolower(trim((string) $raw)), ['1', 'true', 'on', 'yes'], true) ? 1 : 0;
+
+        $siteId = (int) $this->request->query('site', $this->request->input('site', 0));
+        if ($siteId <= 0) {
+            $siteId = $this->siteId();
+        }
+        $column = $this->siteColumn('aktif', $siteId);
+
+        $pdo = $this->db->pdo();
+
+        // Varlik kontrolu ayri yapilir: homes'ta trigger varsa UPDATE'in rowCount() degeri guvenilmez.
+        $exists = $pdo->prepare('SELECT COUNT(1) FROM dbo.homes WHERE id = :id');
+        $exists->execute([':id' => $id]);
+        if ((int) $exists->fetchColumn() === 0) {
+            throw new \App\Core\HttpException('Villa bulunamadi.', 'NOT_FOUND', 404);
+        }
+
+        $stmt = $pdo->prepare("UPDATE dbo.homes SET [{$column}] = :active WHERE id = :id");
+        $stmt->execute([':active' => $active, ':id' => $id]);
+
+        $check = $pdo->prepare("SELECT ISNULL([{$column}], 0) FROM dbo.homes WHERE id = :id");
+        $check->execute([':id' => $id]);
+        $current = (int) $check->fetchColumn();
+
+        $this->response->success(['id' => $id, 'active' => $current === 1, 'column' => $column]);
     }
 
     private function p(string $key, string $default = ''): string

@@ -391,78 +391,144 @@ final class HomesManagementDetailDataController extends Controller
     }
 
     /**
+     * Yetkili firmalar: sitenin panel API'sindeki Establishment::List (Kiralama Takvimi establishment/list, sayfa basina 200).
+     * Adres/header'lar KiralamatakvimiController ile ayni ayarlardan gelir. homes.yetkilifirma firma adini
+     * tuttugu icin secenek id'si de firma adidir. Hata olursa bos liste doner, ilan detayi yine acilir.
+     *
      * @return array<int,array<string,string>>
      */
     private function yetkiliFirmalar(): array
     {
-        $url = $this->establishmentListUrl();
-        if ($url === '') {
+        $base = $this->panelApiUrl();
+        if ($base === '') {
             return [];
         }
 
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => 5,
-                'ignore_errors' => true,
-                'header' => "Accept: application/json\r\n",
-            ],
-        ]);
-        $json = @file_get_contents($url, false, $context);
-        if (!is_string($json) || trim($json) === '') {
-            return [];
-        }
-
-        $decoded = json_decode($json, true);
-        if (!is_array($decoded)) {
-            return [];
-        }
-
-        $rows = $this->establishmentRows($decoded);
         $items = [];
         $seen = [];
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
+        // Panel sayfa basina 200 kayit getirir; bos ya da yeni kayit getirmeyen sayfaya kadar devam edilir.
+        for ($page = 1; $page <= 100; $page++) {
+            $decoded = $this->panelPost($base . '/Establishment/List?page=' . $page, ['establishmentName' => '']);
+            if ($decoded === null) {
+                break;
             }
 
-            $name = trim((string) ($row['EstablishmentName'] ?? ''));
-            if ($name === '' || isset($seen[$name])) {
-                continue;
+            $rows = $this->establishmentRows($decoded);
+            if ($rows === []) {
+                break;
             }
 
-            $seen[$name] = true;
-            $items[] = [
-                'id' => $name,
-                'title' => $name,
-                'name' => $name,
-            ];
+            $before = count($items);
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+
+                $name = trim((string) $this->rowValue($row, ['EstablishmentName', 'Name', 'Title']));
+                if ($name === '' || isset($seen[$name])) {
+                    continue;
+                }
+
+                $seen[$name] = true;
+                $items[] = [
+                    'id' => $name,
+                    'title' => $name,
+                    'name' => $name,
+                    'establishmentId' => (string) $this->rowValue($row, ['EstablishmentId', 'Id']),
+                    'phone' => (string) $this->rowValue($row, ['PhoneNumber', 'Phone', 'Telephone']),
+                    'email' => (string) $this->rowValue($row, ['Email', 'Mail']),
+                    'taxNumber' => (string) $this->rowValue($row, ['TaxNumber', 'TaxNo', 'VergiNo']),
+                ];
+            }
+
+            // Son sayfa ya da sayfa parametresi dikkate alinmiyor (ayni kayitlar tekrar geliyor).
+            if (count($rows) < 200 || count($items) === $before) {
+                break;
+            }
         }
+
+        usort($items, function (array $a, array $b): int {
+            return strcasecmp($a['name'], $b['name']);
+        });
 
         return $items;
     }
 
-    private function establishmentListUrl(): string
+    /**
+     * Panel API'sine form POST'u; JSON degilse ya da ulasilamazsa null.
+     *
+     * @param array<string,string> $data
+     * @return array<mixed>|null
+     */
+    private function panelPost(string $url, array $data)
     {
-        $host = $_SERVER['HTTP_X_FORWARDED_HOST']
-            ?? $_SERVER['HTTP_HOST']
-            ?? $_SERVER['SERVER_NAME']
-            ?? '';
-        $host = trim((string) explode(',', (string) $host)[0]);
-        $host = preg_replace('/:\d+$/', '', $host) ?? '';
-        if ($host === '' || filter_var($host, FILTER_VALIDATE_IP)) {
-            return '';
+        if (!function_exists('curl_init')) {
+            return null;
         }
 
-        $parts = explode('.', $host);
-        if (count($parts) > 2) {
-            $parts[0] = 'web';
-            $webHost = implode('.', $parts);
-        } else {
-            $webHost = 'web.' . $host;
+        $headers = array_merge(
+            ['Accept: application/json', 'Content-Type: application/x-www-form-urlencoded'],
+            array_values((array) ($this->app['kiralamatakvimi_panel_api_headers'] ?? []))
+        );
+
+        $curl = curl_init($url);
+        curl_setopt_array($curl, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => http_build_query($data),
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT => 15,
+        ]);
+        $raw = curl_exec($curl);
+        curl_close($curl);
+
+        if (!is_string($raw) || trim($raw) === '') {
+            return null;
         }
 
-        return 'https://' . $webHost . '/api/establishment/list';
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * Panel API koku: config 'kiralamatakvimi_panel_api_url', bossa sitenin config.php'sindeki URL sabiti.
+     */
+    private function panelApiUrl(): string
+    {
+        $url = trim((string) ($this->app['kiralamatakvimi_panel_api_url'] ?? ''));
+        if ($url === '') {
+            $url = defined('URL') ? trim((string) constant('URL')) : '';
+            if ($url === '') {
+                return '';
+            }
+            if (preg_match('#^https?://#i', $url) !== 1) {
+                $url = 'https://' . $url;
+            }
+        }
+
+        return rtrim($url, '/');
+    }
+
+    /**
+     * Alan adini buyuk/kucuk harf duyarsiz okur (Kiralama Takvimi PascalCase ya da camelCase donebilir).
+     *
+     * @param array<string,mixed> $row
+     * @param array<int,string> $keys
+     * @return mixed
+     */
+    private function rowValue(array $row, array $keys)
+    {
+        $lower = array_change_key_case($row, CASE_LOWER);
+        foreach ($keys as $key) {
+            $value = $lower[strtolower($key)] ?? null;
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                return $value;
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -475,9 +541,10 @@ final class HomesManagementDetailDataController extends Controller
             return $decoded;
         }
 
-        foreach (['data', 'items', 'result', 'results', 'list'] as $key) {
-            if (isset($decoded[$key]) && is_array($decoded[$key])) {
-                return $this->establishmentRows($decoded[$key]);
+        $lower = array_change_key_case($decoded, CASE_LOWER);
+        foreach (['data', 'items', 'result', 'results', 'list', 'records'] as $key) {
+            if (isset($lower[$key]) && is_array($lower[$key])) {
+                return $this->establishmentRows($lower[$key]);
             }
         }
 

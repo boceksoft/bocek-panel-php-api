@@ -252,16 +252,18 @@ final class HomesManagementCalendarController extends Controller
     }
 
     // Cikis gunu ayni gun giris olabilir; iptal/silinen/suresi dolan kayitlar cakisma sayilmaz.
+    // Sadece rezervasyonlar (kayitid > 0) engeller; manuel kapatmalarin uzerine kapatma yapilabilir.
     private function assertNoOverlap(PDO $pdo, int $emlakId, string $start, string $end, int $exceptId): void
     {
         // NULL durum -99 ile ayrılır; siteye özel silinme kodu (örn. -1) da çakışma sayılmaz.
         $deletedStatus = $this->deletedStatus();
         $stmt = $pdo->prepare("SELECT COUNT(*) FROM dbo.dolu WITH (UPDLOCK, HOLDLOCK)
             WHERE emlak = :emlak AND id <> :id AND ISNULL(Durum, -99) NOT IN (2, 4, 5, {$deletedStatus})
+              AND ISNULL(kayitid, -1) > 0
               AND tarih < :end AND tarih2 > :start");
         $stmt->execute([':emlak' => $emlakId, ':id' => $exceptId, ':start' => $start, ':end' => $end]);
         if ((int) $stmt->fetchColumn() > 0) {
-            throw new HttpException('Secilen tarihler baska bir kayitla cakisiyor.', 'OVERLAP', 409);
+            throw new HttpException('Secilen tarihler bir rezervasyonla cakisiyor.', 'OVERLAP', 409);
         }
     }
 

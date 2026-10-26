@@ -17,6 +17,8 @@ final class AvailabilityController extends Controller
     /**
      * @Get
      * @query EntityId int required Emlak/home kimliği (alternatif: id)
+     * @query separateManual int 1 ise manuel kapatmalar (kayitid -1/NULL) dolu* listelerinden cikarilir,
+     *        ayrica manuelGirisler / manuelCikislar / manuelGunler olarak doner.
      */
     public function index(): void
     {
@@ -37,6 +39,7 @@ final class AvailabilityController extends Controller
         }
 
         $pdo = $this->db->pdo();
+        $separateManual = in_array(strtolower((string) $this->request->query('separateManual', '')), ['1', 'true'], true);
 
         $defaultCurrencyId = defined('DEFAULT_CURRENCY_ID') ? (int) constant('DEFAULT_CURRENCY_ID') : 1;
         $uzanti  = defined('UZANTI') ? (string) constant('UZANTI') : '';
@@ -66,7 +69,17 @@ final class AvailabilityController extends Controller
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS doluGirisler,
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS doluCikislar,
             ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS doluGunler
-            FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId;
+            FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId
+            . ($separateManual ? " AND ISNULL(" . $doluKayitIdSql . ", -1) > 0" : '');
+
+        // separateManual: rezervasyonsuz kapatmalar (takvimden: durum 0, eski panel: durum 3; kayitid -1 / NULL) ayri liste.
+        $manuelSql = $separateManual ? "
+                (SELECT
+                    ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS manuelGirisler,
+                    ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS manuelCikislar,
+                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS manuelGunler
+                    FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum IN (0, 3)
+                    AND ISNULL(" . $doluKayitIdSql . ", -1) <= 0 AND emlak = " . $entityId . ") AS manuel," : '';
 
         // Oda tipi (hotel availability) kontrolü
         $doluTarihlerSqlWith = '';
@@ -111,6 +124,7 @@ final class AvailabilityController extends Controller
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS dolu_fakeCikislar,
                     ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS dolu_fakeGunler
                     FROM dolu_fake WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId . ") AS fake_dolu,
+                " . $manuelSql . "
                 (SELECT ISNULL((SELECT
                     ISNULL(STRING_AGG(
                         CONCAT(
