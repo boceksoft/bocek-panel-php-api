@@ -26,3 +26,4 @@ reservation-guests 1
 reservation-update 1
 reservation-operations 1
 reservation-documents 1
+reports 6
