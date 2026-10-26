@@ -42,6 +42,12 @@ final class SetupController extends Controller
             $this->execSqlBatches($poolSql);
             $this->execSqlBatches($this->extraPaymentsSql());
             $this->assertExtraPaymentTablesExist();
+            $this->execSqlBatches($this->reservationGuestsSql());
+            $this->assertReservationGuestTablesExist();
+            $this->execSqlBatches($this->reservationNotesSql());
+            $this->assertReservationNotesTableExists();
+            $this->execSqlBatches($this->reservationDocumentsSql());
+            $this->assertReservationDocumentsTableExists();
         } catch (\PDOException $e) {
             throw new HttpException('Kolon setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
         }
@@ -49,10 +55,18 @@ final class SetupController extends Controller
         $this->response->success([
             'setup' => 'collums',
             'database' => $this->databaseName(),
-            'verified_tables' => $this->extraPaymentTableStatus(),
+            'verified_tables' => array_merge(
+                $this->extraPaymentTableStatus(),
+                $this->reservationGuestTableStatus(),
+                $this->reservationNotesTableStatus(),
+                $this->reservationDocumentsTableStatus()
+            ),
             'included_setups' => [
                 'havuztanimlamari',
                 'extra-payments',
+                'reservation-guests',
+                'reservation-notes',
+                'reservation-documents',
             ],
             'status' => 'completed',
         ]);
@@ -112,6 +126,442 @@ final class SetupController extends Controller
             ],
             'status' => 'completed',
         ]);
+    }
+
+    /**
+     * Rezervasyon misafir (Reservation.passengerInformation) ve fatura (Reservation.InvoiceData) tablolarını kurar.
+     * Sitenin ön yüzü ("Misafir Bilgilerini Doldur") ve panel bu tablolara yazar. Var olan şema/tabloya dokunmaz.
+     *
+     * @Post("reservation-guests")
+     */
+    public function reservationGuests(): void
+    {
+        try {
+            $this->execSqlBatches($this->reservationGuestsSql());
+            $this->assertReservationGuestTablesExist();
+        } catch (\PDOException $e) {
+            throw new HttpException('Misafir/fatura tablolari setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
+        }
+
+        $this->response->success([
+            'setup' => 'reservation-guests',
+            'database' => $this->databaseName(),
+            'verified_tables' => $this->reservationGuestTableStatus(),
+            'tables' => [
+                'Reservation.passengerInformation',
+                'Reservation.InvoiceData',
+            ],
+            'status' => 'completed',
+        ]);
+    }
+
+    /**
+     * Yapı mevcut sitelerdeki tablolarla birebir aynıdır (kolon tipleri, PK ve kayitindex).
+     * Sadece eksik olanı oluşturur; mevcut tablo/veri değişmez.
+     */
+    private function reservationGuestsSql(): string
+    {
+        return "
+IF SCHEMA_ID('Reservation') IS NULL
+    EXEC('CREATE SCHEMA Reservation');
+GO
+
+IF OBJECT_ID('Reservation.InvoiceData', 'U') IS NULL
+BEGIN
+    CREATE TABLE Reservation.InvoiceData
+    (
+        faturatipi   int,
+        isim         nvarchar(150),
+        tcno         nvarchar(100),
+        email        nvarchar(100),
+        telefon      nvarchar(50),
+        mesaj        nvarchar(max),
+        vergidairesi nvarchar(100),
+        id           int identity
+            constraint Invoice_primary
+                primary key,
+        kayitlarId   int
+    );
+END;
+GO
+
+IF OBJECT_ID('Reservation.passengerInformation', 'U') IS NULL
+BEGIN
+    CREATE TABLE Reservation.passengerInformation
+    (
+        kayitlarId int,
+        birthDate  date,
+        gender     smallint,
+        isTurkish  bit,
+        name       nvarchar(200),
+        tc         nvarchar(70),
+        birthPlace nvarchar(100),
+        id         int identity
+            constraint key_name
+                primary key
+    );
+END;
+GO
+
+-- Tablo önceden varsa eksik kolonları ekler (nullable; mevcut veri değişmez). id (identity/PK) eklenmez.
+IF OBJECT_ID(N'[Reservation].[InvoiceData]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[InvoiceData]', N'faturatipi') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[InvoiceData] ADD [faturatipi] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[InvoiceData]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[InvoiceData]', N'isim') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[InvoiceData] ADD [isim] nvarchar(150) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[InvoiceData]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[InvoiceData]', N'tcno') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[InvoiceData] ADD [tcno] nvarchar(100) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[InvoiceData]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[InvoiceData]', N'email') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[InvoiceData] ADD [email] nvarchar(100) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[InvoiceData]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[InvoiceData]', N'telefon') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[InvoiceData] ADD [telefon] nvarchar(50) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[InvoiceData]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[InvoiceData]', N'mesaj') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[InvoiceData] ADD [mesaj] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[InvoiceData]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[InvoiceData]', N'vergidairesi') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[InvoiceData] ADD [vergidairesi] nvarchar(100) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[InvoiceData]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[InvoiceData]', N'kayitlarId') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[InvoiceData] ADD [kayitlarId] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[passengerInformation]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[passengerInformation]', N'kayitlarId') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[passengerInformation] ADD [kayitlarId] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[passengerInformation]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[passengerInformation]', N'birthDate') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[passengerInformation] ADD [birthDate] date NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[passengerInformation]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[passengerInformation]', N'gender') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[passengerInformation] ADD [gender] smallint NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[passengerInformation]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[passengerInformation]', N'isTurkish') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[passengerInformation] ADD [isTurkish] bit NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[passengerInformation]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[passengerInformation]', N'name') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[passengerInformation] ADD [name] nvarchar(200) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[passengerInformation]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[passengerInformation]', N'tc') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[passengerInformation] ADD [tc] nvarchar(70) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[Reservation].[passengerInformation]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[passengerInformation]', N'birthPlace') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[passengerInformation] ADD [birthPlace] nvarchar(100) NULL;
+END;
+GO
+
+IF OBJECT_ID('Reservation.passengerInformation', 'U') IS NOT NULL
+   AND NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE name = 'kayitindex' AND object_id = OBJECT_ID('Reservation.passengerInformation')
+   )
+    CREATE INDEX kayitindex ON Reservation.passengerInformation (kayitlarId);
+GO
+";
+    }
+
+    /**
+     * Rezervasyon notları tablosu (Reservation.ReservationNotes): Natsisa "Rezervasyon Notları", birden fazla not.
+     * Panelin tek notu (kayitlar.OzNot) ayrıca gösterilir; yeni notlar OzNot'a yazılmaz. Var olan şema/tabloya dokunmaz.
+     *
+     * @Post("reservation-notes")
+     */
+    public function reservationNotes(): void
+    {
+        try {
+            $this->execSqlBatches($this->reservationNotesSql());
+            $this->assertReservationNotesTableExists();
+        } catch (\PDOException $e) {
+            throw new HttpException('Rezervasyon notlari tablosu setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
+        }
+
+        $this->response->success([
+            'setup' => 'reservation-notes',
+            'database' => $this->databaseName(),
+            'verified_tables' => $this->reservationNotesTableStatus(),
+            'tables' => ['Reservation.ReservationNotes'],
+            'status' => 'completed',
+        ]);
+    }
+
+    /** Silme yumuşak (IsDeleted). Tablo varsa eksik kolonlar NULL olarak eklenir (NoteId hariç). */
+    private function reservationNotesSql(): string
+    {
+        $sql = "
+IF SCHEMA_ID('Reservation') IS NULL
+    EXEC('CREATE SCHEMA Reservation');
+GO
+
+IF OBJECT_ID('Reservation.ReservationNotes', 'U') IS NULL
+BEGIN
+    CREATE TABLE Reservation.ReservationNotes
+    (
+        NoteId          int identity
+            constraint ReservationNotes_pk primary key,
+        ReservationId   int            NOT NULL,
+        Note            nvarchar(max)  NOT NULL,
+        CreatedByUserId bigint         NULL,
+        CreatedByName   nvarchar(100)  NULL,
+        CreatedAt       datetime       NOT NULL constraint DF_ReservationNotes_CreatedAt default getdate(),
+        UpdatedByUserId bigint         NULL,
+        UpdatedByName   nvarchar(100)  NULL,
+        UpdatedAt       datetime       NULL,
+        IsDeleted       bit            NOT NULL constraint DF_ReservationNotes_IsDeleted default 0
+    );
+END;
+GO
+";
+        $columns = [
+            'ReservationId' => 'int', 'Note' => 'nvarchar(max)', 'CreatedByUserId' => 'bigint',
+            'CreatedByName' => 'nvarchar(100)', 'CreatedAt' => 'datetime', 'UpdatedByUserId' => 'bigint',
+            'UpdatedByName' => 'nvarchar(100)', 'UpdatedAt' => 'datetime', 'IsDeleted' => 'bit',
+        ];
+        foreach ($columns as $column => $type) {
+            $sql .= "
+IF OBJECT_ID(N'[Reservation].[ReservationNotes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[ReservationNotes]', N'{$column}') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[ReservationNotes] ADD [{$column}] {$type} NULL;
+END;
+GO
+";
+        }
+        $sql .= "
+IF OBJECT_ID('Reservation.ReservationNotes', 'U') IS NOT NULL
+   AND NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE name = 'IX_ReservationNotes_ReservationId' AND object_id = OBJECT_ID('Reservation.ReservationNotes')
+   )
+    CREATE INDEX IX_ReservationNotes_ReservationId ON Reservation.ReservationNotes (ReservationId);
+GO
+";
+
+        return $sql;
+    }
+
+    /**
+     * Rezervasyon belgeleri tablosu (Reservation.ReservationDocuments): Natsisa'nın ürettiği PDF'ler
+     * (dosyalar uploads/natsisa_documents altında). Var olan şema/tabloya dokunmaz.
+     *
+     * @Post("reservation-documents")
+     */
+    public function reservationDocuments(): void
+    {
+        try {
+            $this->execSqlBatches($this->reservationDocumentsSql());
+            $this->assertReservationDocumentsTableExists();
+        } catch (\PDOException $e) {
+            throw new HttpException('Rezervasyon belgeleri tablosu setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
+        }
+
+        $this->response->success([
+            'setup' => 'reservation-documents',
+            'database' => $this->databaseName(),
+            'verified_tables' => $this->reservationDocumentsTableStatus(),
+            'tables' => ['Reservation.ReservationDocuments'],
+            'status' => 'completed',
+        ]);
+    }
+
+    /** Silme yumuşak (IsDeleted) + dosya silinir. Tablo varsa eksik kolonlar NULL olarak eklenir (DocumentId hariç). */
+    private function reservationDocumentsSql(): string
+    {
+        $sql = "
+IF SCHEMA_ID('Reservation') IS NULL
+    EXEC('CREATE SCHEMA Reservation');
+GO
+
+IF OBJECT_ID('Reservation.ReservationDocuments', 'U') IS NULL
+BEGIN
+    CREATE TABLE Reservation.ReservationDocuments
+    (
+        DocumentId      int identity
+            constraint ReservationDocuments_pk primary key,
+        ReservationId   int            NOT NULL,
+        TemplateId      bigint         NULL,
+        TemplateName    nvarchar(150)  NOT NULL,
+        FileName        nvarchar(200)  NOT NULL,
+        FilePath        nvarchar(300)  NOT NULL,
+        FileSize        int            NOT NULL,
+        ForOwner        bit            NOT NULL constraint DF_ReservationDocuments_ForOwner default 0,
+        CreatedByUserId bigint         NULL,
+        CreatedByName   nvarchar(100)  NULL,
+        CreatedAt       datetime       NOT NULL constraint DF_ReservationDocuments_CreatedAt default getdate(),
+        IsDeleted       bit            NOT NULL constraint DF_ReservationDocuments_IsDeleted default 0
+    );
+END;
+GO
+";
+        $columns = [
+            'ReservationId' => 'int', 'TemplateId' => 'bigint', 'TemplateName' => 'nvarchar(150)',
+            'FileName' => 'nvarchar(200)', 'FilePath' => 'nvarchar(300)', 'FileSize' => 'int', 'ForOwner' => 'bit',
+            'CreatedByUserId' => 'bigint', 'CreatedByName' => 'nvarchar(100)', 'CreatedAt' => 'datetime', 'IsDeleted' => 'bit',
+        ];
+        foreach ($columns as $column => $type) {
+            $sql .= "
+IF OBJECT_ID(N'[Reservation].[ReservationDocuments]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[Reservation].[ReservationDocuments]', N'{$column}') IS NULL
+BEGIN
+ALTER TABLE [Reservation].[ReservationDocuments] ADD [{$column}] {$type} NULL;
+END;
+GO
+";
+        }
+        $sql .= "
+IF OBJECT_ID('Reservation.ReservationDocuments', 'U') IS NOT NULL
+   AND NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE name = 'IX_ReservationDocuments_ReservationId' AND object_id = OBJECT_ID('Reservation.ReservationDocuments')
+   )
+    CREATE INDEX IX_ReservationDocuments_ReservationId ON Reservation.ReservationDocuments (ReservationId);
+GO
+";
+
+        return $sql;
+    }
+
+    private function assertReservationDocumentsTableExists(): void
+    {
+        foreach ($this->reservationDocumentsTableStatus() as $table => $exists) {
+            if (!$exists) {
+                throw new HttpException('Rezervasyon belgeleri setup tamamlanmadi. Tablo/kolon eksik: Reservation.' . $table, 'SETUP_VERIFY_FAILED', 500);
+            }
+        }
+    }
+
+    /**
+     * @return array<string,bool>
+     */
+    private function reservationDocumentsTableStatus(): array
+    {
+        return [
+            'ReservationDocuments' => $this->tableExists('Reservation', 'ReservationDocuments')
+                && $this->missingColumns('Reservation', 'ReservationDocuments', [
+                    'DocumentId', 'ReservationId', 'TemplateId', 'TemplateName', 'FileName', 'FilePath', 'FileSize',
+                    'ForOwner', 'CreatedByUserId', 'CreatedByName', 'CreatedAt', 'IsDeleted',
+                ]) === [],
+        ];
+    }
+
+    private function assertReservationNotesTableExists(): void
+    {
+        foreach ($this->reservationNotesTableStatus() as $table => $exists) {
+            if (!$exists) {
+                throw new HttpException('Rezervasyon notlari setup tamamlanmadi. Tablo/kolon eksik: Reservation.' . $table, 'SETUP_VERIFY_FAILED', 500);
+            }
+        }
+    }
+
+    /**
+     * @return array<string,bool>
+     */
+    private function reservationNotesTableStatus(): array
+    {
+        return [
+            'ReservationNotes' => $this->tableExists('Reservation', 'ReservationNotes')
+                && $this->missingColumns('Reservation', 'ReservationNotes', [
+                    'NoteId', 'ReservationId', 'Note', 'CreatedByUserId', 'CreatedByName', 'CreatedAt',
+                    'UpdatedByUserId', 'UpdatedByName', 'UpdatedAt', 'IsDeleted',
+                ]) === [],
+        ];
+    }
+
+    private function assertReservationGuestTablesExist(): void
+    {
+        foreach ($this->reservationGuestTableStatus() as $table => $exists) {
+            if (!$exists) {
+                throw new HttpException('Misafir/fatura setup tamamlanmadi. Tablo/kolon eksik: Reservation.' . $table, 'SETUP_VERIFY_FAILED', 500);
+            }
+        }
+    }
+
+    /**
+     * @return array<string,bool>
+     */
+    private function reservationGuestTableStatus(): array
+    {
+        return [
+            'passengerInformation' => $this->tableExists('Reservation', 'passengerInformation')
+                && $this->missingColumns('Reservation', 'passengerInformation', ['id', 'kayitlarId', 'birthDate', 'gender', 'isTurkish', 'name', 'tc', 'birthPlace']) === [],
+            'InvoiceData' => $this->tableExists('Reservation', 'InvoiceData')
+                && $this->missingColumns('Reservation', 'InvoiceData', ['id', 'kayitlarId', 'faturatipi', 'isim', 'tcno', 'email', 'telefon', 'mesaj', 'vergidairesi']) === [],
+        ];
+    }
+
+    /**
+     * @param array<int,string> $expected
+     * @return array<int,string>
+     */
+    private function missingColumns(string $schema, string $table, array $expected): array
+    {
+        $stmt = $this->db->pdo()->prepare(
+            'SELECT LOWER(COLUMN_NAME) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table'
+        );
+        $stmt->execute([':schema' => $schema, ':table' => $table]);
+        $existing = array_flip($stmt->fetchAll(\PDO::FETCH_COLUMN));
+
+        return array_values(array_filter($expected, function (string $column) use ($existing): bool {
+            return !isset($existing[strtolower($column)]);
+        }));
     }
 
     private function extraPaymentsSql(): string

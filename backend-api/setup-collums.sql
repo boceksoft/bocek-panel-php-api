@@ -4093,3 +4093,24 @@ BEGIN
 ALTER TABLE [dbo].[sites] ADD [natsisa_color] nvarchar(20) NULL;
 END;
 GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'onOdemeOrani') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [onOdemeOrani] decimal(9,4) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'gorevliKullaniciId') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [gorevliKullaniciId] bigint NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'gorevliKullaniciAdi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [gorevliKullaniciAdi] nvarchar(100) NULL;
+END;
+GO

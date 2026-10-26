@@ -13,6 +13,24 @@ use PDO;
  */
 final class ReservationdetailController extends Controller
 {
+    /** reservation_extras varsayılanları (config/app.php ile aynı; villavillam / boceksoft-vv paneli). */
+    private const EXTRAS_DEFAULTS = [
+        'cleaning' => ['enabled' => 'auto', 'amount_column' => 'temizlik'],
+        'electricity' => ['enabled' => 'auto', 'amount_column' => 'elektrik'],
+        'pool' => ['enabled' => 'auto', 'flag_column' => 'isitmaliHavuzBool', 'amount_column' => 'isitmaliHavuz'],
+        'extra_payments' => [
+            'enabled' => 'auto',
+            'sources' => ['Reservation.vw_ReservationExtraPayments', 'Reservation.ReservationExtraPayments'],
+            'reservation_column' => 'ReservationId',
+            'columns' => [
+                'id' => 'PaymentId', 'title' => 'Title', 'type' => 'Type', 'night' => 'Night',
+                'amount' => 'Amount', 'total' => 'TotalAmount', 'symbol' => 'Symbol', 'currency' => 'CurrencyCode',
+            ],
+        ],
+        // Eski sistem: kayitlar.ekucretler = "başlık;/tutar&&başlık;/tutar" (salt okunur gösterilir).
+        'legacy' => ['enabled' => 'auto', 'column' => 'ekucretler', 'item_separator' => '&&', 'field_separator' => ';/'],
+    ];
+
     /**
      * Rezervasyon detaylarÄ±nÄ± dÃ¶ner.
      *
@@ -129,6 +147,16 @@ final class ReservationdetailController extends Controller
             );
         }
 
+        // Yeni sistem misafir/fatura tabloları (siparis_detaylari.asp "Kişi Bilgileri" / "Fatura Bilgileri").
+        // Tablo olmayan sitede boş döner; tablolar POST /setup/reservation-guests (veya /setup/collums) ile kurulur.
+        // Bazı sitelerde tablo var ama kolon eksik olabilir: okuma sadece mevcut kolonlarla yapılır.
+        $passengerColumns = $this->tableColumns($pdo, 'Reservation', 'passengerInformation');
+        $invoiceColumns = $this->tableColumns($pdo, 'Reservation', 'InvoiceData');
+        $missingGuestColumns = $this->missingGuestColumns($passengerColumns, $invoiceColumns);
+        $guestTablesReady = $missingGuestColumns === [];
+        $passengers = $this->fetchPassengerInformation($pdo, $id, $passengerColumns);
+        $invoice = $this->fetchInvoiceData($pdo, $id, $invoiceColumns);
+
         $personCountInfo = $this->personCountInfo($reservation, $personInfo ?: []);
         $detailSections = $this->detailSections(
             $reservation,
@@ -139,6 +167,17 @@ final class ReservationdetailController extends Controller
             $documentState ?: [],
             $personInfoList
         );
+        $detailSections['yolcuBilgileri'] = $passengers;
+        $detailSections['faturaBilgileri'] = $invoice;
+        $detailSections['misafirTablolariHazir'] = $guestTablesReady;
+        // Eksik tablo/kolonlar (örn. "Reservation.passengerInformation" veya "Reservation.InvoiceData.mesaj").
+        $detailSections['misafirTablolariEksik'] = $missingGuestColumns;
+        // Eski sistem (kisi_bilgileri) kaydı var mı: varsa "misafirler" eski kayıttır, salt okunur gösterilir.
+        $detailSections['eskiKisiBilgileriVar'] = $personInfoList !== [];
+        // Operasyon: arandı, görevli (Natsisa kullanıcısı; eski panel metni salt okunur). Yazma: reservation-operations.
+        $detailSections['operasyon'] = $this->operationInfo($reservation);
+        // Notlar: panelin tek notu (kayitlar.OzNot) + Reservation.ReservationNotes (birden fazla, silinmemişler).
+        $detailSections['notlar'] = $this->reservationNotes($pdo, $id, $reservation);
 
         $this->response->success([
             'detay' => $detailSections,
@@ -165,7 +204,328 @@ final class ReservationdetailController extends Controller
             // Müşteri e-posta şablonları için (Natsisa): sitenin sabitleri, sitenin dilinde villa bilgileri,
             // ödeme türü, panelin ürettiği ödeme satırları ve banka hesapları HTML'i (aktif_pasif.asp siparis_1).
             'mailBilgileri' => $this->mailInfo($pdo, $reservation),
+            // Rezervasyonun ek ücretleri (temizlik, ısıtmalı havuz, elektrik, ekstra ödemeler). Kolon/tablo adları
+            // panelden panele farklı: config reservation_extras ile eşlenir; panelde olmayan özellik kapalı döner.
+            'ekUcretler' => $this->extraFees($pdo, $reservation),
+            // İndirim (eski panel): eskifiyat = indirimsiz, toplam_tutar = indirimli, promotionCode, indirimevsahibi
+            // (indirimi kim karşılar). Kolon adları config reservation_discount ile eşlenir.
+            'indirim' => $this->discountInfo($pdo, $reservation, $villa ?: []),
         ]);
+    }
+
+    /** reservation_discount varsayılanları (villavillam / boceksoft-vv paneli). */
+    private const DISCOUNT_DEFAULTS = [
+        'old_price_column' => 'eskifiyat',
+        'total_column' => 'toplam_tutar',
+        'promo_column' => 'promotionCode',
+        'owner_column' => 'indirimevsahibi',
+        'commission_column' => 'kazancorani',
+        'villa_commission_column' => 'kazancorani', // homes; site soneki (_s2…) varsa önce o denenir
+        'villa_down_payment_column' => 'depozito',  // homes; ön ödeme oranı (site_field_suffixes.depozito geçerli)
+        'promo_table' => 'promotionCodes',
+        'promo_columns' => [
+            'code' => 'code', 'value' => 'value', 'is_price' => 'isPrice',
+            'stock' => 'stock', 'start' => 'startDate', 'end' => 'endDate',
+        ],
+    ];
+
+    /**
+     * Rezervasyon indirimi, panelden bağımsız tek tip yapı. Komisyon indirimsiz fiyat üzerinden alınır; indirimi site
+     * sahibi karşılıyorsa indirim tutarı ev sahibine eklenir (eski panel rezListesi evsahibikalan formülü).
+     *
+     * @param array<string,mixed> $reservation kayitlar satırı
+     * @param array<string,mixed> $villa homes satırı (komisyon yedeği)
+     * @return array<string,mixed>
+     */
+    private function discountInfo(PDO $pdo, array $reservation, array $villa = []): array
+    {
+        $local = is_array($this->app['reservation_discount'] ?? null) ? $this->app['reservation_discount'] : [];
+        $cfg = array_replace_recursive(self::DISCOUNT_DEFAULTS, $local);
+        $col = function (string $key) use ($cfg, $reservation): string {
+            $name = (string) ($cfg[$key] ?? '');
+
+            return $name !== '' && array_key_exists($name, $reservation) ? $name : '';
+        };
+
+        $totalCol = $col('total_column');
+        $oldCol = $col('old_price_column');
+        $promoCol = $col('promo_column');
+        $ownerCol = $col('owner_column');
+        $commissionCol = $col('commission_column');
+
+        $total = $totalCol !== '' ? $this->feeNumber($reservation[$totalCol]) : 0.0;
+        $old = $oldCol !== '' ? $this->feeNumber($reservation[$oldCol]) : 0.0;
+        $owner = $ownerCol !== '' ? $reservation[$ownerCol] : null;
+        $promoCode = $promoCol !== '' ? trim((string) $reservation[$promoCol]) : '';
+
+        $result = [
+            'ozellikler' => [
+                'eskiFiyat' => $oldCol !== '',
+                'promosyon' => $promoCol !== '',
+                'karsilayan' => $ownerCol !== '',
+            ],
+            'toplamTutar' => $total,
+            // eskifiyat boş/0 ise indirim yok sayılır (panel: boşsa toplam_tutar yazılır).
+            'eskiFiyat' => $old > 0 ? $old : $total,
+            'indirimTutari' => $old > $total ? round($old - $total, 2) : 0.0,
+            'promosyonKodu' => $promoCode,
+            'promosyon' => null,
+            'indirimiKarsilayan' => ($owner === true || $owner === 1 || $owner === '1') ? 'ev_sahibi' : 'site',
+            'kazancOrani' => 0.0,
+            // rezervasyon: kayitlar'daki oran; villa: rezervasyonda yok/0, villanın (site sonekli) oranı; yok: hiçbiri.
+            'kazancOraniKaynak' => 'yok',
+        ];
+
+        // Komisyon: rezervasyonda kayıtlı oran; yoksa / 0 ise villanın oranı (eski panel villa_rapor:
+        // isnull(k.kazancOrani, h.kazancorani)). kayitlar SQL'i ISNULL(kazancorani, 0) ile geldiği için 0 = yok sayılır.
+        $reservationRate = $commissionCol !== '' ? $this->feeNumber($reservation[$commissionCol]) : 0.0;
+        if ($reservationRate > 0) {
+            $result['kazancOrani'] = $reservationRate;
+            $result['kazancOraniKaynak'] = 'rezervasyon';
+        } elseif ($villa) {
+            $suffix = $this->columnSuffix((int) ($reservation['site'] ?? 0));
+            $villaCol = (string) ($cfg['villa_commission_column'] ?? 'kazancorani');
+            $rate = $this->villaRate($villa, $villaCol, $suffix);
+            if ($rate > 0) {
+                $result['kazancOrani'] = $rate;
+                $result['kazancOraniKaynak'] = 'villa';
+            }
+            if ($result['kazancOraniKaynak'] === 'yok' && !empty($this->app['debug'])) {
+                // Teşhis: villa satırındaki komisyon benzeri kolonlar (ad => değer).
+                $result['kazancOraniKolonlari'] = array_filter(
+                    $villa,
+                    function ($key) {
+                        return stripos((string) $key, 'kazanc') !== false || stripos((string) $key, 'komisyon') !== false;
+                    },
+                    ARRAY_FILTER_USE_KEY
+                );
+                $result['kazancOraniSonek'] = $suffix;
+            }
+        }
+
+        // Ön ödeme (depozito) oranı: önce rezervasyonun kendi oranı (kayitlar.onOdemeOrani, Natsisa'da elle değişince
+        // yazılır; kolon setup/collums ile eklenir), boşsa villanın oranı (homes.depozito + site soneki; calculate ile
+        // aynı kural). Panelde ön ödemeyi site alır; oran yoksa frontend komisyon oranını kullanır.
+        $result['onOdemeOrani'] = 0.0;
+        $result['onOdemeOraniKaynak'] = 'yok';
+        $savedDownRate = $reservation['onOdemeOrani'] ?? null;
+        if ($savedDownRate !== null && $savedDownRate !== '' && is_numeric($savedDownRate)) {
+            $result['onOdemeOrani'] = (float) $savedDownRate;
+            $result['onOdemeOraniKaynak'] = 'rezervasyon';
+        } elseif ($villa) {
+            $siteId = (int) ($reservation['site'] ?? 0);
+            $depositCol = (string) ($cfg['villa_down_payment_column'] ?? 'depozito');
+            $depositRate = $this->villaRate($villa, $depositCol, $this->columnSuffix($siteId, 'depozito'));
+            if ($depositRate > 0) {
+                $result['onOdemeOrani'] = $depositRate;
+                $result['onOdemeOraniKaynak'] = 'villa';
+            }
+        }
+
+        $table = (string) ($cfg['promo_table'] ?? '');
+        $pc = is_array($cfg['promo_columns'] ?? null) ? $cfg['promo_columns'] : [];
+        if ($promoCode !== '' && $table !== '' && preg_match('/^[A-Za-z0-9_.\[\]]+$/', $table) === 1
+            && preg_match('/^[A-Za-z0-9_]+$/', (string) ($pc['code'] ?? '')) === 1 && $this->objectId($pdo, $table)
+        ) {
+            try {
+                $row = $this->fetchOne($pdo, "SELECT TOP 1 * FROM {$table} WHERE [" . $pc['code'] . '] = :code', [':code' => $promoCode]);
+            } catch (\PDOException $e) {
+                $row = null;
+            }
+            if ($row) {
+                $get = function (string $key) use ($row, $pc) {
+                    $name = (string) ($pc[$key] ?? '');
+
+                    return $name !== '' && array_key_exists($name, $row) ? $row[$name] : null;
+                };
+                $isPrice = $get('is_price');
+                $result['promosyon'] = [
+                    'kod' => $promoCode,
+                    'deger' => $this->feeNumber($get('value')),
+                    'tutarMi' => $isPrice === true || $isPrice === 1 || $isPrice === '1',
+                    'stok' => $get('stock') !== null ? (int) $get('stock') : null,
+                    'baslangic' => $get('start') !== null ? substr((string) $get('start'), 0, 10) : null,
+                    'bitis' => $get('end') !== null ? substr((string) $get('end'), 0, 10) : null,
+                ];
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Ek ücretler, panelden bağımsız tek tip yapı. ozellikler.X = false ise o özellik bu panelde yok (gösterilmez).
+     * Ayar: config reservation_extras (enabled: 'auto' | true | false). 'auto': kayitlar kolonu / tablo var mı bakılır.
+     *
+     * @param array<string,mixed> $reservation kayitlar satırı (SELECT *)
+     * @return array<string,mixed>
+     */
+    private function extraFees(PDO $pdo, array $reservation): array
+    {
+        // app.local.php sığ birleştiği için (bootstrap array_merge) varsayılanlarla burada derin birleştirilir:
+        // farklı panelde sadece değişen anahtar yazılır, örn. ['pool' => ['amount_column' => 'havuzUcreti']].
+        $local = is_array($this->app['reservation_extras'] ?? null) ? $this->app['reservation_extras'] : [];
+        $cfg = array_replace_recursive(self::EXTRAS_DEFAULTS, $local);
+        // Liste sıra numarasıyla birleşmesin: yerelde sources verildiyse aynen kullanılır.
+        if (isset($local['extra_payments']['sources'])) {
+            $cfg['extra_payments']['sources'] = (array) $local['extra_payments']['sources'];
+        }
+        $result = [
+            'ozellikler' => ['temizlik' => false, 'havuz' => false, 'elektrik' => false, 'ekstraOdemeler' => false, 'eskiEkUcretler' => false],
+            'temizlik' => null,
+            'havuz' => null,
+            'elektrik' => null,
+            'ekstraOdemeler' => [],
+            'eskiEkUcretler' => [],
+        ];
+
+        // kayitlar kolonları: SELECT * ile geldiği için satırda anahtar var mı bakmak yeterli.
+        $column = function (string $name) use ($reservation): bool {
+            return $name !== '' && array_key_exists($name, $reservation);
+        };
+        $enabled = function (array $item, bool $detected): bool {
+            $flag = $item['enabled'] ?? 'auto';
+            if ($flag === 'auto' || $flag === null) {
+                return $detected;
+            }
+
+            return (bool) $flag && $detected;
+        };
+        $amount = function (string $name) use ($reservation) {
+            $raw = $reservation[$name] ?? null;
+
+            return ['ham' => $raw === null ? '' : trim((string) $raw), 'tutar' => $this->feeNumber($raw)];
+        };
+
+        foreach (['temizlik' => 'cleaning', 'elektrik' => 'electricity'] as $key => $cfgKey) {
+            $item = is_array($cfg[$cfgKey] ?? null) ? $cfg[$cfgKey] : [];
+            $col = (string) ($item['amount_column'] ?? '');
+            if ($enabled($item, $column($col))) {
+                $result['ozellikler'][$key] = true;
+                $result[$key] = $amount($col);
+            }
+        }
+
+        $pool = is_array($cfg['pool'] ?? null) ? $cfg['pool'] : [];
+        $flagCol = (string) ($pool['flag_column'] ?? '');
+        $poolAmountCol = (string) ($pool['amount_column'] ?? '');
+        if ($enabled($pool, $column($poolAmountCol))) {
+            $flag = $column($flagCol) ? $reservation[$flagCol] : null;
+            $result['ozellikler']['havuz'] = true;
+            $result['havuz'] = array_merge(
+                ['istiyor' => $flag === true || $flag === 1 || $flag === '1'],
+                $amount($poolAmountCol)
+            );
+        }
+
+        $extra = is_array($cfg['extra_payments'] ?? null) ? $cfg['extra_payments'] : [];
+        $flagExtra = $extra['enabled'] ?? 'auto';
+        $source = '';
+        if ($flagExtra === 'auto' || $flagExtra === null || $flagExtra) {
+            foreach ((array) ($extra['sources'] ?? []) as $candidate) {
+                if (is_string($candidate) && $candidate !== '' && $this->objectId($pdo, $candidate)) {
+                    $source = $candidate;
+                    break;
+                }
+            }
+        }
+        if ($source !== '' && (int) ($reservation['id'] ?? 0) > 0) {
+            $map = array_merge(
+                ['id' => 'PaymentId', 'title' => 'Title', 'type' => 'Type', 'night' => 'Night', 'amount' => 'Amount', 'total' => 'TotalAmount', 'symbol' => 'Symbol'],
+                is_array($extra['columns'] ?? null) ? $extra['columns'] : []
+            );
+            $fk = (string) ($extra['reservation_column'] ?? 'ReservationId');
+            if (preg_match('/^[A-Za-z0-9_.\[\]]+$/', $source) === 1 && preg_match('/^[A-Za-z0-9_]+$/', $fk) === 1) {
+                try {
+                    $rows = $this->fetchAll($pdo, "SELECT * FROM {$source} WHERE [{$fk}] = :id", [':id' => (int) $reservation['id']]);
+                    $result['ozellikler']['ekstraOdemeler'] = true;
+                    foreach ($rows as $row) {
+                        $get = function (string $key) use ($row, $map) {
+                            $col = (string) ($map[$key] ?? '');
+
+                            return $col !== '' && array_key_exists($col, $row) ? $row[$col] : null;
+                        };
+                        $result['ekstraOdemeler'][] = [
+                            'id' => $get('id') !== null ? (int) $get('id') : null,
+                            'baslik' => trim((string) $get('title')),
+                            // 0: gecelik, 1: konaklama boyu (eski panel ReservationExtraPayments.Type)
+                            'tur' => $get('type') !== null ? (int) $get('type') : null,
+                            'gece' => $get('night') !== null ? (int) $get('night') : null,
+                            'tutar' => $this->feeNumber($get('amount')),
+                            'toplam' => $this->feeNumber($get('total')),
+                            'sembol' => trim((string) $get('symbol')),
+                            'paraBirimi' => strtoupper(trim((string) $get('currency'))),
+                        ];
+                    }
+                } catch (\PDOException $e) {
+                    $result['ozellikler']['ekstraOdemeler'] = false;
+                    $result['ekstraOdemeler'] = [];
+                }
+            }
+        }
+
+        $legacy = is_array($cfg['legacy'] ?? null) ? $cfg['legacy'] : [];
+        $legacyCol = (string) ($legacy['column'] ?? '');
+        if ($enabled($legacy, $column($legacyCol))) {
+            $result['ozellikler']['eskiEkUcretler'] = true;
+            $itemSep = (string) ($legacy['item_separator'] ?? '&&');
+            $fieldSep = (string) ($legacy['field_separator'] ?? ';/');
+            $raw = trim((string) ($reservation[$legacyCol] ?? ''));
+            if ($raw !== '' && $itemSep !== '' && $fieldSep !== '') {
+                foreach (explode($itemSep, $raw) as $piece) {
+                    $parts = explode($fieldSep, $piece, 2);
+                    $title = trim((string) ($parts[0] ?? ''));
+                    $value = trim((string) ($parts[1] ?? ''));
+                    if ($title === '' && $value === '') {
+                        continue;
+                    }
+                    $result['eskiEkUcretler'][] = ['baslik' => $title, 'ham' => $value, 'tutar' => $this->feeNumber($value)];
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Ek ücret tutarı: "7.500", "7.500,50", "4500 TL", "€ 120", 7500 -> sayı. Tek nokta + 3 hane binlik sayılır
+     * (moneyValue "7.500"ü 7,5 okur; bu alanlar panelde TR biçiminde tutulduğu için ayrı).
+     *
+     * @param mixed $value
+     */
+    private function feeNumber($value): float
+    {
+        if ($value === null || $value === '') {
+            return 0.0;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+        $v = preg_replace('/[^\d,.-]/', '', trim((string) $value));
+        if ($v === null || $v === '' || $v === '-') {
+            return 0.0;
+        }
+        if (strpos($v, ',') !== false) {
+            $v = str_replace(',', '.', str_replace('.', '', $v));
+        } elseif (preg_match('/^-?\d{1,3}(\.\d{3})+$/', $v) === 1) {
+            $v = str_replace('.', '', $v);
+        }
+
+        return is_numeric($v) ? (float) $v : 0.0;
+    }
+
+    /** Tablo/view var mı (OBJECT_ID). */
+    private function objectId(PDO $pdo, string $name): bool
+    {
+        try {
+            $stmt = $pdo->prepare('SELECT OBJECT_ID(:name) AS id');
+            $stmt->execute([':name' => $name]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            return false;
+        }
+
+        return $row && $row['id'] !== null;
     }
 
     /**
@@ -581,6 +941,45 @@ final class ReservationdetailController extends Controller
         return 0;
     }
 
+    /**
+     * Site kolon soneki — CalculateController::fieldSuffix ile aynı kural: site_column_suffixes
+     * (vars. [1 => '', 2 => '_s2', 3 => '_s3']), alan bazında site_field_suffixes[site][alan].
+     */
+    private function columnSuffix(int $site, string $field = ''): string
+    {
+        $suffixes = isset($this->app['site_column_suffixes']) && is_array($this->app['site_column_suffixes'])
+            ? $this->app['site_column_suffixes']
+            : [1 => '', 2 => '_s2', 3 => '_s3'];
+        $suffix = isset($suffixes[$site]) ? (string) $suffixes[$site] : '';
+        if ($field !== '' && isset($this->app['site_field_suffixes'][$site][$field])) {
+            $suffix = (string) $this->app['site_field_suffixes'][$site][$field];
+        }
+
+        return $suffix === '' || preg_match('/^_[A-Za-z0-9]+$/', $suffix) === 1 ? $suffix : '';
+    }
+
+    /**
+     * Villa satırından oran (önce sonekli, sonra soneksiz kolon). SELECT * kolon adını DB yazımıyla döner
+     * (kazancOrani / Depozito…): harf duyarsız eşlenir.
+     *
+     * @param array<string,mixed> $villa
+     */
+    private function villaRate(array $villa, string $column, string $suffix): float
+    {
+        if ($column === '') {
+            return 0.0;
+        }
+        $lower = array_change_key_case($villa, CASE_LOWER);
+        foreach (array_unique([strtolower($column . $suffix), strtolower($column)]) as $name) {
+            $rate = array_key_exists($name, $lower) ? $this->feeNumber($lower[$name]) : 0.0;
+            if ($rate > 0) {
+                return $rate;
+            }
+        }
+
+        return 0.0;
+    }
+
     private function siteTableSuffix(PDO $pdo, int $siteId): string
     {
         if ($siteId <= 0) {
@@ -737,7 +1136,8 @@ final class ReservationdetailController extends Controller
                 'yetiskin' => $personCountInfo['yetiskin'],
                 'cocuk' => $personCountInfo['cocuk'],
                 'bebek' => $personCountInfo['bebek'],
-                'musteriNotu' => $this->firstValueFrom([$reservation], ['oznot', 'oz_not', 'musteri_notu', 'not']),
+                // Müşterinin girdiği not (kayitlar.not). Panelin özel notu (OzNot) ayrı: detay.notlar.ozNot.
+                'musteriNotu' => $this->firstValueFrom([$reservation], ['not', 'musteri_notu']),
             ],
             'misafirler' => $this->guestInfo($personInfoList, $reservation, $personCountInfo),
             'odemeBilgileri' => [
@@ -820,6 +1220,219 @@ final class ReservationdetailController extends Controller
         }
 
         return $guests;
+    }
+
+    /**
+     * @param array<string,mixed> $reservation kayitlar satırı
+     * @return array<string,mixed>
+     */
+    private function operationInfo(array $reservation): array
+    {
+        $userId = $reservation['gorevliKullaniciId'] ?? null;
+
+        return [
+            'arandi' => $this->boolValue($reservation['arandi'] ?? null) === true,
+            'gorevliKullaniciId' => $userId === null || $userId === '' ? null : (int) $userId,
+            'gorevliKullaniciAdi' => trim((string) ($reservation['gorevliKullaniciAdi'] ?? '')),
+            // Eski panelde serbest metin görevli (kayitlar.gorevli); salt okunur.
+            'eskiGorevli' => trim((string) ($reservation['gorevli'] ?? '')),
+            // Yeni kolonlar (setup/collums) bu sitede var mı.
+            'gorevliKolonlariVar' => array_key_exists('gorevliKullaniciId', $reservation),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $reservation kayitlar satırı
+     * @return array<string,mixed>
+     */
+    private function reservationNotes(PDO $pdo, int $id, array $reservation): array
+    {
+        $columns = $this->tableColumns($pdo, 'Reservation', 'ReservationNotes');
+        $required = ['noteid', 'reservationid', 'note', 'createdbyname', 'createdat', 'updatedbyname', 'updatedat', 'isdeleted'];
+        $ready = $columns !== [] && count(array_intersect($required, array_keys($columns))) === count($required);
+
+        $list = [];
+        if ($ready) {
+            $rows = $this->fetchAll(
+                $pdo,
+                'SELECT NoteId, Note, CreatedByName, CONVERT(varchar(19), CreatedAt, 120) AS CreatedAt,
+                        UpdatedByName, CONVERT(varchar(19), UpdatedAt, 120) AS UpdatedAt
+                 FROM Reservation.ReservationNotes
+                 WHERE ReservationId = :id AND ISNULL(IsDeleted, 0) = 0
+                 ORDER BY NoteId DESC',
+                [':id' => $id]
+            );
+            foreach ($rows as $row) {
+                $list[] = [
+                    'id' => (int) $row['NoteId'],
+                    'not' => (string) ($row['Note'] ?? ''),
+                    'olusturan' => trim((string) ($row['CreatedByName'] ?? '')),
+                    'olusturmaTarihi' => $row['CreatedAt'],
+                    'guncelleyen' => trim((string) ($row['UpdatedByName'] ?? '')),
+                    'guncellemeTarihi' => $row['UpdatedAt'],
+                ];
+            }
+        }
+
+        return [
+            'ozNot' => (string) ($reservation['OzNot'] ?? ''),
+            'liste' => $list,
+            'tabloHazir' => $ready,
+        ];
+    }
+
+    /** Reservation.passengerInformation beklenen kolonları (mevcut sitelerdeki yapı). */
+    private const PASSENGER_COLUMNS = ['id', 'kayitlarId', 'birthDate', 'gender', 'isTurkish', 'name', 'tc', 'birthPlace'];
+
+    /** Reservation.InvoiceData beklenen kolonları (mevcut sitelerdeki yapı). */
+    private const INVOICE_COLUMNS = ['id', 'kayitlarId', 'faturatipi', 'isim', 'tcno', 'email', 'telefon', 'mesaj', 'vergidairesi'];
+
+    /**
+     * Yeni sistem misafirleri: Reservation.passengerInformation (kayitlarId = kayitlar.id), her misafir bir satır.
+     * gender: 1 Erkek, 0 Kadın. isTurkish: 1 Türk vatandaşı (ASP formundaki "Türk Vatandaşı Değil" tersidir).
+     * Sadece tabloda bulunan kolonlar okunur; eksik kolon boş döner.
+     *
+     * @param array<string,string> $columns tableColumns() sonucu
+     * @return array<int,array<string,mixed>>
+     */
+    private function fetchPassengerInformation(PDO $pdo, int $id, array $columns): array
+    {
+        if (!isset($columns['kayitlarid'])) {
+            return [];
+        }
+
+        $select = [];
+        foreach (self::PASSENGER_COLUMNS as $column) {
+            if (isset($columns[strtolower($column)])) {
+                $select[] = '[' . $columns[strtolower($column)] . '] AS [' . $column . ']';
+            }
+        }
+        if (isset($columns['birthdate'])) {
+            $select[] = 'CONVERT(varchar(10), [' . $columns['birthdate'] . '], 104) AS formattedBirthDate';
+            $select[] = 'CONVERT(varchar(10), [' . $columns['birthdate'] . '], 23) AS isoBirthDate';
+        }
+        $orderBy = isset($columns['id']) ? ' ORDER BY [' . $columns['id'] . '] ASC' : '';
+
+        $rows = $this->fetchAll(
+            $pdo,
+            'SELECT ' . implode(', ', $select) . '
+             FROM Reservation.passengerInformation
+             WHERE [' . $columns['kayitlarid'] . '] = :id' . $orderBy,
+            [':id' => $id]
+        );
+
+        $result = [];
+        foreach ($rows as $row) {
+            $gender = $this->firstValueFrom([$row], ['gender']);
+            $isTurkish = $this->firstValueFrom([$row], ['isTurkish']);
+            $result[] = [
+                'id' => $this->intValue($this->firstValueFrom([$row], ['id'])),
+                'adSoyad' => (string) ($this->firstValueFrom([$row], ['name']) ?? ''),
+                'tc' => (string) ($this->firstValueFrom([$row], ['tc']) ?? ''),
+                'cinsiyet' => $gender === null ? null : (int) $gender,
+                'dogumTarihi' => (string) ($this->firstValueFrom([$row], ['formattedBirthDate']) ?? ''),
+                'dogumTarihiIso' => (string) ($this->firstValueFrom([$row], ['isoBirthDate']) ?? ''),
+                'dogumYeri' => (string) ($this->firstValueFrom([$row], ['birthPlace']) ?? ''),
+                'turkVatandasi' => $isTurkish === null ? true : $this->boolValue($isTurkish) === true,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Yeni sistem fatura bilgisi: Reservation.InvoiceData, rezervasyonun son kaydı (ASP: order by id desc).
+     * faturaTipi: 1 Bireysel, 2 Kurumsal. Sadece tabloda bulunan kolonlar okunur.
+     *
+     * @param array<string,string> $columns tableColumns() sonucu
+     * @return array<string,mixed>|null
+     */
+    private function fetchInvoiceData(PDO $pdo, int $id, array $columns): ?array
+    {
+        if (!isset($columns['kayitlarid'])) {
+            return null;
+        }
+
+        $select = [];
+        foreach (self::INVOICE_COLUMNS as $column) {
+            if (isset($columns[strtolower($column)])) {
+                $select[] = '[' . $columns[strtolower($column)] . '] AS [' . $column . ']';
+            }
+        }
+        $orderBy = isset($columns['id']) ? ' ORDER BY [' . $columns['id'] . '] DESC' : '';
+
+        $row = $this->fetchOne(
+            $pdo,
+            'SELECT TOP 1 ' . implode(', ', $select) . '
+             FROM Reservation.InvoiceData
+             WHERE [' . $columns['kayitlarid'] . '] = :id' . $orderBy,
+            [':id' => $id]
+        );
+        if (!$row) {
+            return null;
+        }
+
+        return [
+            'id' => $this->intValue($this->firstValueFrom([$row], ['id'])),
+            'faturaTipi' => $this->intValue($this->firstValueFrom([$row], ['faturatipi'])) ?: 1,
+            'isim' => (string) ($this->firstValueFrom([$row], ['isim']) ?? ''),
+            'tcNo' => (string) ($this->firstValueFrom([$row], ['tcno']) ?? ''),
+            'email' => (string) ($this->firstValueFrom([$row], ['email']) ?? ''),
+            'telefon' => (string) ($this->firstValueFrom([$row], ['telefon']) ?? ''),
+            'vergiDairesi' => (string) ($this->firstValueFrom([$row], ['vergidairesi']) ?? ''),
+            'mesaj' => (string) ($this->firstValueFrom([$row], ['mesaj']) ?? ''),
+        ];
+    }
+
+    /**
+     * Eksik tablo ya da kolonları listeler. Boşsa yeni sistem tabloları eksiksizdir.
+     *
+     * @param array<string,string> $passengerColumns
+     * @param array<string,string> $invoiceColumns
+     * @return array<int,string>
+     */
+    private function missingGuestColumns(array $passengerColumns, array $invoiceColumns): array
+    {
+        $missing = [];
+        $tables = [
+            'Reservation.passengerInformation' => [$passengerColumns, self::PASSENGER_COLUMNS],
+            'Reservation.InvoiceData' => [$invoiceColumns, self::INVOICE_COLUMNS],
+        ];
+        foreach ($tables as $table => [$existing, $expected]) {
+            if ($existing === []) {
+                $missing[] = $table;
+                continue;
+            }
+            foreach ($expected as $column) {
+                if (!isset($existing[strtolower($column)])) {
+                    $missing[] = $table . '.' . $column;
+                }
+            }
+        }
+
+        return $missing;
+    }
+
+    /**
+     * Tablonun kolonları: küçük harf ad => gerçek ad. Tablo yoksa boş dizi.
+     *
+     * @return array<string,string>
+     */
+    private function tableColumns(PDO $pdo, string $schema, string $table): array
+    {
+        $rows = $this->fetchAll(
+            $pdo,
+            'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table',
+            [':schema' => $schema, ':table' => $table]
+        );
+
+        $columns = [];
+        foreach ($rows as $row) {
+            $name = (string) $row['COLUMN_NAME'];
+            $columns[strtolower($name)] = $name;
+        }
+
+        return $columns;
     }
 
     /**

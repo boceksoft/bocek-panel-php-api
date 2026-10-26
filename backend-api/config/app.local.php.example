@@ -107,4 +107,17 @@ return [
     // altında) burada TAM yolu ver. Örnek — backend-api iki üstteki
     // cdn.villakilavuzu.com/uploads/git-temp'i kullanmalıysa:
     // 'git_temp_dir' => dirname(__DIR__, 3) . '/cdn.villakilavuzu.com/uploads/git-temp',
+
+    // Rezervasyon ek ücretleri: bu panelde kolon/tablo adları farklıysa sadece değişeni yaz.
+    // Varsayılanlar (villavillam): kayitlar.temizlik, kayitlar.elektrik, kayitlar.isitmaliHavuzBool / isitmaliHavuz,
+    // Reservation.vw_ReservationExtraPayments (yoksa Reservation.ReservationExtraPayments).
+    // 'reservation_extras' => [
+    //     'pool' => ['flag_column' => 'havuzIstiyor', 'amount_column' => 'havuzUcreti'],
+    //     'electricity' => ['enabled' => false],               // bu panelde elektrik ücreti yok
+    //     'extra_payments' => [
+    //         'sources' => ['dbo.RezervasyonEkUcretler'],
+    //         'reservation_column' => 'kayitId',
+    //         'columns' => ['title' => 'baslik', 'total' => 'toplam'],
+    //     ],
+    // ],
 ];
