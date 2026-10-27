@@ -120,4 +120,10 @@ return [
     //         'columns' => ['title' => 'baslik', 'total' => 'toplam'],
     //     ],
     // ],
+
+    // Kiralama Takvimi API'si (doluluk takviminde KT kaydinin basligini duzenleme; panelde karsiligi yok, dogrudan gider).
+    // Bossa anahtar genel.apiKey kolonundan, EstablishmentId genel.EstablishmentId ya da panel api/config.php'den okunur.
+    // 'kiralamatakvimi_api_url' => 'https://backend.kiralamatakvimi.com/api',
+    // 'kiralamatakvimi_api_key' => '',
+    // 'kiralamatakvimi_establishment_id' => '',
 ];

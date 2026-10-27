@@ -36,6 +36,8 @@ $config = [];
 if (is_file($app['external_config_path'])) {
     require $app['external_config_path'];
 }
+// Panelin diger ayarlari (orn. Kiralama Takvimi EstablishmentId / API anahtari); DB bilgisi haric.
+$app['_panel_config'] = array_diff_key($config, ['db' => true]);
 
 // Endpoint sürümleri (git hook üretir): her satır "kaynak sürüm".
 $versions = [];
