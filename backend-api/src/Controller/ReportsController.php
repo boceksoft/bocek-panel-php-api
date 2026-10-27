@@ -2626,11 +2626,702 @@ WHERE k.odeme = {$paymentType}
     }
 
     /**
+     * Takvim görünüm raporlama: günlük giriş, çıkış, konaklayan, ciro, kazanç ve tahsilat matrisi ile onaylanan rezervasyon detayları.
+     *
+     * @Get("calendar")
+     * @query site int Site kimliği (varsayılan 1)
+     * @query year int Raporlama yılı (varsayılan cari yıl)
+     * @query months string|array Ay veya aylar listesi (1-12, örn. 2,3 veya 'all')
+     * @query villas string|array Villa ID'leri (virgülle ayrılmış veya 'all')
+     * @query sqlx string Ham SQL çıktısı modu ('json', 'raw', 'template')
+     */
+    public function calendar(): void
+    {
+        $pdo = $this->db->pdo();
+        $siteId = $this->siteId();
+
+        $year = (int) ($this->request->query('year')
+            ?? $this->request->input('year')
+            ?? $this->request->query('yil')
+            ?? $this->request->input('yil')
+            ?? date('Y'));
+        if ($year < 2000 || $year > 2100) {
+            $year = (int) date('Y');
+        }
+
+        $monthsRaw = $this->request->query('months')
+            ?? $this->request->input('months')
+            ?? $this->request->query('month')
+            ?? $this->request->input('month')
+            ?? $this->request->query('ay')
+            ?? $this->request->input('ay');
+        $months = $this->parseIntList($monthsRaw);
+        if ($months === []) {
+            $months = [(int) date('n')];
+        }
+        sort($months);
+
+        $villasRaw = $this->request->query('villas')
+            ?? $this->request->input('villas')
+            ?? $this->request->query('emlak')
+            ?? $this->request->input('emlak')
+            ?? $this->request->query('villa_ids')
+            ?? $this->request->input('villa_ids')
+            ?? $this->request->query('villa')
+            ?? $this->request->input('villa');
+        $villaIds = $this->parseIntList($villasRaw);
+
+        $monthShortNames = [
+            1 => 'OCA', 2 => 'ŞUB', 3 => 'MAR', 4 => 'NİS', 5 => 'MAY', 6 => 'HAZ',
+            7 => 'TEM', 8 => 'AĞU', 9 => 'EYL', 10 => 'EKİ', 11 => 'KAS', 12 => 'ARA',
+        ];
+        $monthFullNames = [
+            1 => 'Ocak', 2 => 'Şubat', 3 => 'Mart', 4 => 'Nisan', 5 => 'Mayıs', 6 => 'Haziran',
+            7 => 'Temmuz', 8 => 'Ağustos', 9 => 'Eylül', 10 => 'Ekim', 11 => 'Kasım', 12 => 'Aralık',
+        ];
+        $monthUpperNames = [
+            1 => 'OCAK', 2 => 'ŞUBAT', 3 => 'MART', 4 => 'NİSAN', 5 => 'MAYIS', 6 => 'HAZİRAN',
+            7 => 'TEMMUZ', 8 => 'AĞUSTOS', 9 => 'EYLÜL', 10 => 'EKİM', 11 => 'KASIM', 12 => 'ARALIK',
+        ];
+        $weekdayNames = [
+            1 => 'Pzt', 2 => 'Sal', 3 => 'Çar', 4 => 'Per', 5 => 'Cum', 6 => 'Cmt', 7 => 'Pzr',
+        ];
+
+        // Takvim günlerini oluştur
+        $calendarDays = [];
+        $colIndex = 1;
+        $minDate = null;
+        $maxDate = null;
+
+        foreach ($months as $m) {
+            $numDaysInMonth = (int) date('t', strtotime(sprintf('%04d-%02d-01', $year, $m)));
+            for ($d = 1; $d <= $numDaysInMonth; $d++) {
+                $dateStr = sprintf('%04d-%02d-%02d', $year, $m, $d);
+                $ts = strtotime($dateStr);
+                $w = (int) date('N', $ts); // 1 (Pzt) .. 7 (Pzr)
+
+                if ($minDate === null || $dateStr < $minDate) {
+                    $minDate = $dateStr;
+                }
+                if ($maxDate === null || $dateStr > $maxDate) {
+                    $maxDate = $dateStr;
+                }
+
+                $calendarDays[$dateStr] = [
+                    'index' => $colIndex++,
+                    'date' => $dateStr,
+                    'day' => $d,
+                    'month' => $m,
+                    'monthShort' => $monthShortNames[$m] ?? '',
+                    'monthName' => $monthFullNames[$m] ?? '',
+                    'dayOfWeek' => $weekdayNames[$w] ?? '',
+                    'dayOfWeekIndex' => $w,
+                    'isWeekend' => ($w >= 6),
+
+                    // Metrikler (Görseldeki 16 satır ile birebir aynı)
+                    'gunlukGirisler' => 0,
+                    'gunlukCikislar' => 0,
+                    'gunlukKonaklayan' => 0,
+                    'toplamTalep' => 0,
+                    'kesinlesenSayisi' => 0,
+                    'kesinlesenPax' => 0,
+                    'kesinlesenCiro' => 0.0,
+                    'kesinlesenKazanc' => 0.0,
+                    'ortSatisBedeli' => 0.0,
+                    'ortKazancTutari' => 0.0,
+                    'ortKazancOrani' => 0.0,
+                    'tamamlananRezervasyon' => 0,
+                    'gunlukTahsilat' => 0.0,
+                    'krediKartiTahsilat' => 0.0,
+                    'bankaTahsilat' => 0.0,
+                    'westernTahsilat' => 0.0,
+
+                    // Günlük onaylanan rezervasyon listesi
+                    'reservations' => [],
+                ];
+            }
+        }
+
+        if ($minDate === null) {
+            $minDate = sprintf('%04d-01-01', $year);
+            $maxDate = sprintf('%04d-12-31', $year);
+        }
+
+        $monthPlaceholders = [];
+        $baseParams = [':cal_year' => $year];
+        foreach ($months as $idx => $m) {
+            $ph = ':cal_m_' . $idx;
+            $monthPlaceholders[] = $ph;
+            $baseParams[$ph] = $m;
+        }
+        $monthInSql = implode(',', $monthPlaceholders);
+
+        $villaWhereK = '';
+        $villaWhereH = '';
+        $villaParams = [];
+        if ($villaIds !== []) {
+            $vPhs = [];
+            foreach ($villaIds as $idx => $vid) {
+                $ph = ':cal_v_' . $idx;
+                $vPhs[] = $ph;
+                $villaParams[$ph] = $vid;
+            }
+            $vIn = implode(',', $vPhs);
+            $villaWhereK = ' AND k.evid IN (' . $vIn . ')';
+            $villaWhereH = ' AND h.id IN (' . $vIn . ')';
+        }
+
+        // 1. tableQuery (Satış, Ciro, Kazanç ve Talep metrikleri)
+        $sql1 = "
+            SELECT
+                DAY(k.islem_tarihi) AS rDateDay,
+                MONTH(k.islem_tarihi) AS rDateMonth,
+                YEAR(k.islem_tarihi) AS rDateYear,
+                COUNT(k.id) AS RezAdet,
+                SUM(CASE WHEN k.kayit_durum = 3 THEN 1 ELSE 0 END) AS KesinRez,
+                SUM(CASE WHEN k.kayit_durum = 3 THEN 0 + ISNULL(TRY_CONVERT(int, k.yetiskin), 0) + ISNULL(TRY_CONVERT(int, k.cocuk), 0) ELSE 0 END) AS KesinPax,
+                SUM(CASE WHEN k.kayit_durum = 3 THEN ISNULL(TRY_CONVERT(float, ko.toplam_tutar), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS KesinCiro,
+                SUM(CASE WHEN k.kayit_durum = 3 THEN ISNULL(TRY_CONVERT(float, ko.kazanc_tutari), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS KesinKar
+            FROM dbo.kayitlar k
+            INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
+            INNER JOIN dbo.homes h ON h.id = k.evid
+            WHERE YEAR(k.islem_tarihi) = :cal_year
+              AND MONTH(k.islem_tarihi) IN ({$monthInSql})
+              {$villaWhereH}
+            GROUP BY YEAR(k.islem_tarihi), MONTH(k.islem_tarihi), DAY(k.islem_tarihi)
+            ORDER BY YEAR(k.islem_tarihi) ASC, MONTH(k.islem_tarihi) ASC, DAY(k.islem_tarihi) ASC
+        ";
+
+        // 2. table5Rapor (Günlük Girişler: rez_tarihi)
+        $sql5 = "
+            SELECT
+                DAY(k.rez_tarihi) AS rDateDay,
+                MONTH(k.rez_tarihi) AS rDateMonth,
+                YEAR(k.rez_tarihi) AS rDateYear,
+                COUNT(k.id) AS rezAdet
+            FROM dbo.kayitlar k
+            WHERE k.kayit_durum = 3
+              AND YEAR(k.rez_tarihi) = :cal_year
+              AND MONTH(k.rez_tarihi) IN ({$monthInSql})
+              {$villaWhereK}
+            GROUP BY YEAR(k.rez_tarihi), MONTH(k.rez_tarihi), DAY(k.rez_tarihi)
+        ";
+
+        // 3. table6Rapor (Günlük Çıkışlar: gelecek_tarih)
+        $sql6 = "
+            SELECT
+                DAY(k.gelecek_tarih) AS rDateDay,
+                MONTH(k.gelecek_tarih) AS rDateMonth,
+                YEAR(k.gelecek_tarih) AS rDateYear,
+                COUNT(k.id) AS rezAdet
+            FROM dbo.kayitlar k
+            WHERE k.kayit_durum = 3
+              AND YEAR(k.gelecek_tarih) = :cal_year
+              AND MONTH(k.gelecek_tarih) IN ({$monthInSql})
+              {$villaWhereK}
+            GROUP BY YEAR(k.gelecek_tarih), MONTH(k.gelecek_tarih), DAY(k.gelecek_tarih)
+        ";
+
+        // 4. table7Rapor (Günlük Konaklayan: tarih rez_tarihi ile gelecek_tarih arasında olanlar)
+        $sql7 = "
+            SELECT
+                k.id,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.rez_tarihi), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103)), 23) AS rez_date,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 23) AS gelecek_date
+            FROM dbo.kayitlar k
+            WHERE k.kayit_durum = 3
+              AND COALESCE(TRY_CONVERT(date, k.rez_tarihi), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103)) <= :cal_maxDate
+              AND COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)) >= :cal_minDate
+              {$villaWhereK}
+        ";
+
+        // 5. table4Rapor (Günlük Tamamlanan Rezervasyon: son_durum_guncelleme)
+        $sql4 = "
+            SELECT
+                DAY(k.son_durum_guncelleme) AS rDateDay,
+                MONTH(k.son_durum_guncelleme) AS rDateMonth,
+                YEAR(k.son_durum_guncelleme) AS rDateYear,
+                COUNT(k.id) AS rezAdet
+            FROM dbo.kayitlar k
+            WHERE k.kayit_durum = 3
+              AND YEAR(k.son_durum_guncelleme) = :cal_year
+              AND MONTH(k.son_durum_guncelleme) IN ({$monthInSql})
+              {$villaWhereK}
+            GROUP BY YEAR(k.son_durum_guncelleme), MONTH(k.son_durum_guncelleme), DAY(k.son_durum_guncelleme)
+        ";
+
+        // 6. table2Rapor (Günlük Tahsilat, KK, Banka, Western: onaylanmaTarihi)
+        $onayDateCase = "(CASE WHEN CHARINDEX('-', k.onaylanmaTarihi) > 0 THEN TRY_CONVERT(date, k.onaylanmaTarihi, 102) ELSE TRY_CONVERT(date, k.onaylanmaTarihi, 103) END)";
+        $sql2 = "
+            SELECT
+                DAY({$onayDateCase}) AS rDateDay,
+                MONTH({$onayDateCase}) AS rDateMonth,
+                YEAR({$onayDateCase}) AS rDateYear,
+                SUM(CASE WHEN k.kayit_durum = 3 THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS Tahsilat,
+                SUM(CASE WHEN k.kayit_durum = 3 AND k.odeme = 1 THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS TahsilatKK,
+                SUM(CASE WHEN k.kayit_durum = 3 AND NOT k.odeme IN (1, 3) THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS TahsilatHV,
+                SUM(CASE WHEN k.kayit_durum = 3 AND k.odeme = 3 THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS TahsilatHW
+            FROM dbo.kayitlar k
+            INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
+            INNER JOIN dbo.homes h ON h.id = k.evid
+            WHERE k.kayit_durum = 3
+              AND NOT ISNULL(k.onaylanmaTarihi, '') = ''
+              AND YEAR({$onayDateCase}) = :cal_year
+              AND MONTH({$onayDateCase}) IN ({$monthInSql})
+              {$villaWhereH}
+            GROUP BY
+                YEAR({$onayDateCase}),
+                MONTH({$onayDateCase}),
+                DAY({$onayDateCase})
+        ";
+
+        // 7. Onaylanan Rezervasyonlar Detay Listesi (Modal / drawer için)
+        $sqlRes = "
+            SELECT
+                k.id,
+                k.evid,
+                ISNULL(h.baslik, k.adi) AS villa_adi,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.rez_tarihi), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103)), 23) AS giris_tarihi,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 23) AS cikis_tarihi,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.islem_tarihi), TRY_CONVERT(date, k.islem_tarihi, 120), TRY_CONVERT(date, k.islem_tarihi, 104), TRY_CONVERT(date, k.islem_tarihi, 103)), 23) AS islem_tarihi,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, {$onayDateCase}), TRY_CONVERT(date, k.onaylanmaTarihi, 104), TRY_CONVERT(date, k.onaylanmaTarihi)), 23) AS onaylanma_tarihi,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.son_durum_guncelleme), TRY_CONVERT(date, k.son_durum_guncelleme, 120), TRY_CONVERT(date, k.son_durum_guncelleme, 104), TRY_CONVERT(date, k.son_durum_guncelleme, 103)), 23) AS son_guncelleme_tarihi,
+                ISNULL(TRY_CONVERT(int, k.kayit_durum), 0) AS kayit_durum,
+                ISNULL(TRY_CONVERT(int, k.odeme), 0) AS odeme_sekli,
+                ISNULL(TRY_CONVERT(int, k.yetiskin), 0) AS yetiskin,
+                ISNULL(TRY_CONVERT(int, k.cocuk), 0) AS cocuk,
+                ISNULL(TRY_CONVERT(float, ko.toplam_tutar), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) AS ciro,
+                ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) AS on_odeme,
+                ISNULL(TRY_CONVERT(float, ko.kazanc_tutari), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) AS kazanc
+            FROM dbo.kayitlar k
+            INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
+            INNER JOIN dbo.homes h ON h.id = k.evid
+            WHERE k.kayit_durum = 3
+              AND YEAR(k.islem_tarihi) = :cal_year
+              AND MONTH(k.islem_tarihi) IN ({$monthInSql})
+              {$villaWhereH}
+            ORDER BY k.islem_tarihi ASC
+        ";
+
+        // sqlx parametresi gönderildiyse ham SQL dön
+        if ($this->request->query('sqlx') !== null || isset($_GET['sqlx'])) {
+            $queries = [
+                'tableQuery' => trim($sql1),
+                'table5Rapor' => trim($sql5),
+                'table6Rapor' => trim($sql6),
+                'table7Rapor' => trim($sql7),
+                'table4Rapor' => trim($sql4),
+                'table2Rapor' => trim($sql2),
+                'reservations' => trim($sqlRes),
+            ];
+            $this->response->success([
+                'queries' => $queries,
+                'params' => array_merge($baseParams, $villaParams),
+            ]);
+            return;
+        }
+
+        // 1. tableQuery çalıştır
+        $stmt1 = $pdo->prepare($sql1);
+        foreach (array_merge($baseParams, $villaParams) as $k => $v) {
+            $stmt1->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmt1->execute();
+        $rows1 = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows1 as $r) {
+            $dStr = sprintf('%04d-%02d-%02d', (int) $r['rDateYear'], (int) $r['rDateMonth'], (int) $r['rDateDay']);
+            if (isset($calendarDays[$dStr])) {
+                $calendarDays[$dStr]['toplamTalep'] = (int) $r['RezAdet'];
+                $calendarDays[$dStr]['kesinlesenSayisi'] = (int) $r['KesinRez'];
+                $calendarDays[$dStr]['kesinlesenPax'] = (int) $r['KesinPax'];
+                $calendarDays[$dStr]['kesinlesenCiro'] = round((float) $r['KesinCiro'], 2);
+                $calendarDays[$dStr]['kesinlesenKazanc'] = round((float) $r['KesinKar'], 2);
+            }
+        }
+
+        // 2. table5Rapor (Girişler) çalıştır
+        $stmt5 = $pdo->prepare($sql5);
+        foreach (array_merge($baseParams, $villaParams) as $k => $v) {
+            $stmt5->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmt5->execute();
+        $rows5 = $stmt5->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows5 as $r) {
+            $dStr = sprintf('%04d-%02d-%02d', (int) $r['rDateYear'], (int) $r['rDateMonth'], (int) $r['rDateDay']);
+            if (isset($calendarDays[$dStr])) {
+                $calendarDays[$dStr]['gunlukGirisler'] = (int) $r['rezAdet'];
+            }
+        }
+
+        // 3. table6Rapor (Çıkışlar) çalıştır
+        $stmt6 = $pdo->prepare($sql6);
+        foreach (array_merge($baseParams, $villaParams) as $k => $v) {
+            $stmt6->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmt6->execute();
+        $rows6 = $stmt6->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows6 as $r) {
+            $dStr = sprintf('%04d-%02d-%02d', (int) $r['rDateYear'], (int) $r['rDateMonth'], (int) $r['rDateDay']);
+            if (isset($calendarDays[$dStr])) {
+                $calendarDays[$dStr]['gunlukCikislar'] = (int) $r['rezAdet'];
+            }
+        }
+
+        // 4. table7Rapor (Konaklayan) çalıştır
+        $stmt7 = $pdo->prepare($sql7);
+        $params7 = array_merge($villaParams, [
+            ':cal_minDate' => $minDate,
+            ':cal_maxDate' => $maxDate,
+        ]);
+        foreach ($params7 as $k => $v) {
+            $stmt7->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmt7->execute();
+        $rows7 = $stmt7->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows7 as $r) {
+            $g = (string) ($r['rez_date'] ?? '');
+            $c = (string) ($r['gelecek_date'] ?? '');
+            if ($g !== '' && $c !== '') {
+                foreach ($calendarDays as $dStr => &$dRef) {
+                    if ($dStr >= $g && $dStr <= $c) {
+                        $dRef['gunlukKonaklayan'] += 1;
+                    }
+                }
+                unset($dRef);
+            }
+        }
+
+        // 5. table4Rapor (Tamamlanan) çalıştır
+        $stmt4 = $pdo->prepare($sql4);
+        foreach (array_merge($baseParams, $villaParams) as $k => $v) {
+            $stmt4->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmt4->execute();
+        $rows4 = $stmt4->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows4 as $r) {
+            $dStr = sprintf('%04d-%02d-%02d', (int) $r['rDateYear'], (int) $r['rDateMonth'], (int) $r['rDateDay']);
+            if (isset($calendarDays[$dStr])) {
+                $calendarDays[$dStr]['tamamlananRezervasyon'] = (int) $r['rezAdet'];
+            }
+        }
+
+        // 6. table2Rapor (Tahsilat) çalıştır
+        $stmt2 = $pdo->prepare($sql2);
+        foreach (array_merge($baseParams, $villaParams) as $k => $v) {
+            $stmt2->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmt2->execute();
+        $rows2 = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows2 as $r) {
+            $dStr = sprintf('%04d-%02d-%02d', (int) $r['rDateYear'], (int) $r['rDateMonth'], (int) $r['rDateDay']);
+            if (isset($calendarDays[$dStr])) {
+                $calendarDays[$dStr]['gunlukTahsilat'] = round((float) $r['Tahsilat'], 2);
+                $calendarDays[$dStr]['krediKartiTahsilat'] = round((float) $r['TahsilatKK'], 2);
+                $calendarDays[$dStr]['bankaTahsilat'] = round((float) $r['TahsilatHV'], 2);
+                $calendarDays[$dStr]['westernTahsilat'] = round((float) $r['TahsilatHW'], 2);
+            }
+        }
+
+        // 7. Onaylanan Rezervasyonlar Detay Listesi
+        $stmtRes = $pdo->prepare($sqlRes);
+        foreach (array_merge($baseParams, $villaParams) as $k => $v) {
+            $stmtRes->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmtRes->execute();
+        $rowsRes = $stmtRes->fetchAll(PDO::FETCH_ASSOC);
+        $allApprovedReservations = [];
+
+        foreach ($rowsRes as $r) {
+            $ciro = (float) $r['ciro'];
+            $kar = (float) $r['kazanc'];
+            $onOdeme = (float) $r['on_odeme'];
+            $adults = (int) $r['yetiskin'];
+            $children = (int) $r['cocuk'];
+            $pax = ($adults + $children > 0) ? ($adults + $children) : 1;
+            $odeme = (int) $r['odeme_sekli'];
+            $odemeKanalName = ($odeme === 1 ? 'Kredi Kartı' : ($odeme === 3 ? 'Western Union' : 'Banka Havalesi'));
+            $islemDate = (string) ($r['islem_tarihi'] ?? '');
+
+            $resItem = [
+                'id' => (int) $r['id'],
+                'rezNo' => (string) $r['id'],
+                'villaId' => (int) $r['evid'],
+                'villaName' => (string) $r['villa_adi'],
+                'girisTarihi' => (string) ($r['giris_tarihi'] ?? ''),
+                'cikisTarihi' => (string) ($r['cikis_tarihi'] ?? ''),
+                'islemTarihi' => $islemDate,
+                'onaylanmaTarihi' => (string) ($r['onaylanma_tarihi'] ?? ''),
+                'sonDurumGuncelleme' => (string) ($r['son_guncelleme_tarihi'] ?? ''),
+                'pax' => $pax,
+                'ciro' => round($ciro, 2),
+                'ciroFormatted' => '₺' . number_format($ciro, 2, ',', '.'),
+                'kazanc' => round($kar, 2),
+                'kazancFormatted' => '₺' . number_format($kar, 2, ',', '.'),
+                'kazancOrani' => $ciro > 0 ? round(($kar / $ciro) * 100, 2) : 0.0,
+                'odemeSekli' => $odeme,
+                'odemeKanal' => $odemeKanalName,
+                'tahsilat' => round($onOdeme, 2),
+                'tahsilatFormatted' => '₺' . number_format($onOdeme, 2, ',', '.'),
+            ];
+
+            $allApprovedReservations[] = $resItem;
+            if ($islemDate !== '' && isset($calendarDays[$islemDate])) {
+                $calendarDays[$islemDate]['reservations'][] = $resItem;
+            }
+        }
+
+        // Günlük ortalamaları ve toplamları hesapla (ASP formülleri)
+        $totalCiro = 0.0;
+        $totalKazanc = 0.0;
+        $totalTahsilat = 0.0;
+        $totalPax = 0;
+        $totalKesinlesen = 0;
+        $totalTalep = 0;
+        $totalGiris = 0;
+        $totalCikis = 0;
+        $totalKonaklayan = 0;
+        $totalTamamlanan = 0;
+        $totalKrediKarti = 0.0;
+        $totalBanka = 0.0;
+        $totalWestern = 0.0;
+
+        foreach ($calendarDays as &$dRef) {
+            $cnt = $dRef['kesinlesenSayisi'];
+            $c = $dRef['kesinlesenCiro'];
+            $k = $dRef['kesinlesenKazanc'];
+
+            if ($cnt > 0) {
+                $dRef['ortSatisBedeli'] = round($c / $cnt, 2);
+                $dRef['ortKazancTutari'] = round($k / $cnt, 2);
+            } else {
+                $dRef['ortSatisBedeli'] = 0.0;
+                $dRef['ortKazancTutari'] = 0.0;
+            }
+
+            if ($c > 0) {
+                $dRef['ortKazancOrani'] = round(($k / $c) * 100, 2);
+            } else {
+                $dRef['ortKazancOrani'] = 0.0;
+            }
+
+            $totalCiro += $c;
+            $totalKazanc += $k;
+            $totalTahsilat += $dRef['gunlukTahsilat'];
+            $totalPax += $dRef['kesinlesenPax'];
+            $totalKesinlesen += $cnt;
+            $totalTalep += $dRef['toplamTalep'];
+            $totalGiris += $dRef['gunlukGirisler'];
+            $totalCikis += $dRef['gunlukCikislar'];
+            $totalKonaklayan += $dRef['gunlukKonaklayan'];
+            $totalTamamlanan += $dRef['tamamlananRezervasyon'];
+            $totalKrediKarti += $dRef['krediKartiTahsilat'];
+            $totalBanka += $dRef['bankaTahsilat'];
+            $totalWestern += $dRef['westernTahsilat'];
+        }
+        unset($dRef);
+
+        // Görseldeki 16 Matris Satırının Birebir Tanımları
+        $matrixDefs = [
+            [
+                'key' => 'gunlukGirisler',
+                'label' => 'Günlük Girişler',
+                'type' => 'count',
+                'total' => $totalGiris,
+                'totalFormatted' => (string) $totalGiris,
+            ],
+            [
+                'key' => 'gunlukCikislar',
+                'label' => 'Günlük Çıkışlar',
+                'type' => 'count',
+                'total' => $totalCikis,
+                'totalFormatted' => (string) $totalCikis,
+            ],
+            [
+                'key' => 'gunlukKonaklayan',
+                'label' => 'Günlük Konaklayan',
+                'type' => 'count',
+                'total' => $totalKonaklayan,
+                'totalFormatted' => (string) $totalKonaklayan,
+            ],
+            [
+                'key' => 'toplamTalep',
+                'label' => 'Toplam Rezervasyon Talebi',
+                'type' => 'count',
+                'total' => $totalTalep,
+                'totalFormatted' => (string) $totalTalep,
+            ],
+            [
+                'key' => 'kesinlesenSayisi',
+                'label' => 'Toplam Kesinleşen Rezervasyon Sayısı',
+                'type' => 'count',
+                'total' => $totalKesinlesen,
+                'totalFormatted' => (string) $totalKesinlesen,
+            ],
+            [
+                'key' => 'kesinlesenPax',
+                'label' => 'Toplam Kesinleşen Rezervasyon Pax',
+                'type' => 'count',
+                'total' => $totalPax,
+                'totalFormatted' => (string) $totalPax,
+            ],
+            [
+                'key' => 'kesinlesenCiro',
+                'label' => 'Toplam Rezervasyon Kesinleşen Ciro',
+                'type' => 'currency',
+                'total' => round($totalCiro, 2),
+                'totalFormatted' => '₺' . number_format($totalCiro, 2, ',', '.'),
+            ],
+            [
+                'key' => 'kesinlesenKazanc',
+                'label' => 'Toplam Kesinleşen Kazanç',
+                'type' => 'currency',
+                'total' => round($totalKazanc, 2),
+                'totalFormatted' => '₺' . number_format($totalKazanc, 2, ',', '.'),
+            ],
+            [
+                'key' => 'ortSatisBedeli',
+                'label' => 'Ortalama Rezervasyon Satış Bedeli',
+                'type' => 'currency',
+                'total' => $totalKesinlesen > 0 ? round($totalCiro / $totalKesinlesen, 2) : 0.0,
+                'totalFormatted' => $totalKesinlesen > 0 ? ('₺' . number_format($totalCiro / $totalKesinlesen, 2, ',', '.')) : '',
+            ],
+            [
+                'key' => 'ortKazancTutari',
+                'label' => 'Ortalama Kazanç Tutarı',
+                'type' => 'currency',
+                'total' => $totalKesinlesen > 0 ? round($totalKazanc / $totalKesinlesen, 2) : 0.0,
+                'totalFormatted' => $totalKesinlesen > 0 ? ('₺' . number_format($totalKazanc / $totalKesinlesen, 2, ',', '.')) : '',
+            ],
+            [
+                'key' => 'ortKazancOrani',
+                'label' => 'Ortalama Kazanç Oranı',
+                'type' => 'percent',
+                'total' => $totalCiro > 0 ? round(($totalKazanc / $totalCiro) * 100, 2) : 0.0,
+                'totalFormatted' => $totalCiro > 0 ? (number_format(($totalKazanc / $totalCiro) * 100, 2, '.', '') . '%') : '',
+            ],
+            [
+                'key' => 'tamamlananRezervasyon',
+                'label' => 'Günlük Tamamlanan Rezervasyon',
+                'type' => 'count',
+                'total' => $totalTamamlanan,
+                'totalFormatted' => (string) $totalTamamlanan,
+            ],
+            [
+                'key' => 'gunlukTahsilat',
+                'label' => 'Günlük Tahsilat',
+                'type' => 'currency',
+                'total' => round($totalTahsilat, 2),
+                'totalFormatted' => '₺' . number_format($totalTahsilat, 2, ',', '.'),
+            ],
+            [
+                'key' => 'krediKartiTahsilat',
+                'label' => 'Günlük Kredi Kartı Tahsilat',
+                'type' => 'currency',
+                'total' => round($totalKrediKarti, 2),
+                'totalFormatted' => '₺' . number_format($totalKrediKarti, 2, ',', '.'),
+            ],
+            [
+                'key' => 'bankaTahsilat',
+                'label' => 'Günlük Banka Tahsilatı',
+                'type' => 'currency',
+                'total' => round($totalBanka, 2),
+                'totalFormatted' => '₺' . number_format($totalBanka, 2, ',', '.'),
+            ],
+            [
+                'key' => 'westernTahsilat',
+                'label' => 'Günlük Western Tahsilatı',
+                'type' => 'currency',
+                'total' => round($totalWestern, 2),
+                'totalFormatted' => '₺' . number_format($totalWestern, 2, ',', '.'),
+            ],
+        ];
+
+        $matrixRows = [];
+        foreach ($matrixDefs as $def) {
+            $rowKey = $def['key'];
+            $rowType = $def['type'];
+            $vals = [];
+            $formattedVals = [];
+
+            foreach ($calendarDays as $dStr => $dData) {
+                $rawVal = $dData[$rowKey] ?? 0;
+                $vals[$dStr] = $rawVal;
+
+                if ($rowType === 'currency') {
+                    $formattedVals[$dStr] = (abs((float) $rawVal) > 0.001) ? ('₺' . number_format((float) $rawVal, 2, ',', '.')) : '';
+                } elseif ($rowType === 'percent') {
+                    $formattedVals[$dStr] = (abs((float) $rawVal) > 0.001) ? (number_format((float) $rawVal, 2, '.', '') . '%') : '';
+                } else {
+                    $formattedVals[$dStr] = ((int) $rawVal > 0) ? (string) $rawVal : '';
+                }
+            }
+
+            $matrixRows[] = [
+                'key' => $rowKey,
+                'label' => $def['label'],
+                'type' => $rowType,
+                'total' => $def['total'],
+                'totalFormatted' => $def['totalFormatted'],
+                'values' => $vals,
+                'formattedValues' => $formattedVals,
+            ];
+        }
+
+        $columns = [];
+        foreach ($calendarDays as $dData) {
+            $columns[] = [
+                'index' => $dData['index'],
+                'date' => $dData['date'],
+                'day' => $dData['day'],
+                'month' => $dData['month'],
+                'monthShort' => $dData['monthShort'],
+                'monthName' => $dData['monthName'],
+                'dayOfWeek' => $dData['dayOfWeek'],
+                'dayOfWeekIndex' => $dData['dayOfWeekIndex'],
+                'isWeekend' => $dData['isWeekend'],
+            ];
+        }
+
+        $monthTitleParts = array_map(function ($m) use ($monthUpperNames) {
+            return $monthUpperNames[$m] ?? '';
+        }, $months);
+        $periodTitle = implode(', ', array_filter($monthTitleParts)) . ' (' . count($calendarDays) . ' GÜN) ' . $year . ' Matrisi';
+
+        $this->response->success([
+            'title' => 'Takvim Görünüm Raporlama',
+            'periodTitle' => $periodTitle,
+            'columns' => $columns,
+            'matrix' => $matrixRows,
+            'daily' => array_values($calendarDays),
+            'reservations' => $allApprovedReservations,
+            'summary' => [
+                'totalDays' => count($calendarDays),
+                'totalApprovedReservations' => count($allApprovedReservations),
+                'totalCiro' => round($totalCiro, 2),
+                'totalCiroFormatted' => '₺' . number_format($totalCiro, 2, ',', '.'),
+                'totalKazanc' => round($totalKazanc, 2),
+                'totalKazancFormatted' => '₺' . number_format($totalKazanc, 2, ',', '.'),
+                'totalTahsilat' => round($totalTahsilat, 2),
+                'totalTahsilatFormatted' => '₺' . number_format($totalTahsilat, 2, ',', '.'),
+                'totalPax' => $totalPax,
+                'avgDailyStaying' => count($calendarDays) > 0 ? round($totalKonaklayan / count($calendarDays), 1) : 0.0,
+            ],
+            'activeFilters' => [
+                'year' => $year,
+                'months' => $months,
+                'villas' => $villaIds,
+                'site' => $siteId,
+                'minDate' => $minDate,
+                'maxDate' => $maxDate,
+                'totalDays' => count($calendarDays),
+            ],
+        ]);
+    }
+
+    /**
      * Aylık performans ve pax raporu filtre seçenekleri: villalar, yıllar ve aylar.
      *
      * @Get("monthlyperformance/filters")
-     * @Get("paxperformance/filters")
-     * @Get("pax/filters")
      * @query site int Site kimliği (varsayılan 1)
      */
     public function monthlyperformancefilters(): void
@@ -2749,6 +3440,18 @@ WHERE k.odeme = {$paymentType}
         }
     }
 
+    private function hasTable(PDO $pdo, string $table): bool
+    {
+        try {
+            $stmt = $pdo->prepare("SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(:table) AND type = 'U'");
+            $stmt->execute([':table' => 'dbo.' . $table]);
+            return (bool) $stmt->fetchColumn();
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+
     /**
      * Parametre 'all', 'tumu', 'tum', '0', boş ya da belirtilmemişse boş dizi döner (tümü seçili demektir).
      *
@@ -2825,4 +3528,17 @@ WHERE k.odeme = {$paymentType}
     {
         return '₺' . number_format($num, 0, ',', '.');
     }
+
+    protected function deletedStatus(): int
+    {
+        return (int) ($this->app['reservation_deleted_status'] ?? 5);
+    }
+
+    protected function normalizedStatusSql(string $column): string
+    {
+        $deleted = $this->deletedStatus();
+
+        return $deleted === 5 ? $column : "(CASE WHEN {$column} = {$deleted} THEN 5 ELSE {$column} END)";
+    }
 }
+
