@@ -19,6 +19,7 @@ use PDO;
  *   GET /backend-api/reports/potential       -> günlük talep ve fırsat dağılımı (potansiyel rapor)
  *   GET /backend-api/reports/potential-options -> potansiyel raporu villa/bölge filtreleri
  *   GET /backend-api/reports/demand-periods  -> en çok talep alan dönemler, lead time ve gece dağılımı
+ *   GET /backend-api/reports/occupancy       -> verilen konaklama aralıkları için portföy doluluğu (%)
  *   GET /backend-api/reports/monthlyperformance -> aylık performans raporu
  *   GET /backend-api/reports/paxperformance     -> misafir (pax) performans raporu
  *   GET /backend-api/reports/monthlyperformance/filters -> aylık performans / pax filtre seçenekleri
@@ -532,6 +533,44 @@ ORDER BY COUNT(*) DESC, {$giris}")->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
+     * Verilen konaklama aralıkları için portföy doluluğu (%), sitenin veritabanından.
+     * Ön yüzde Google Analytics'te en çok aranan aralıkların doluluğunu göstermek için kullanılır.
+     *
+     * @Get("occupancy")
+     * @query ranges string required Virgülle ayrılmış YYYY-MM-DD_YYYY-MM-DD aralıkları (en fazla 50)
+     */
+    public function occupancy(): void
+    {
+        $ranges = [];
+        foreach (explode(',', (string) $this->request->query('ranges', '')) as $part) {
+            $dates = explode('_', trim($part));
+            if (count($dates) !== 2 || trim($dates[0]) === '' || trim($dates[1]) === '') {
+                continue;
+            }
+            $start = $this->parseDate($dates[0], '');
+            $end = $this->parseDate($dates[1], '');
+            if ($end > $start) {
+                $ranges[$start . '|' . $end] = ['startDate' => $start, 'endDate' => $end];
+            }
+            if (count($ranges) >= 50) {
+                break;
+            }
+        }
+        $ranges = array_values($ranges);
+        if (!$ranges) {
+            throw new HttpException('ranges en az bir geçerli aralık içermeli. Örnek: 2026-08-03_2026-08-08', 'VALIDATION_ERROR', 422);
+        }
+
+        $rates = $this->occupancyRates($ranges);
+        $items = [];
+        foreach ($ranges as $index => $range) {
+            $items[] = $range + ['occupancyRate' => $rates[$index]];
+        }
+
+        $this->response->success(['items' => $items]);
+    }
+
+    /**
      * Dönemlere en çok talep alan 3 villayı ve portföy doluluğunu ekler.
      * Doluluk = dönemle çakışan onaylı (dolu.durum 3) rezervasyonu olan aktif villa / aktif villa sayısı.
      *
@@ -544,15 +583,12 @@ ORDER BY COUNT(*) DESC, {$giris}")->fetchAll(PDO::FETCH_ASSOC);
         }
 
         // Tarihler veritabanından Y-m-d olarak geldi; yine de SQL'e yazmadan önce doğrulanır.
-        $values = [];
         $pairs = [];
-        foreach ($periods as $index => $period) {
+        foreach ($periods as $period) {
             $start = (new DateTime($period['startDate']))->format('Y-m-d');
             $end = (new DateTime($period['endDate']))->format('Y-m-d');
-            $values[] = "({$index}, CONVERT(date, '{$start}', 23), CONVERT(date, '{$end}', 23))";
             $pairs[] = "({$giris} = CONVERT(date, '{$start}', 23) AND {$cikis} = CONVERT(date, '{$end}', 23))";
         }
-        $valuesSql = implode(', ', $values);
         $pdo = $this->db->pdo();
 
         $villaRows = $pdo->query("
@@ -570,27 +606,61 @@ ORDER BY COUNT(*) DESC")->fetchAll(PDO::FETCH_ASSOC);
             }
         }
 
+        $rates = $this->occupancyRates($periods);
+        foreach ($periods as $index => &$period) {
+            $period['villas'] = $villasByPeriod[$period['startDate'] . '|' . $period['endDate']] ?? [];
+            $period['occupancyRate'] = $rates[$index];
+        }
+        unset($period);
+    }
+
+    /**
+     * Portföy doluluğu (%): aralıkla en az bir gece çakışan onaylı (dolu.durum 3) rezervasyonu olan aktif villa /
+     * aktif villa sayısı. Yalnızca kayitlar'da karşılığı olan dolu satırları sayılır; kapatmalar ve Kiralama
+     * Takvimi'nden içe aktarılan kopyalar (kayitid -1 / 0 / NULL) dahil değildir. Aktif villa yoksa null.
+     *
+     * @param array<int,array{startDate:string,endDate:string}> $ranges Y-m-d giriş-çıkış
+     * @return array<int,int|null> $ranges ile aynı anahtarlar
+     */
+    private function occupancyRates(array $ranges): array
+    {
+        $rates = array_fill_keys(array_keys($ranges), null);
+        if (!$ranges) {
+            return $rates;
+        }
+
+        $pdo = $this->db->pdo();
         $activeVillas = (int) $pdo->query('SELECT COUNT(*) FROM homes WHERE aktif = 1')->fetchColumn();
-        $bookedRows = $activeVillas > 0 ? $pdo->query("
+        if ($activeVillas <= 0) {
+            return $rates;
+        }
+
+        // Tarihler SQL'e yazılmadan önce DateTime'dan geçirilerek doğrulanır.
+        $values = [];
+        foreach ($ranges as $index => $range) {
+            $start = (new DateTime($range['startDate']))->format('Y-m-d');
+            $end = (new DateTime($range['endDate']))->format('Y-m-d');
+            $values[] = '(' . (int) $index . ", CONVERT(date, '{$start}', 23), CONVERT(date, '{$end}', 23))";
+        }
+
+        $booked = [];
+        foreach ($pdo->query("
 SELECT r.i, COUNT(DISTINCT d.emlak) AS dolu_villa
-  FROM (VALUES {$valuesSql}) AS r(i, giris, cikis)
+  FROM (VALUES " . implode(', ', $values) . ") AS r(i, giris, cikis)
  INNER JOIN dolu d ON d.durum = 3
        AND TRY_CONVERT(date, d.tarih, 104) < r.cikis
        AND TRY_CONVERT(date, d.tarih2, 104) > r.giris
+ INNER JOIN kayitlar k ON k.id = d.kayitid
  INNER JOIN homes h ON h.id = d.emlak AND h.aktif = 1
- GROUP BY r.i")->fetchAll(PDO::FETCH_ASSOC) : [];
-        $bookedByIndex = [];
-        foreach ($bookedRows as $row) {
-            $bookedByIndex[(int) $row['i']] = (int) $row['dolu_villa'];
+ GROUP BY r.i")->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $booked[(int) $row['i']] = (int) $row['dolu_villa'];
         }
 
-        foreach ($periods as $index => &$period) {
-            $period['villas'] = $villasByPeriod[$period['startDate'] . '|' . $period['endDate']] ?? [];
-            $period['occupancyRate'] = $activeVillas > 0
-                ? (int) round(($bookedByIndex[$index] ?? 0) * 100 / $activeVillas)
-                : null;
+        foreach ($rates as $index => $rate) {
+            $rates[$index] = (int) round(($booked[$index] ?? 0) * 100 / $activeVillas);
         }
-        unset($period);
+
+        return $rates;
     }
 
     /**
@@ -603,7 +673,7 @@ SELECT r.i, COUNT(DISTINCT d.emlak) AS dolu_villa
         $pdo = $this->db->pdo();
 
         $villas = $pdo->query(
-            "SELECT h.id, h.baslik, ISNULL(d.baslik, '') AS bolge
+            "SELECT h.id, h.baslik, ISNULL(d.baslik, '') AS bolge, ISNULL(h.url, '') AS url
                FROM homes h
                LEFT JOIN destinations d ON d.id = h.emlak_bolgesi
               ORDER BY h.baslik ASC"
@@ -631,10 +701,27 @@ SELECT r.i, COUNT(DISTINCT d.emlak) AS dolu_villa
 
         $this->response->success([
             'villas' => array_map(function (array $row): array {
-                return ['id' => (int) $row['id'], 'title' => (string) $row['baslik'], 'region' => (string) $row['bolge']];
+                return [
+                    'id' => (int) $row['id'],
+                    'title' => (string) $row['baslik'],
+                    'region' => (string) $row['bolge'],
+                    'slug' => $this->urlSlug((string) $row['url']),
+                ];
             }, $villas),
             'regions' => $regions,
         ]);
+    }
+
+    /**
+     * Villa adresinin son parçası, küçük harf: "/kiralik-villalar/villa-swan" → "villa-swan".
+     * Google Analytics'teki villa sayfası görüntülemeleri bu değerle villaya eşlenir.
+     */
+    private function urlSlug(string $url): string
+    {
+        $path = (string) parse_url(trim($url), PHP_URL_PATH);
+        $parts = explode('/', trim($path, '/'));
+
+        return mb_strtolower(rawurldecode((string) end($parts)), 'UTF-8');
     }
 
     /**
