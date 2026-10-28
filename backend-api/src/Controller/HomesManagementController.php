@@ -81,7 +81,8 @@ final class HomesManagementController extends Controller
             $this->addTextSearchFilter($where, $params, $titleColumn, $title, 'title', false);
         }
         if ($search !== '') {
-            $this->addTextSearchFilter($where, $params, $titleColumn, $search, 'keyword', true);
+            // Genel arama WhatsApp grup adinda da yapilir.
+            $this->addTextSearchFilter($where, $params, $titleColumn, $search, 'keyword', true, $whatsappColumn);
         }
 
         $typeRaw = $this->p('type') !== '' ? $this->p('type') : $this->p('tip');
@@ -548,7 +549,8 @@ WHERE {$whereSql}
         string $titleColumn,
         string $value,
         string $prefix,
-        bool $includeExactId
+        bool $includeExactId,
+        string $whatsappColumn = ''
     ): void {
         $tokens = preg_split('/\s+/', $value) ?: [];
         $tokens = array_values(array_filter(array_map('trim', $tokens), function ($token) {
@@ -569,7 +571,13 @@ WHERE {$whereSql}
             $titleParam = ':' . $prefix . 'Name' . $index;
             $codeParam = ':' . $prefix . 'Code' . $index;
             $documentParam = ':' . $prefix . 'DocumentNo' . $index;
-            $parts[] = "({$titleColumn} LIKE {$titleParam} OR h.evkodu LIKE {$codeParam} OR {$documentNo} LIKE {$documentParam})";
+            $whatsappPart = '';
+            if ($whatsappColumn !== '') {
+                $whatsappParam = ':' . $prefix . 'Whatsapp' . $index;
+                $whatsappPart = " OR {$whatsappColumn} LIKE {$whatsappParam}";
+                $params[$whatsappParam] = '%' . $token . '%';
+            }
+            $parts[] = "({$titleColumn} LIKE {$titleParam} OR h.evkodu LIKE {$codeParam} OR {$documentNo} LIKE {$documentParam}{$whatsappPart})";
             $params[$titleParam] = '%' . $token . '%';
             $params[$codeParam] = '%' . $token . '%';
             $params[$documentParam] = '%' . $token . '%';
