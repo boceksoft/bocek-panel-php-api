@@ -57,6 +57,19 @@ abstract class Controller
      * SQL ifadesi: ayardaki kolondan sure tipini API degerine cevirir (1 suresiz, 2 sureli).
      * 1/2 tutan kolon bossa NULL doner; 0/1 tutan kolonda (GavelBelgeSureli) bos deger suresiz sayilir.
      */
+    /**
+     * Villa adi SQL ifadesi: config homes_title_use_code aciksa homes.evkodu (bossa ad), degilse adin kendisi.
+     * $alias homes tablosunun takma adi, $titleExpr villa adi ifadesi (orn. "h.baslik", "h.baslik_s2").
+     */
+    protected function homeTitleSql(string $alias, string $titleExpr): string
+    {
+        if (empty($this->app['homes_title_use_code'])) {
+            return $titleExpr;
+        }
+
+        return "ISNULL(NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), {$alias}.evkodu))), ''), {$titleExpr})";
+    }
+
     protected function gavelDurationSql(string $alias): string
     {
         $column = $this->gavelDurationColumn();

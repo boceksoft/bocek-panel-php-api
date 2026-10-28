@@ -305,13 +305,14 @@ final class HomesManagementDetailCreateController extends Controller
         }
 
         if ($this->hasPath($payload, 'kapakresimler')) {
-            $updates['resim'] = implode(',', $this->normalizeImageNames($this->getPath($payload, 'kapakresimler')));
+            // Kapak sayisi config'e gore (homes_two_cover_images kapaliysa 1).
+            $updates['resim'] = implode(',', array_slice($this->normalizeImageNames($this->getPath($payload, 'kapakresimler')), 0, $this->coverLimit()));
         }
 
         if ($this->hasPath($payload, 'medyaBilgileri.resimler')) {
             $coverImages = $this->coverImageNames($this->getPath($payload, 'medyaBilgileri.resimler'));
             if ($coverImages !== null) {
-                $updates['resim'] = implode(',', $coverImages);
+                $updates['resim'] = implode(',', array_slice($coverImages, 0, $this->coverLimit()));
             }
         }
 
@@ -419,6 +420,12 @@ final class HomesManagementDetailCreateController extends Controller
         }
 
         return $strings;
+    }
+
+    // Secilebilecek kapak sayisi: config homes_two_cover_images aciksa sinirsiz, degilse 1.
+    private function coverLimit(): int
+    {
+        return !empty($this->app['homes_two_cover_images']) ? PHP_INT_MAX : 1;
     }
 
     /**

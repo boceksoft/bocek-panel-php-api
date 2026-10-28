@@ -663,7 +663,7 @@ final class ReservationdetailController extends Controller
             try {
                 $row = $this->fetchOne(
                     $pdo,
-                    "SELECT h.baslik{$suffix} AS adi, h.resim,
+                    "SELECT " . $this->homeTitleSql('h', "h.baslik{$suffix}") . " AS adi, h.resim,
                             CONCAT(d2.baslik{$suffix}, ' / ', d3.baslik{$suffix}) AS bolge
                      FROM homes h
                      LEFT JOIN destinations d3 ON d3.id = h.emlak_bolgesi

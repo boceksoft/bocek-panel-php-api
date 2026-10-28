@@ -69,13 +69,15 @@ final class ImgDownloadController extends Controller
                 // Delete from DB
                 $stmtDel = $this->db->pdo()->prepare("DELETE FROM dbo.upload WHERE uploadID = :id");
                 $stmtDel->execute(['id' => $uploadId]);
-                
-                // Check if it was cover
+
+                // Kapaksa (homes.resim kapaklari virgulle tutar) listeden cikarilir.
                 $stmtCheck = $this->db->pdo()->prepare("SELECT resim FROM homes WHERE id = :vid");
                 $stmtCheck->execute(['vid' => $villaId]);
-                $cover = $stmtCheck->fetchColumn();
-                if ($cover == $fileName) {
-                    $this->db->pdo()->prepare("UPDATE homes SET resim = NULL WHERE id = :vid")->execute(['vid' => $villaId]);
+                $covers = array_values(array_filter(array_map('trim', explode(',', (string) $stmtCheck->fetchColumn())), 'strlen'));
+                if (in_array($fileName, $covers, true)) {
+                    $remaining = array_values(array_diff($covers, [$fileName]));
+                    $this->db->pdo()->prepare("UPDATE homes SET resim = :resim WHERE id = :vid")
+                        ->execute(['resim' => $remaining ? implode(',', $remaining) : null, 'vid' => $villaId]);
                 }
             }
             $this->response->success(['message' => 'Fotograf silindi.', 'id' => $uploadId]);
@@ -96,6 +98,33 @@ final class ImgDownloadController extends Controller
         $sira = $this->request->input('sira');
         $kapak = $this->request->input('kapak');
         $uploadId = $this->request->input('uploadId');
+
+        // Kapaklar: kapakIds = "uploadId1,uploadId2,..." -> homes.resim = "dosya1,dosya2,..." (secim sirasiyla).
+        // Config homes_two_cover_images kapaliysa (varsayilan) sadece ilk kapak yazilir.
+        $kapakIds = trim((string) $this->request->input('kapakIds', ''));
+        if ($kapakIds !== '' && (!isset($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK)) {
+            $coverLimit = !empty($this->app['homes_two_cover_images']) ? PHP_INT_MAX : 1;
+            $ids = array_slice(array_values(array_unique(array_filter(array_map('intval', explode(',', $kapakIds))))), 0, $coverLimit);
+            if (!$ids) {
+                throw new HttpException('Gecerli kapak fotografi secilmedi.', 'VALIDATION', 422);
+            }
+            $stmtName = $this->db->pdo()->prepare("SELECT FileName FROM dbo.upload WHERE uploadID = :id AND islm = 'emlak' AND islm_id = :villaId");
+            $names = [];
+            foreach ($ids as $id) {
+                $stmtName->execute(['id' => $id, 'villaId' => $villaId]);
+                $name = $this->imageName((string) $stmtName->fetchColumn());
+                if ($name !== '') {
+                    $names[] = $name;
+                }
+            }
+            if (!$names) {
+                throw new HttpException('Kapak fotografi bulunamadi.', 'NOT_FOUND', 404);
+            }
+            $this->db->pdo()->prepare("UPDATE homes SET resim = :resim WHERE id = :villaId")
+                ->execute(['resim' => implode(',', $names), 'villaId' => $villaId]);
+            $this->response->success(['message' => 'Kapak guncellendi.', 'resim' => implode(',', $names)]);
+            return;
+        }
 
         // Sadece resim olmadan kapak/sira gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ncellemesi
         if ($uploadId && (!isset($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK)) {

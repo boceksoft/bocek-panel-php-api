@@ -160,11 +160,11 @@ OUTER APPLY (
             : 'AND CONVERT(date, sezonlar.tarih2, 103) >= CONVERT(date, GETDATE(), 103)';
 
         $whereSql = implode(' AND ', $where);
-        $sql = "
+        $sql = " 
 SELECT
     COUNT(*) OVER() AS totalCount,
     h.id,
-    h.baslik{$uzanti} AS name,
+    " . $this->homeTitleSql('h', "h.baslik{$uzanti}") . " AS name,
     d2.id AS region_id,
     d1.baslik{$uzanti} + ' / ' + d2.baslik{$uzanti} AS region,
     {$availabilitySelect}
