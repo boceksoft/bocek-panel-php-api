@@ -18,6 +18,7 @@ use PDO;
  *   GET /backend-api/reports/today-cancelled -> bugün iptal edilen / süresi dolan / silinen rezervasyonlar
  *   GET /backend-api/reports/potential       -> günlük talep ve fırsat dağılımı (potansiyel rapor)
  *   GET /backend-api/reports/potential-options -> potansiyel raporu villa/bölge filtreleri
+ *   GET /backend-api/reports/promotion-codes -> promosyon kodları (değer, stok, geçerlilik) ve rezervasyonlardaki kullanımı
  *   GET /backend-api/reports/demand-periods  -> en çok talep alan dönemler, lead time ve gece dağılımı
  *   GET /backend-api/reports/occupancy       -> verilen konaklama aralıkları için portföy doluluğu (%)
  *   GET /backend-api/reports/monthlyperformance -> aylık performans raporu
@@ -78,7 +79,7 @@ SELECT
     (SELECT ISNULL(SUM(k.tutar * ISNULL(k.kur, 1)), 0)
        FROM kayitlar k
        INNER JOIN dolu d ON d.kayitid = k.id
-      WHERE k.son_durum_guncelleme >= t.bugun AND k.son_durum_guncelleme < t.yarin
+      WHERE k.islem_tarihi >= t.bugun AND k.islem_tarihi < t.yarin
         AND d.durum = 3) AS bugun_on_odeme,
     (SELECT ISNULL(SUM(ISNULL(TRY_CONVERT(float, dbo.fnTemizle(k.toplam_tutar)), 0) * ISNULL(k.kur, 1)), 0)
        FROM kayitlar k
@@ -136,10 +137,10 @@ FROM (SELECT CAST(GETDATE() AS date) AS bugun, DATEADD(day, 1, CAST(GETDATE() AS
             throw new HttpException('dateType 0 (giriş) veya 1 (işlem) olmalı.', 'VALIDATION_ERROR', 422);
         }
 
-        // İşlem tarihine göre: kayıtlar son durum güncellemesine göre süzülür, gelen rezervasyon
-        // sayısı ise işlem tarihine göre sayılır. Giriş tarihine göre: ikisi de giriş tarihidir.
+        // İşlem tarihine göre: kayıtlar ve gelen rezervasyon sayısı işlem tarihine göre.
+        // Giriş tarihine göre: ikisi de giriş tarihidir.
         if ($dateType === self::DATE_TYPE_TRANSACTION) {
-            $filterColumn = 'k.son_durum_guncelleme';
+            $filterColumn = 'k.islem_tarihi';
             $countColumn = 'k.islem_tarihi';
         } else {
             $filterColumn = 'k.rez_tarihi';
@@ -197,7 +198,7 @@ WHERE {$filterColumn} >= {$range['start']} AND {$filterColumn} < {$range['end']}
     /**
      * Günlük talep ve fırsat dağılımı (potansiyel rapor). Tutarlar rezervasyon kuru ile TL'dir.
      *   Talep/potansiyel: o gün açılan her rezervasyon kaydı (kayitlar.islem_tarihi).
-     *   Gerçekleşen/kaçan: o gün durumu değişen kayıtlar (kayitlar.son_durum_guncelleme), panel raporu gibi;
+     *   Gerçekleşen/kaçan: o gün açılan kayıtlar (kayitlar.islem_tarihi);
      *   gerçekleşen dolu.durum 3, kaçan 2 (süresi doldu) + 4 (iptal) + silinen. Önceki günlerin talepleri de gelir.
      *
      * @Get("potential")
@@ -260,10 +261,10 @@ SELECT
 WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}{$filter}
 GROUP BY CAST(k.islem_tarihi AS date)";
 
-        // Sonuçlar: onaylandığı / kaçtığı (son durum değişikliği) güne göre.
+        // Sonuçlar: işlem tarihine göre.
         $resultSql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST(k.islem_tarihi AS date), 23) AS gun,
     SUM(CASE WHEN {$durum} = 3 THEN 1 ELSE 0 END) AS gerceklesen,
     SUM(CASE WHEN {$durum} = 3 THEN {$gece} ELSE 0 END) AS gerceklesen_gece,
     SUM(CASE WHEN {$durum} = 3 THEN {$tutar} ELSE 0 END) AS gerceklesen_ciro,
@@ -271,9 +272,9 @@ SELECT
     SUM(CASE WHEN {$lost} THEN {$tutar} ELSE 0 END) AS kacan_ciro,
     SUM(CASE WHEN {$durum} = 2 THEN 1 ELSE 0 END) AS suresi_dolan
 {$from}
-WHERE k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}
+WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}
   AND ({$durum} = 3 OR {$lost}){$filter}
-GROUP BY CAST(k.son_durum_guncelleme AS date)";
+GROUP BY CAST(k.islem_tarihi AS date)";
 
         $byDay = [];
         foreach ([$requestSql, $resultSql] as $sql) {
@@ -344,7 +345,7 @@ GROUP BY CAST(k.son_durum_guncelleme AS date)";
 
         $sql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST(k.islem_tarihi AS date), 23) AS gun,
     k.evid,
     CONVERT(varchar(10), CAST(k.rez_tarihi AS date), 23) AS giris,
     CONVERT(varchar(10), CAST(k.gelecek_tarih AS date), 23) AS cikis,
@@ -369,7 +370,7 @@ OUTER APPLY (
        AND CAST(k.rez_tarihi AS date) BETWEEN TRY_CONVERT(date, s.tarih1, 104) AND TRY_CONVERT(date, s.tarih2, 104)
      ORDER BY s.id DESC
 ) AS sz
-WHERE k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}
+WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}
   AND {$lost}{$filter}";
 
         $hasShortStayFunction = $this->objectExists('dbo.kisasureli3', 'IF') || $this->objectExists('dbo.kisasureli3', 'TF');
@@ -712,6 +713,124 @@ SELECT r.i, COUNT(DISTINCT d.emlak) AS dolu_villa
                 ];
             }, $villas),
             'regions' => $regions,
+        ]);
+    }
+
+    /**
+     * Promosyon kodları ve kullanımı: kod tanımı (değer, tutar/yüzde, stok, geçerlilik) ile rezervasyonlardaki
+     * (kayitlar.promotionCode) kullanım sayısı, son duruma göre dağılımı ve onaylıların TL toplamı.
+     * Tarih verilirse kullanım o aralıkta YAPILAN rezervasyonlardan (islem_tarihi) sayılır, verilmezse tüm zamanlar.
+     * Tanımı silinmiş ama rezervasyonda geçen kodlar da listelenir (defined=false). Silinen rezervasyonlar sayılmaz.
+     *
+     * @Get("promotion-codes")
+     * @query startDate string Rezervasyon tarihi başlangıcı (Y-m-d, opsiyonel)
+     * @query endDate string Rezervasyon tarihi bitişi (Y-m-d, dahil, opsiyonel)
+     */
+    public function promotionCodes(): void
+    {
+        $pdo = $this->db->pdo();
+        $startDate = $this->parseDate((string) $this->request->query('startDate', ''), '');
+        $endDate = $this->parseDate((string) $this->request->query('endDate', ''), '');
+
+        $where = ['ISNULL(st.durum, -1) <> ' . $this->deletedStatus()];
+        $params = [];
+        if ($startDate !== '') {
+            $where[] = 'CONVERT(date, k.islem_tarihi, 103) >= CONVERT(date, :startDate, 23)';
+            $params['startDate'] = $startDate;
+        }
+        if ($endDate !== '') {
+            $where[] = 'CONVERT(date, k.islem_tarihi, 103) <= CONVERT(date, :endDate, 23)';
+            $params['endDate'] = $endDate;
+        }
+        $from = "FROM kayitlar k
+OUTER APPLY (SELECT TOP 1 dolu.durum FROM dolu WHERE dolu.kayitid = k.id ORDER BY dolu.id DESC) AS st
+WHERE " . implode("\n  AND ", $where);
+        $tutar = "ISNULL(TRY_CONVERT(float, dbo.fnTemizle(k.toplam_tutar)), 0) * (CASE WHEN k.doviz = 'tl' THEN 1 ELSE ISNULL(k.kur, 1) END)";
+
+        $usageSql = "
+SELECT k.promotionCode AS code,
+       COUNT(*) AS usage_count,
+       SUM(CASE WHEN st.durum = 3 THEN 1 ELSE 0 END) AS confirmed,
+       SUM(CASE WHEN st.durum IN (0, 1) THEN 1 ELSE 0 END) AS pending,
+       SUM(CASE WHEN st.durum = 2 THEN 1 ELSE 0 END) AS expired,
+       SUM(CASE WHEN st.durum = 4 THEN 1 ELSE 0 END) AS cancelled,
+       SUM(CASE WHEN st.durum = 3 THEN {$tutar} ELSE 0 END) AS confirmed_total_tl
+{$from}
+  AND ISNULL(k.promotionCode, '') <> ''
+GROUP BY k.promotionCode";
+
+        // promotionCodes tablosu her kurulumda olmayabilir; yoksa sadece rezervasyondaki kodlar döner
+        if ($this->objectExists('dbo.promotionCodes', 'U')) {
+            $sql = "
+WITH promo_usage AS ({$usageSql})
+SELECT COALESCE(p.code, u.code) AS code,
+       CASE WHEN p.code IS NULL THEN 0 ELSE 1 END AS defined,
+       CONVERT(varchar(10), p.startDate, 23) AS start_date,
+       CONVERT(varchar(10), p.endDate, 23) AS end_date,
+       p.stock,
+       CAST(p.isPrice AS int) AS is_price,
+       p.value,
+       CASE WHEN GETDATE() BETWEEN p.startDate AND p.endDate AND ISNULL(p.stock, 0) > 0 THEN 1 ELSE 0 END AS is_active,
+       ISNULL(u.usage_count, 0) AS usage_count, ISNULL(u.confirmed, 0) AS confirmed, ISNULL(u.pending, 0) AS pending,
+       ISNULL(u.expired, 0) AS expired, ISNULL(u.cancelled, 0) AS cancelled,
+       ISNULL(u.confirmed_total_tl, 0) AS confirmed_total_tl
+  FROM (SELECT * FROM promotionCodes WHERE ISNULL(code, '') <> '') p
+  FULL OUTER JOIN promo_usage u ON u.code = p.code
+ ORDER BY ISNULL(u.usage_count, 0) DESC, COALESCE(p.code, u.code) ASC";
+        } else {
+            $sql = "
+WITH promo_usage AS ({$usageSql})
+SELECT u.code, 0 AS defined, NULL AS start_date, NULL AS end_date, NULL AS stock, NULL AS is_price, NULL AS value,
+       0 AS is_active, u.usage_count, u.confirmed, u.pending, u.expired, u.cancelled, u.confirmed_total_tl
+  FROM promo_usage u
+ ORDER BY u.usage_count DESC, u.code ASC";
+        }
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmt = $pdo->prepare("
+SELECT COUNT(*) AS total,
+       SUM(CASE WHEN ISNULL(k.promotionCode, '') <> '' THEN 1 ELSE 0 END) AS with_code
+{$from}");
+        $stmt->execute($params);
+        $totals = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $items = array_map(function (array $row): array {
+            $usage = (int) $row['usage_count'];
+            $confirmed = (int) $row['confirmed'];
+            return [
+                'code' => (string) $row['code'],
+                'defined' => (int) $row['defined'] === 1,
+                'start_date' => $row['start_date'],
+                'end_date' => $row['end_date'],
+                'stock' => $row['stock'] === null ? null : (int) $row['stock'],
+                'is_price' => $row['is_price'] === null ? null : (int) $row['is_price'] === 1,
+                'value' => $row['value'] === null ? null : (float) $row['value'],
+                'is_active' => (int) $row['is_active'] === 1,
+                'usage_count' => $usage,
+                'confirmed' => $confirmed,
+                'pending' => (int) $row['pending'],
+                'expired' => (int) $row['expired'],
+                'cancelled' => (int) $row['cancelled'],
+                'confirmed_rate' => $usage > 0 ? round($confirmed * 100 / $usage, 1) : 0,
+                'confirmed_total_tl' => $this->money($row['confirmed_total_tl']),
+            ];
+        }, $rows);
+
+        $total = (int) ($totals['total'] ?? 0);
+        $withCode = (int) ($totals['with_code'] ?? 0);
+        $this->response->success([
+            'items' => $items,
+            'meta' => [
+                'count' => count($items),
+                'start_date' => $startDate !== '' ? $startDate : null,
+                'end_date' => $endDate !== '' ? $endDate : null,
+                'total_reservations' => $total,
+                'promo_reservations' => $withCode,
+                'promo_share' => $total > 0 ? round($withCode * 100 / $total, 1) : 0,
+            ],
         ]);
     }
 
@@ -2994,20 +3113,20 @@ WHERE k.odeme = {$paymentType}
               {$villaWhereK}
         ";
 
-        // 5. table4Rapor (Günlük Tamamlanan Rezervasyon: son_durum_guncelleme)
+        // 5. table4Rapor (Günlük Tamamlanan Rezervasyon: islem_tarihi)
         $sql4 = "
             SELECT
-                DAY(k.son_durum_guncelleme) AS rDateDay,
-                MONTH(k.son_durum_guncelleme) AS rDateMonth,
-                YEAR(k.son_durum_guncelleme) AS rDateYear,
+                DAY(k.islem_tarihi) AS rDateDay,
+                MONTH(k.islem_tarihi) AS rDateMonth,
+                YEAR(k.islem_tarihi) AS rDateYear,
                 COUNT(k.id) AS rezAdet
             FROM dbo.kayitlar k
             INNER JOIN dbo.dolu d ON d.kayitid = k.id
             WHERE d.[Durum] = 3
-              AND YEAR(k.son_durum_guncelleme) = :cal_year
-              AND MONTH(k.son_durum_guncelleme) IN ({$monthInSql})
+              AND YEAR(k.islem_tarihi) = :cal_year
+              AND MONTH(k.islem_tarihi) IN ({$monthInSql})
               {$villaWhereK}
-            GROUP BY YEAR(k.son_durum_guncelleme), MONTH(k.son_durum_guncelleme), DAY(k.son_durum_guncelleme)
+            GROUP BY YEAR(k.islem_tarihi), MONTH(k.islem_tarihi), DAY(k.islem_tarihi)
         ";
 
         // 6. table2Rapor (Günlük Tahsilat, KK, Banka, Western: onaylanmaTarihi)
@@ -3046,7 +3165,7 @@ WHERE k.odeme = {$paymentType}
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 23) AS cikis_tarihi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.islem_tarihi), TRY_CONVERT(date, k.islem_tarihi, 120), TRY_CONVERT(date, k.islem_tarihi, 104), TRY_CONVERT(date, k.islem_tarihi, 103)), 23) AS islem_tarihi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, {$onayDateCase}), TRY_CONVERT(date, k.onaylanmaTarihi, 104), TRY_CONVERT(date, k.onaylanmaTarihi)), 23) AS onaylanma_tarihi,
-                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.son_durum_guncelleme), TRY_CONVERT(date, k.son_durum_guncelleme, 120), TRY_CONVERT(date, k.son_durum_guncelleme, 104), TRY_CONVERT(date, k.son_durum_guncelleme, 103)), 23) AS son_guncelleme_tarihi,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.islem_tarihi), TRY_CONVERT(date, k.islem_tarihi, 120), TRY_CONVERT(date, k.islem_tarihi, 104), TRY_CONVERT(date, k.islem_tarihi, 103)), 23) AS son_guncelleme_tarihi,
                 ISNULL(TRY_CONVERT(int, d.[Durum]), 0) AS kayit_durum,
                 ISNULL(TRY_CONVERT(int, k.odeme), 0) AS odeme_sekli,
                 ISNULL(TRY_CONVERT(int, k.yetiskin), 0) AS yetiskin,
