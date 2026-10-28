@@ -230,10 +230,11 @@ final class ReservationDocumentsController extends Controller
         $templateName = trim((string) $row['TemplateName']);
 
         $kayitlarColumns = [];
-        $stmt = $pdo->prepare("SELECT LOWER(COLUMN_NAME) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'kayitlar'");
+        // LOWER() SQL'de yapilmaz: Turkce collation'da 'I' -> 'ı' olur; kucuk harfe cevirme PHP'de.
+        $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'kayitlar'");
         $stmt->execute();
         foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $column) {
-            $kayitlarColumns[(string) $column] = true;
+            $kayitlarColumns[strtolower((string) $column)] = true;
         }
         $markContract = $contract && isset($kayitlarColumns['sozlesme']) && isset($kayitlarColumns['sozlesme_send_date']);
 
