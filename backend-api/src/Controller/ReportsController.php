@@ -77,8 +77,9 @@ SELECT
         AND d.durum IN (0, 1, 3)) AS bugun_rez_adet,
     (SELECT ISNULL(SUM(k.tutar * ISNULL(k.kur, 1)), 0)
        FROM kayitlar k
+       INNER JOIN dolu d ON d.kayitid = k.id
       WHERE k.son_durum_guncelleme >= t.bugun AND k.son_durum_guncelleme < t.yarin
-        AND k.kayit_durum = 3) AS bugun_on_odeme,
+        AND d.durum = 3) AS bugun_on_odeme,
     (SELECT ISNULL(SUM(ISNULL(TRY_CONVERT(float, dbo.fnTemizle(k.toplam_tutar)), 0) * ISNULL(k.kur, 1)), 0)
        FROM kayitlar k
        INNER JOIN dolu d ON d.kayitid = k.id
@@ -155,17 +156,18 @@ FROM (SELECT CAST(GETDATE() AS date) AS bugun, DATEADD(day, 1, CAST(GETDATE() AS
 
         $sql = "
 SELECT
-    ISNULL(SUM(CASE WHEN k.kayit_durum IN (0, 1, 3) AND {$inRange} THEN 1 ELSE 0 END), 0) AS rez_adet,
+    ISNULL(SUM(CASE WHEN d.durum IN (0, 1, 3) AND {$inRange} THEN 1 ELSE 0 END), 0) AS rez_adet,
     ISNULL(SUM(CASE WHEN {$inRange} THEN 1 ELSE 0 END), 0) AS gelen_rez,
-    ISNULL(SUM(CASE WHEN k.kayit_durum = 3 THEN {$toplamTutar} * {$tl} ELSE 0 END), 0) AS toplam_ciro,
-    ISNULL(SUM(CASE WHEN k.kayit_durum = 3 THEN k.tutar * {$tl} ELSE 0 END), 0) AS toplam_on_odeme,
-    ISNULL(SUM(CASE WHEN k.kayit_durum = {$deleted} THEN 1 ELSE 0 END), 0) AS silinen_rez,
-    ISNULL(SUM(CASE WHEN k.kayit_durum = 3 THEN 1 ELSE 0 END), 0) AS kesinlesen_rez,
-    ISNULL(SUM(CASE WHEN k.kayit_durum = 4 THEN 1 ELSE 0 END), 0) AS iptal_rez,
-    ISNULL(SUM(CASE WHEN k.kayit_durum = 3 THEN ({$toplamTutar} / 100 * k.kazancorani) * {$tl} ELSE 0 END), 0) AS toplam_komisyon,
-    ISNULL(SUM(CASE WHEN k.kayit_durum = 1 THEN 1 ELSE 0 END), 0) AS odeme_bekleyen_adet,
-    ISNULL(SUM(CASE WHEN k.kayit_durum = 1 THEN k.tutar * {$tl} ELSE 0 END), 0) AS odeme_bekleyen_toplam
+    ISNULL(SUM(CASE WHEN d.durum = 3 THEN {$toplamTutar} * {$tl} ELSE 0 END), 0) AS toplam_ciro,
+    ISNULL(SUM(CASE WHEN d.durum = 3 THEN k.tutar * {$tl} ELSE 0 END), 0) AS toplam_on_odeme,
+    ISNULL(SUM(CASE WHEN d.durum = {$deleted} THEN 1 ELSE 0 END), 0) AS silinen_rez,
+    ISNULL(SUM(CASE WHEN d.durum = 3 THEN 1 ELSE 0 END), 0) AS kesinlesen_rez,
+    ISNULL(SUM(CASE WHEN d.durum = 4 THEN 1 ELSE 0 END), 0) AS iptal_rez,
+    ISNULL(SUM(CASE WHEN d.durum = 3 THEN ({$toplamTutar} / 100 * k.kazancorani) * {$tl} ELSE 0 END), 0) AS toplam_komisyon,
+    ISNULL(SUM(CASE WHEN d.durum = 1 THEN 1 ELSE 0 END), 0) AS odeme_bekleyen_adet,
+    ISNULL(SUM(CASE WHEN d.durum = 1 THEN k.tutar * {$tl} ELSE 0 END), 0) AS odeme_bekleyen_toplam
 FROM kayitlar k
+INNER JOIN dolu d ON d.kayitid = k.id
 WHERE {$filterColumn} >= {$range['start']} AND {$filterColumn} < {$range['end']}";
 
         $row = $this->fetchOne($sql, []);
@@ -2931,11 +2933,12 @@ WHERE k.odeme = {$paymentType}
                 MONTH({$calDateExpr}) AS rDateMonth,
                 YEAR({$calDateExpr}) AS rDateYear,
                 COUNT(k.id) AS RezAdet,
-                SUM(CASE WHEN k.kayit_durum = 3 THEN 1 ELSE 0 END) AS KesinRez,
-                SUM(CASE WHEN k.kayit_durum = 3 THEN 0 + ISNULL(TRY_CONVERT(int, k.yetiskin), 0) + ISNULL(TRY_CONVERT(int, k.cocuk), 0) ELSE 0 END) AS KesinPax,
-                SUM(CASE WHEN k.kayit_durum = 3 THEN ISNULL(TRY_CONVERT(float, ko.toplam_tutar), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS KesinCiro,
-                SUM(CASE WHEN k.kayit_durum = 3 THEN ISNULL(TRY_CONVERT(float, ko.kazanc_tutari), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS KesinKar
+                SUM(CASE WHEN d.[Durum] = 3 THEN 1 ELSE 0 END) AS KesinRez,
+                SUM(CASE WHEN d.[Durum] = 3 THEN 0 + ISNULL(TRY_CONVERT(int, k.yetiskin), 0) + ISNULL(TRY_CONVERT(int, k.cocuk), 0) ELSE 0 END) AS KesinPax,
+                SUM(CASE WHEN d.[Durum] = 3 THEN ISNULL(TRY_CONVERT(float, ko.toplam_tutar), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS KesinCiro,
+                SUM(CASE WHEN d.[Durum] = 3 THEN ISNULL(TRY_CONVERT(float, ko.kazanc_tutari), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS KesinKar
             FROM dbo.kayitlar k
+            INNER JOIN dbo.dolu d ON d.kayitid = k.id
             INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
             INNER JOIN dbo.homes h ON h.id = k.evid
             WHERE YEAR({$calDateExpr}) = :cal_year
@@ -2953,7 +2956,8 @@ WHERE k.odeme = {$paymentType}
                 YEAR(k.rez_tarihi) AS rDateYear,
                 COUNT(k.id) AS rezAdet
             FROM dbo.kayitlar k
-            WHERE k.kayit_durum = 3
+            INNER JOIN dbo.dolu d ON d.kayitid = k.id
+            WHERE d.[Durum] = 3
               AND YEAR(k.rez_tarihi) = :cal_year
               AND MONTH(k.rez_tarihi) IN ({$monthInSql})
               {$villaWhereK}
@@ -2968,7 +2972,8 @@ WHERE k.odeme = {$paymentType}
                 YEAR(k.gelecek_tarih) AS rDateYear,
                 COUNT(k.id) AS rezAdet
             FROM dbo.kayitlar k
-            WHERE k.kayit_durum = 3
+            INNER JOIN dbo.dolu d ON d.kayitid = k.id
+            WHERE d.[Durum] = 3
               AND YEAR(k.gelecek_tarih) = :cal_year
               AND MONTH(k.gelecek_tarih) IN ({$monthInSql})
               {$villaWhereK}
@@ -2982,7 +2987,8 @@ WHERE k.odeme = {$paymentType}
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.rez_tarihi), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103)), 23) AS rez_date,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 23) AS gelecek_date
             FROM dbo.kayitlar k
-            WHERE k.kayit_durum = 3
+            INNER JOIN dbo.dolu d ON d.kayitid = k.id
+            WHERE d.[Durum] = 3
               AND COALESCE(TRY_CONVERT(date, k.rez_tarihi), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103)) <= :cal_maxDate
               AND COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)) >= :cal_minDate
               {$villaWhereK}
@@ -2996,7 +3002,8 @@ WHERE k.odeme = {$paymentType}
                 YEAR(k.son_durum_guncelleme) AS rDateYear,
                 COUNT(k.id) AS rezAdet
             FROM dbo.kayitlar k
-            WHERE k.kayit_durum = 3
+            INNER JOIN dbo.dolu d ON d.kayitid = k.id
+            WHERE d.[Durum] = 3
               AND YEAR(k.son_durum_guncelleme) = :cal_year
               AND MONTH(k.son_durum_guncelleme) IN ({$monthInSql})
               {$villaWhereK}
@@ -3010,14 +3017,15 @@ WHERE k.odeme = {$paymentType}
                 DAY({$onayDateCase}) AS rDateDay,
                 MONTH({$onayDateCase}) AS rDateMonth,
                 YEAR({$onayDateCase}) AS rDateYear,
-                SUM(CASE WHEN k.kayit_durum = 3 THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS Tahsilat,
-                SUM(CASE WHEN k.kayit_durum = 3 AND k.odeme = 1 THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS TahsilatKK,
-                SUM(CASE WHEN k.kayit_durum = 3 AND NOT k.odeme IN (1, 3) THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS TahsilatHV,
-                SUM(CASE WHEN k.kayit_durum = 3 AND k.odeme = 3 THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS TahsilatHW
+                SUM(CASE WHEN d.[Durum] = 3 THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS Tahsilat,
+                SUM(CASE WHEN d.[Durum] = 3 AND k.odeme = 1 THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS TahsilatKK,
+                SUM(CASE WHEN d.[Durum] = 3 AND NOT k.odeme IN (1, 3) THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS TahsilatHV,
+                SUM(CASE WHEN d.[Durum] = 3 AND k.odeme = 3 THEN ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) ELSE 0 END) AS TahsilatHW
             FROM dbo.kayitlar k
+            INNER JOIN dbo.dolu d ON d.kayitid = k.id
             INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
             INNER JOIN dbo.homes h ON h.id = k.evid
-            WHERE k.kayit_durum = 3
+            WHERE d.[Durum] = 3
               AND NOT ISNULL(k.onaylanmaTarihi, '') = ''
               AND YEAR({$onayDateCase}) = :cal_year
               AND MONTH({$onayDateCase}) IN ({$monthInSql})
@@ -3039,7 +3047,7 @@ WHERE k.odeme = {$paymentType}
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.islem_tarihi), TRY_CONVERT(date, k.islem_tarihi, 120), TRY_CONVERT(date, k.islem_tarihi, 104), TRY_CONVERT(date, k.islem_tarihi, 103)), 23) AS islem_tarihi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, {$onayDateCase}), TRY_CONVERT(date, k.onaylanmaTarihi, 104), TRY_CONVERT(date, k.onaylanmaTarihi)), 23) AS onaylanma_tarihi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.son_durum_guncelleme), TRY_CONVERT(date, k.son_durum_guncelleme, 120), TRY_CONVERT(date, k.son_durum_guncelleme, 104), TRY_CONVERT(date, k.son_durum_guncelleme, 103)), 23) AS son_guncelleme_tarihi,
-                ISNULL(TRY_CONVERT(int, k.kayit_durum), 0) AS kayit_durum,
+                ISNULL(TRY_CONVERT(int, d.[Durum]), 0) AS kayit_durum,
                 ISNULL(TRY_CONVERT(int, k.odeme), 0) AS odeme_sekli,
                 ISNULL(TRY_CONVERT(int, k.yetiskin), 0) AS yetiskin,
                 ISNULL(TRY_CONVERT(int, k.cocuk), 0) AS cocuk,
@@ -3047,9 +3055,10 @@ WHERE k.odeme = {$paymentType}
                 ISNULL(TRY_CONVERT(float, ko.on_odeme), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) AS on_odeme,
                 ISNULL(TRY_CONVERT(float, ko.kazanc_tutari), 0) * ISNULL(TRY_CONVERT(float, ko.kur), 1) AS kazanc
             FROM dbo.kayitlar k
+            INNER JOIN dbo.dolu d ON d.kayitid = k.id
             INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
             INNER JOIN dbo.homes h ON h.id = k.evid
-            WHERE k.kayit_durum = 3
+            WHERE d.[Durum] = 3
               AND YEAR({$calDateExpr}) = :cal_year
               AND MONTH({$calDateExpr}) IN ({$monthInSql})
               {$villaWhereH}
