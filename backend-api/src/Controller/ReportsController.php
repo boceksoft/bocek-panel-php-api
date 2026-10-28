@@ -2994,20 +2994,20 @@ WHERE k.odeme = {$paymentType}
               {$villaWhereK}
         ";
 
-        // 5. table4Rapor (Günlük Tamamlanan Rezervasyon: son_durum_guncelleme)
+        // 5. table4Rapor (Günlük Tamamlanan Rezervasyon: islem_tarihi)
         $sql4 = "
             SELECT
-                DAY(k.son_durum_guncelleme) AS rDateDay,
-                MONTH(k.son_durum_guncelleme) AS rDateMonth,
-                YEAR(k.son_durum_guncelleme) AS rDateYear,
+                DAY(k.islem_tarihi) AS rDateDay,
+                MONTH(k.islem_tarihi) AS rDateMonth,
+                YEAR(k.islem_tarihi) AS rDateYear,
                 COUNT(k.id) AS rezAdet
             FROM dbo.kayitlar k
             INNER JOIN dbo.dolu d ON d.kayitid = k.id
             WHERE d.[Durum] = 3
-              AND YEAR(k.son_durum_guncelleme) = :cal_year
-              AND MONTH(k.son_durum_guncelleme) IN ({$monthInSql})
+              AND YEAR(k.islem_tarihi) = :cal_year
+              AND MONTH(k.islem_tarihi) IN ({$monthInSql})
               {$villaWhereK}
-            GROUP BY YEAR(k.son_durum_guncelleme), MONTH(k.son_durum_guncelleme), DAY(k.son_durum_guncelleme)
+            GROUP BY YEAR(k.islem_tarihi), MONTH(k.islem_tarihi), DAY(k.islem_tarihi)
         ";
 
         // 6. table2Rapor (Günlük Tahsilat, KK, Banka, Western: onaylanmaTarihi)
@@ -3046,7 +3046,7 @@ WHERE k.odeme = {$paymentType}
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 23) AS cikis_tarihi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.islem_tarihi), TRY_CONVERT(date, k.islem_tarihi, 120), TRY_CONVERT(date, k.islem_tarihi, 104), TRY_CONVERT(date, k.islem_tarihi, 103)), 23) AS islem_tarihi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, {$onayDateCase}), TRY_CONVERT(date, k.onaylanmaTarihi, 104), TRY_CONVERT(date, k.onaylanmaTarihi)), 23) AS onaylanma_tarihi,
-                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.son_durum_guncelleme), TRY_CONVERT(date, k.son_durum_guncelleme, 120), TRY_CONVERT(date, k.son_durum_guncelleme, 104), TRY_CONVERT(date, k.son_durum_guncelleme, 103)), 23) AS son_guncelleme_tarihi,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.islem_tarihi), TRY_CONVERT(date, k.islem_tarihi, 120), TRY_CONVERT(date, k.islem_tarihi, 104), TRY_CONVERT(date, k.islem_tarihi, 103)), 23) AS son_guncelleme_tarihi,
                 ISNULL(TRY_CONVERT(int, d.[Durum]), 0) AS kayit_durum,
                 ISNULL(TRY_CONVERT(int, k.odeme), 0) AS odeme_sekli,
                 ISNULL(TRY_CONVERT(int, k.yetiskin), 0) AS yetiskin,
