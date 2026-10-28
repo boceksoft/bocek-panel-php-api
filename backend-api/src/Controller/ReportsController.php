@@ -78,7 +78,7 @@ SELECT
     (SELECT ISNULL(SUM(k.tutar * ISNULL(k.kur, 1)), 0)
        FROM kayitlar k
        INNER JOIN dolu d ON d.kayitid = k.id
-      WHERE k.son_durum_guncelleme >= t.bugun AND k.son_durum_guncelleme < t.yarin
+      WHERE k.islem_tarihi >= t.bugun AND k.islem_tarihi < t.yarin
         AND d.durum = 3) AS bugun_on_odeme,
     (SELECT ISNULL(SUM(ISNULL(TRY_CONVERT(float, dbo.fnTemizle(k.toplam_tutar)), 0) * ISNULL(k.kur, 1)), 0)
        FROM kayitlar k
@@ -136,10 +136,10 @@ FROM (SELECT CAST(GETDATE() AS date) AS bugun, DATEADD(day, 1, CAST(GETDATE() AS
             throw new HttpException('dateType 0 (giriş) veya 1 (işlem) olmalı.', 'VALIDATION_ERROR', 422);
         }
 
-        // İşlem tarihine göre: kayıtlar son durum güncellemesine göre süzülür, gelen rezervasyon
-        // sayısı ise işlem tarihine göre sayılır. Giriş tarihine göre: ikisi de giriş tarihidir.
+        // İşlem tarihine göre: kayıtlar ve gelen rezervasyon sayısı işlem tarihine göre.
+        // Giriş tarihine göre: ikisi de giriş tarihidir.
         if ($dateType === self::DATE_TYPE_TRANSACTION) {
-            $filterColumn = 'k.son_durum_guncelleme';
+            $filterColumn = 'k.islem_tarihi';
             $countColumn = 'k.islem_tarihi';
         } else {
             $filterColumn = 'k.rez_tarihi';
@@ -197,7 +197,7 @@ WHERE {$filterColumn} >= {$range['start']} AND {$filterColumn} < {$range['end']}
     /**
      * Günlük talep ve fırsat dağılımı (potansiyel rapor). Tutarlar rezervasyon kuru ile TL'dir.
      *   Talep/potansiyel: o gün açılan her rezervasyon kaydı (kayitlar.islem_tarihi).
-     *   Gerçekleşen/kaçan: o gün durumu değişen kayıtlar (kayitlar.son_durum_guncelleme), panel raporu gibi;
+     *   Gerçekleşen/kaçan: o gün açılan kayıtlar (kayitlar.islem_tarihi);
      *   gerçekleşen dolu.durum 3, kaçan 2 (süresi doldu) + 4 (iptal) + silinen. Önceki günlerin talepleri de gelir.
      *
      * @Get("potential")
@@ -260,10 +260,10 @@ SELECT
 WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}{$filter}
 GROUP BY CAST(k.islem_tarihi AS date)";
 
-        // Sonuçlar: onaylandığı / kaçtığı (son durum değişikliği) güne göre.
+        // Sonuçlar: işlem tarihine göre.
         $resultSql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST(k.islem_tarihi AS date), 23) AS gun,
     SUM(CASE WHEN {$durum} = 3 THEN 1 ELSE 0 END) AS gerceklesen,
     SUM(CASE WHEN {$durum} = 3 THEN {$gece} ELSE 0 END) AS gerceklesen_gece,
     SUM(CASE WHEN {$durum} = 3 THEN {$tutar} ELSE 0 END) AS gerceklesen_ciro,
@@ -271,9 +271,9 @@ SELECT
     SUM(CASE WHEN {$lost} THEN {$tutar} ELSE 0 END) AS kacan_ciro,
     SUM(CASE WHEN {$durum} = 2 THEN 1 ELSE 0 END) AS suresi_dolan
 {$from}
-WHERE k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}
+WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}
   AND ({$durum} = 3 OR {$lost}){$filter}
-GROUP BY CAST(k.son_durum_guncelleme AS date)";
+GROUP BY CAST(k.islem_tarihi AS date)";
 
         $byDay = [];
         foreach ([$requestSql, $resultSql] as $sql) {
@@ -344,7 +344,7 @@ GROUP BY CAST(k.son_durum_guncelleme AS date)";
 
         $sql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST(k.islem_tarihi AS date), 23) AS gun,
     k.evid,
     CONVERT(varchar(10), CAST(k.rez_tarihi AS date), 23) AS giris,
     CONVERT(varchar(10), CAST(k.gelecek_tarih AS date), 23) AS cikis,
@@ -369,7 +369,7 @@ OUTER APPLY (
        AND CAST(k.rez_tarihi AS date) BETWEEN TRY_CONVERT(date, s.tarih1, 104) AND TRY_CONVERT(date, s.tarih2, 104)
      ORDER BY s.id DESC
 ) AS sz
-WHERE k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}
+WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}
   AND {$lost}{$filter}";
 
         $hasShortStayFunction = $this->objectExists('dbo.kisasureli3', 'IF') || $this->objectExists('dbo.kisasureli3', 'TF');
