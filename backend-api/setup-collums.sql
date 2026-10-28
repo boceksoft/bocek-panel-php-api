@@ -4225,7 +4225,7 @@ BEGIN
         DECLARE @evsahibiKalan money;
 
         select top 1 
-            @satisbedeli                    = dbo.fnTemizle((case when isnull(eskifiyat,0)=0 then toplam_tutar else eskifiyat end)),
+            @satisbedeli                    = dbo.fnTemizle((case when isnull(nullif(ltrim(rtrim(eskifiyat)),''''),''0'')=''0'' then toplam_tutar else eskifiyat end)),
             @indirime_evsahibi              = isnull(indirimevsahibi,0),
             @toplamtutar                    = dbo.fnTemizle(toplam_tutar),
             @onodeme                        = dbo.fnTemizle(on_odeme),
@@ -4237,8 +4237,8 @@ BEGIN
             @doviz                          = isnull(doviz,''tl''),
             @kur                            = (case when isnull(doviz,''tl'')=''tl'' then 1 else isnull(kur,1) end),
             @kayitid                        = id,
-            @kazancorani                    = kazancorani,
-            @kayitlarKar                    = kar
+            @kazancorani                    = isnull(TRY_CONVERT(int, kazancorani),0),
+            @kayitlarKar                    = dbo.fnTemizle(kar)
         from inserted i;
 
         if @kayitid is not null 
@@ -4285,7 +4285,7 @@ BEGIN
             SET @indirim                        = (case when @indirim=-1 or @indirim=1 then 0 else @indirim end);
 
             SET @ekstraUcretler                 = @NEWtemizlik+@NEWelektrik+@NEWisitma;
-            SET @kazancTutari                   = (case when not isnull(@kayitlarKar,'''')='''' then convert(money,@kayitlarKar) else @NEWsatisbedeli/100*@kazancorani-(case when @indirime_evsahibi = 0 then @indirim else 0 end) end);
+            SET @kazancTutari                   = (case when not isnull(@kayitlarKar,'''')='''' then isnull(TRY_CONVERT(money,@kayitlarKar),0) else @NEWsatisbedeli/100*@kazancorani-(case when @indirime_evsahibi = 0 then @indirim else 0 end) end);
             SET @evsahibiKazanc                 = @NEWsatisbedeli-@kazancTutari;
             SET @evsahibiKalan                  = @NEWonodeme-@kazancTutari;
 
@@ -4357,7 +4357,7 @@ BEGIN
     DECLARE cur_kayitlar CURSOR LOCAL FAST_FORWARD FOR
         SELECT 
             k.id,
-            dbo.fnTemizle(case when isnull(k.eskifiyat,0)=0 then k.toplam_tutar else k.eskifiyat end),
+            dbo.fnTemizle(case when isnull(nullif(ltrim(rtrim(k.eskifiyat)),''),'0')='0' then k.toplam_tutar else k.eskifiyat end),
             isnull(k.indirimevsahibi,0),
             dbo.fnTemizle(k.toplam_tutar),
             dbo.fnTemizle(k.on_odeme),
@@ -4368,7 +4368,7 @@ BEGIN
             isnull(k.doviz,'tl'),
             (case when isnull(k.doviz,'tl')='tl' then 1 else isnull(k.kur,1) end),
             isnull(TRY_CONVERT(int, k.kazancorani), 0),
-            k.kar
+            dbo.fnTemizle(k.kar)
         FROM dbo.kayitlar k;
 
     OPEN cur_kayitlar;
