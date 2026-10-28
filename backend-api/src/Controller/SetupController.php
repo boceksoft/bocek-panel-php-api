@@ -554,10 +554,11 @@ GO
     private function missingColumns(string $schema, string $table, array $expected): array
     {
         $stmt = $this->db->pdo()->prepare(
-            'SELECT LOWER(COLUMN_NAME) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table'
+            // LOWER() SQL'de yapilmaz: Turkce collation'da 'I' -> 'ı' olur (kayitlarId -> kayitlarıd) ve kolon eksik sanilir.
+            'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table'
         );
         $stmt->execute([':schema' => $schema, ':table' => $table]);
-        $existing = array_flip($stmt->fetchAll(\PDO::FETCH_COLUMN));
+        $existing = array_flip(array_map('strtolower', $stmt->fetchAll(\PDO::FETCH_COLUMN)));
 
         return array_values(array_filter($expected, function (string $column) use ($existing): bool {
             return !isset($existing[strtolower($column)]);
