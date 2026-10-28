@@ -18,6 +18,7 @@ use PDO;
  *   GET /backend-api/reports/today-cancelled -> bugün iptal edilen / süresi dolan / silinen rezervasyonlar
  *   GET /backend-api/reports/potential       -> günlük talep ve fırsat dağılımı (potansiyel rapor)
  *   GET /backend-api/reports/potential-options -> potansiyel raporu villa/bölge filtreleri
+ *   GET /backend-api/reports/promotion-codes -> promosyon kodları (değer, stok, geçerlilik) ve rezervasyonlardaki kullanımı
  *   GET /backend-api/reports/demand-periods  -> en çok talep alan dönemler, lead time ve gece dağılımı
  *   GET /backend-api/reports/occupancy       -> verilen konaklama aralıkları için portföy doluluğu (%)
  *   GET /backend-api/reports/monthlyperformance -> aylık performans raporu
@@ -712,6 +713,124 @@ SELECT r.i, COUNT(DISTINCT d.emlak) AS dolu_villa
                 ];
             }, $villas),
             'regions' => $regions,
+        ]);
+    }
+
+    /**
+     * Promosyon kodları ve kullanımı: kod tanımı (değer, tutar/yüzde, stok, geçerlilik) ile rezervasyonlardaki
+     * (kayitlar.promotionCode) kullanım sayısı, son duruma göre dağılımı ve onaylıların TL toplamı.
+     * Tarih verilirse kullanım o aralıkta YAPILAN rezervasyonlardan (islem_tarihi) sayılır, verilmezse tüm zamanlar.
+     * Tanımı silinmiş ama rezervasyonda geçen kodlar da listelenir (defined=false). Silinen rezervasyonlar sayılmaz.
+     *
+     * @Get("promotion-codes")
+     * @query startDate string Rezervasyon tarihi başlangıcı (Y-m-d, opsiyonel)
+     * @query endDate string Rezervasyon tarihi bitişi (Y-m-d, dahil, opsiyonel)
+     */
+    public function promotionCodes(): void
+    {
+        $pdo = $this->db->pdo();
+        $startDate = $this->parseDate((string) $this->request->query('startDate', ''), '');
+        $endDate = $this->parseDate((string) $this->request->query('endDate', ''), '');
+
+        $where = ['ISNULL(st.durum, -1) <> ' . $this->deletedStatus()];
+        $params = [];
+        if ($startDate !== '') {
+            $where[] = 'CONVERT(date, k.islem_tarihi, 103) >= CONVERT(date, :startDate, 23)';
+            $params['startDate'] = $startDate;
+        }
+        if ($endDate !== '') {
+            $where[] = 'CONVERT(date, k.islem_tarihi, 103) <= CONVERT(date, :endDate, 23)';
+            $params['endDate'] = $endDate;
+        }
+        $from = "FROM kayitlar k
+OUTER APPLY (SELECT TOP 1 dolu.durum FROM dolu WHERE dolu.kayitid = k.id ORDER BY dolu.id DESC) AS st
+WHERE " . implode("\n  AND ", $where);
+        $tutar = "ISNULL(TRY_CONVERT(float, dbo.fnTemizle(k.toplam_tutar)), 0) * (CASE WHEN k.doviz = 'tl' THEN 1 ELSE ISNULL(k.kur, 1) END)";
+
+        $usageSql = "
+SELECT k.promotionCode AS code,
+       COUNT(*) AS usage_count,
+       SUM(CASE WHEN st.durum = 3 THEN 1 ELSE 0 END) AS confirmed,
+       SUM(CASE WHEN st.durum IN (0, 1) THEN 1 ELSE 0 END) AS pending,
+       SUM(CASE WHEN st.durum = 2 THEN 1 ELSE 0 END) AS expired,
+       SUM(CASE WHEN st.durum = 4 THEN 1 ELSE 0 END) AS cancelled,
+       SUM(CASE WHEN st.durum = 3 THEN {$tutar} ELSE 0 END) AS confirmed_total_tl
+{$from}
+  AND ISNULL(k.promotionCode, '') <> ''
+GROUP BY k.promotionCode";
+
+        // promotionCodes tablosu her kurulumda olmayabilir; yoksa sadece rezervasyondaki kodlar döner
+        if ($this->objectExists('dbo.promotionCodes', 'U')) {
+            $sql = "
+WITH promo_usage AS ({$usageSql})
+SELECT COALESCE(p.code, u.code) AS code,
+       CASE WHEN p.code IS NULL THEN 0 ELSE 1 END AS defined,
+       CONVERT(varchar(10), p.startDate, 23) AS start_date,
+       CONVERT(varchar(10), p.endDate, 23) AS end_date,
+       p.stock,
+       CAST(p.isPrice AS int) AS is_price,
+       p.value,
+       CASE WHEN GETDATE() BETWEEN p.startDate AND p.endDate AND ISNULL(p.stock, 0) > 0 THEN 1 ELSE 0 END AS is_active,
+       ISNULL(u.usage_count, 0) AS usage_count, ISNULL(u.confirmed, 0) AS confirmed, ISNULL(u.pending, 0) AS pending,
+       ISNULL(u.expired, 0) AS expired, ISNULL(u.cancelled, 0) AS cancelled,
+       ISNULL(u.confirmed_total_tl, 0) AS confirmed_total_tl
+  FROM (SELECT * FROM promotionCodes WHERE ISNULL(code, '') <> '') p
+  FULL OUTER JOIN promo_usage u ON u.code = p.code
+ ORDER BY ISNULL(u.usage_count, 0) DESC, COALESCE(p.code, u.code) ASC";
+        } else {
+            $sql = "
+WITH promo_usage AS ({$usageSql})
+SELECT u.code, 0 AS defined, NULL AS start_date, NULL AS end_date, NULL AS stock, NULL AS is_price, NULL AS value,
+       0 AS is_active, u.usage_count, u.confirmed, u.pending, u.expired, u.cancelled, u.confirmed_total_tl
+  FROM promo_usage u
+ ORDER BY u.usage_count DESC, u.code ASC";
+        }
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmt = $pdo->prepare("
+SELECT COUNT(*) AS total,
+       SUM(CASE WHEN ISNULL(k.promotionCode, '') <> '' THEN 1 ELSE 0 END) AS with_code
+{$from}");
+        $stmt->execute($params);
+        $totals = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $items = array_map(function (array $row): array {
+            $usage = (int) $row['usage_count'];
+            $confirmed = (int) $row['confirmed'];
+            return [
+                'code' => (string) $row['code'],
+                'defined' => (int) $row['defined'] === 1,
+                'start_date' => $row['start_date'],
+                'end_date' => $row['end_date'],
+                'stock' => $row['stock'] === null ? null : (int) $row['stock'],
+                'is_price' => $row['is_price'] === null ? null : (int) $row['is_price'] === 1,
+                'value' => $row['value'] === null ? null : (float) $row['value'],
+                'is_active' => (int) $row['is_active'] === 1,
+                'usage_count' => $usage,
+                'confirmed' => $confirmed,
+                'pending' => (int) $row['pending'],
+                'expired' => (int) $row['expired'],
+                'cancelled' => (int) $row['cancelled'],
+                'confirmed_rate' => $usage > 0 ? round($confirmed * 100 / $usage, 1) : 0,
+                'confirmed_total_tl' => $this->money($row['confirmed_total_tl']),
+            ];
+        }, $rows);
+
+        $total = (int) ($totals['total'] ?? 0);
+        $withCode = (int) ($totals['with_code'] ?? 0);
+        $this->response->success([
+            'items' => $items,
+            'meta' => [
+                'count' => count($items),
+                'start_date' => $startDate !== '' ? $startDate : null,
+                'end_date' => $endDate !== '' ? $endDate : null,
+                'total_reservations' => $total,
+                'promo_reservations' => $withCode,
+                'promo_share' => $total > 0 ? round($withCode * 100 / $total, 1) : 0,
+            ],
         ]);
     }
 
