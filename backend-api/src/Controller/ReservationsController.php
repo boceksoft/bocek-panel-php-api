@@ -24,6 +24,7 @@ final class ReservationsController extends Controller
      * durum=7: Ayar aciksa, logda 3 -> 4 gecisi bulunan halen iptal rezervasyonlar.
      * @query musteri string Müşteri adı/kelime araması
      * @query hizliArama int 1 ise sadece arama sonucu döner (üst bar araması): no, müşteri, villa, tarih, durum.
+     * @query sadeceToplam int 1 ise ayni filtrelerle sadece {total} doner (menu rozetleri).
      */
     public function index(): void
     {
@@ -190,6 +191,17 @@ final class ReservationsController extends Controller
 
         $whereSql = $where ? ('WHERE 1=1 AND ' . implode(' AND ', $where)) : 'WHERE 1=1';
 
+        // sadeceToplam=1: ayni filtrelerle sadece kayit sayisi (menu rozetleri); satir ve ciro hesaplanmaz.
+        if ($this->p('sadeceToplam') === '1') {
+            $stmt = $pdo->prepare($this->buildCountSql($whereSql, $useAcentaUsers, $kisibilgileri === '>' || $kisibilgileri === '='));
+            foreach ($params as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
+            $stmt->execute();
+            $this->response->success(['total' => (int) $stmt->fetchColumn()]);
+            return;
+        }
+
         $orderSql = 'ORDER BY kayitlar.id DESC';
 
         $sql = $this->buildSql(
@@ -291,7 +303,7 @@ final class ReservationsController extends Controller
                 kayitlar.id,
                 kayitlar.musteri AS musteri_adi,
                 homes.id AS home_id,
-                homes.baslik AS villa_adi,
+                " . $this->homeTitleSql('homes', 'homes.baslik') . " AS villa_adi,
                 ISNULL(homes.resim, '') AS villa_resim,
                 kayitlar.adi AS silinen_emlak_adi,
                 CONVERT(varchar(10), kayitlar.rez_tarihi, 104) AS giris_tarihi,
@@ -380,7 +392,7 @@ SELECT
     SUM(tutar.maliyet * tutar.kur_carpan) OVER() AS sumMaliyet,
     SUM(tutar.temizlik * tutar.kur_carpan) OVER() AS sumTemizlik,
     kayitlar.id, kayitlar.site, kayitlar.evid,
-    homes.id AS home_id, homes.baslik AS villa_adi, homes.baslik_s3 AS villa_adi_s3, homes.url AS villa_url,
+    homes.id AS home_id, " . $this->homeTitleSql('homes', 'homes.baslik') . " AS villa_adi, " . $this->homeTitleSql('homes', 'homes.baslik_s3') . " AS villa_adi_s3, homes.url AS villa_url,
     homes.kazancorani AS kazancorani_homes, homes.depozito AS ev_depozito,
     kayitlar.musteri AS musteri_adi,
     kayitlar.email AS email,
@@ -492,6 +504,32 @@ $orderSql
         }
 
         return $sql;
+    }
+
+    /**
+     * Liste sorgusuyla ayni satirlari sayar (sadeceToplam). Satir sayisini etkileyen join'ler
+     * (rate, sites, dolu INNER JOIN) ve WHERE'de kullanilan tablolar ayni kalir; ciro/alt sorgular yok.
+     */
+    private function buildCountSql(string $whereSql, bool $useAcentaUsers, bool $needKisi): string
+    {
+        $kisiSql = $needKisi
+            ? 'CROSS APPLY (SELECT COUNT(kb.id) AS total FROM kisi_bilgileri kb WHERE kb.siparis_kodu = kayitlar.id) AS kisi'
+            : '';
+        $acentaJoinSql = $useAcentaUsers
+            ? 'LEFT JOIN acenta_kayitlar a ON kayitlar.id = a.kayitId LEFT JOIN acenta_users au ON au.id = a.acentaId'
+            : '';
+
+        return "
+SELECT COUNT(*) AS total
+FROM kayitlar
+{$kisiSql}
+INNER JOIN rate ON rate.CurrencyName = ISNULL(kayitlar.doviz, 'tl')
+LEFT  JOIN homes ON kayitlar.evid = homes.id
+INNER JOIN sites ON sites.id = ISNULL(kayitlar.site, 1)
+LEFT  JOIN kanun7464 ON kanun7464.homeId = homes.id
+INNER JOIN dolu ON dolu.kayitid = kayitlar.id
+{$acentaJoinSql}
+{$whereSql}";
     }
 
     /**

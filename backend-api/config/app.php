@@ -9,6 +9,14 @@ declare(strict_types=1);
  */
 
 return [
+    // true: ilan detayinda birden fazla kapak fotografi secilebilir; homes.resim'e virgulle yazilir ("a.jpg,b.jpg,c.jpg").
+    // false (varsayilan): tek kapak. Villa Kiralama > Config ekranindan degistirilir.
+    'homes_two_cover_images' => false,
+
+    // true: villa adi donen yerlerde (ilan listesi, katalog, rezervasyonlar, raporlar...) ad yerine homes.evkodu gosterilir;
+    // evkodu bossa ad kullanilir. false (varsayilan): villa adi. Villa Kiralama > Config ekranindan degistirilir.
+    'homes_title_use_code' => false,
+
     // true: hata detayları yanıta eklenir. Canlıda false olmalı.
     'debug' => true,
 
@@ -263,6 +271,8 @@ return [
     // Panelden app.local.php icine yazilabilecek site-ozel ayarlar.
     // deploy_secret, github_token ve DB bilgileri bilerek burada yok.
     'editable_local_settings' => [
+        'homes_two_cover_images' => 'bool',
+        'homes_title_use_code' => 'bool',
         'guest_movements_home_id_column' => 'bool',
         'guest_movements_use_caretaker_owner_fallback' => 'bool',
         'links_search_page_url' => 'string',

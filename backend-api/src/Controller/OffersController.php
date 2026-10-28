@@ -24,10 +24,29 @@ final class OffersController extends Controller
      * @query site int Site kimliği (varsayılan 1)
      * @query page int Sayfa numarası (varsayılan 1)
      * @query per_page int Sayfa başına kayıt (varsayılan 50)
+     * @query sadeceYeniToplam int 1 ise sadece durumu "Yeni" (cevaplanmamis) teklif sayisini {total} doner (menu rozeti).
      */
     public function index(): void
     {
         $siteId  = $this->siteId();
+
+        if ((string) $this->request->query('sadeceYeniToplam', '') === '1') {
+            $pdo = $this->db->pdo();
+            $hasDurum = (int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.teklifler', 'durum') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
+            // Durum teklifler.durum kolonunda tutuluyorsa dogrudan ondan sayilir (redirects'e bakilmaz).
+            // Kolon yoksa eski hesap: cevap linki (redirects) olmayan teklifler; redirects bir kez okunur.
+            $stmt = $pdo->prepare($hasDurum
+                ? "SELECT COUNT(*) FROM dbo.teklifler t
+                   WHERE t.site = :site AND ISNULL(NULLIF(LTRIM(RTRIM(t.durum)), ''), N'Yeni') = N'Yeni'"
+                : 'SELECT COUNT(*) FROM dbo.teklifler t
+                   LEFT JOIN (SELECT DISTINCT teklifId FROM dbo.redirects WHERE teklifId IS NOT NULL) r ON r.teklifId = t.id
+                   WHERE t.site = :site AND r.teklifId IS NULL'
+            );
+            $stmt->bindValue(':site', $siteId, PDO::PARAM_INT);
+            $stmt->execute();
+            $this->response->success(['total' => (int) $stmt->fetchColumn()]);
+            return;
+        }
         $page    = max(1, (int) $this->request->query('page', 1));
         $perPage = max(1, (int) $this->request->query('per_page', self::DEFAULT_PER_PAGE));
         $offset  = ($page - 1) * $perPage;

@@ -46,6 +46,14 @@ final class HomesManagementController extends Controller
         $imageColumn = 'h.' . $this->siteColumn('resim', $siteId);
         $depositColumn = 'h.' . $this->siteColumn('depozito', $siteId);
         $regionTitleColumn = 'd.' . $this->siteColumn('baslik', $siteId);
+        // WhatsApp grup adi: ilan detayindaki gibi whatsapp_grup, yoksa rez_takip_yeri_adi.
+        $whatsappColumn = "N''";
+        foreach (['whatsapp_grup', 'rez_takip_yeri_adi'] as $candidate) {
+            if ((int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.homes', '{$candidate}') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1) {
+                $whatsappColumn = "ISNULL(h.[{$candidate}], N'')";
+                break;
+            }
+        }
 
         $pageRaw = $this->p('page') !== '' ? $this->p('page') : $this->p('sayfa', '1');
         $allRows = strtolower($pageRaw) === 'tumu' || strtolower($this->p('per_page')) === 'tumu' || $this->p('per_page') === '0';
@@ -232,7 +240,7 @@ SELECT
     h.id,
     {$siteId} AS site_id,
     h.evkodu AS code,
-    {$titleColumn} AS title,
+    " . $this->homeTitleSql('h', $titleColumn) . " AS title,
     {$titleColumn} AS gavel_title,
     h.siralama AS sort_order, 
     {$imageColumn} AS image,
@@ -243,6 +251,7 @@ SELECT
     {$depositColumn} AS deposit_percentage,
     ISNULL(h.bakimciad, '') AS caretaker_name,
     ISNULL(h.bakimcitel, '') AS caretaker_phone,
+    {$whatsappColumn} AS whatsapp_group,
     " . $this->selectValue($activeColumn) . " AS active,
     " . $this->selectValue($showcaseColumn) . " AS showcase,
     " . $this->selectValue($favoriteColumn) . " AS favorite,
@@ -325,6 +334,7 @@ WHERE {$whereSql}
                 'deposit_percentage' => (float) $row['deposit_percentage'],
                 'caretaker_name' => (string) $row['caretaker_name'],
                 'caretaker_phone' => (string) $row['caretaker_phone'],
+                'whatsapp_group' => (string) $row['whatsapp_group'],
                 'active' => (bool) $row['active'],
                 'showcase' => (bool) $row['showcase'],
                 'favorite' => (bool) $row['favorite'],

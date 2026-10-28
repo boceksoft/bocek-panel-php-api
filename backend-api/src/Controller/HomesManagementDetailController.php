@@ -194,6 +194,8 @@ final class HomesManagementDetailController extends Controller
             'medyaBilgileri' => [
                 'resimler' => $this->resimler($images, $rs),
                 'videolar' => $this->filledValues($rs, ['video']),
+                // Birden fazla kapak secilebilir mi (config homes_two_cover_images; kapaliysa tek kapak).
+                'cokluKapak' => !empty($this->app['homes_two_cover_images']),
             ],
             'seoBilgileri' => [
                 'metaBaslik' => $this->firstValueFrom($rs, ['title']),

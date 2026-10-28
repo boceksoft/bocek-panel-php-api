@@ -594,10 +594,10 @@ ORDER BY COUNT(*) DESC, {$giris}")->fetchAll(PDO::FETCH_ASSOC);
 
         $villaRows = $pdo->query("
 SELECT CONVERT(varchar(10), {$giris}, 23) AS giris, CONVERT(varchar(10), {$cikis}, 23) AS cikis,
-       ISNULL(h.baslik, '') AS villa, COUNT(*) AS talep
+       ISNULL(" . $this->homeTitleSql('h', 'h.baslik') . ", '') AS villa, COUNT(*) AS talep
 " . str_replace('INNER JOIN dolu d ON d.kayitid = k.id', "INNER JOIN dolu d ON d.kayitid = k.id\nLEFT JOIN homes h ON h.id = k.evid", $base) . "
   AND (" . implode(' OR ', $pairs) . ")
-GROUP BY {$giris}, {$cikis}, h.baslik
+GROUP BY {$giris}, {$cikis}, h.baslik, h.evkodu
 ORDER BY COUNT(*) DESC")->fetchAll(PDO::FETCH_ASSOC);
         $villasByPeriod = [];
         foreach ($villaRows as $row) {
@@ -674,7 +674,7 @@ SELECT r.i, COUNT(DISTINCT d.emlak) AS dolu_villa
         $pdo = $this->db->pdo();
 
         $villas = $pdo->query(
-            "SELECT h.id, h.baslik, ISNULL(d.baslik, '') AS bolge, ISNULL(h.url, '') AS url
+            "SELECT h.id, " . $this->homeTitleSql('h', 'h.baslik') . " AS baslik, ISNULL(d.baslik, '') AS bolge, ISNULL(h.url, '') AS url
                FROM homes h
                LEFT JOIN destinations d ON d.id = h.emlak_bolgesi
               ORDER BY h.baslik ASC"
@@ -1042,7 +1042,7 @@ WHERE k.odeme = {$paymentType}
                 k.id,
                 k.site,
                 k.evid,
-                ISNULL(h.baslik, k.adi) AS villa_adi,
+                ISNULL(" . $this->homeTitleSql('h', 'h.baslik') . ", k.adi) AS villa_adi,
                 CONVERT(varchar(10), {$dateExpr}, 23) AS giris_tarihi,
                 CONVERT(varchar(10), {$date2Expr}, 23) AS cikis_tarihi,
                 CONVERT(varchar(10), {$islemDateExpr}, 23) AS islem_tarihi,
@@ -1838,7 +1838,7 @@ WHERE k.odeme = {$paymentType}
                 k.id,
                 k.site,
                 k.evid,
-                ISNULL(h.baslik, k.adi) AS villa_adi,
+                ISNULL(" . $this->homeTitleSql('h', 'h.baslik') . ", k.adi) AS villa_adi,
                 CONVERT(varchar(10), {$dateExpr}, 23) AS giris_tarihi,
                 CONVERT(varchar(10), {$date2Expr}, 23) AS cikis_tarihi,
                 CONVERT(varchar(10), {$islemDateExpr}, 23) AS islem_tarihi,
@@ -2968,7 +2968,7 @@ WHERE k.odeme = {$paymentType}
             SELECT
                 k.id,
                 k.evid,
-                ISNULL(h.baslik, k.adi) AS villa_adi,
+                ISNULL(" . $this->homeTitleSql('h', 'h.baslik') . ", k.adi) AS villa_adi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.rez_tarihi), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103)), 23) AS giris_tarihi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 23) AS cikis_tarihi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.islem_tarihi), TRY_CONVERT(date, k.islem_tarihi, 120), TRY_CONVERT(date, k.islem_tarihi, 104), TRY_CONVERT(date, k.islem_tarihi, 103)), 23) AS islem_tarihi,
@@ -3566,7 +3566,7 @@ WHERE k.odeme = {$paymentType}
             $stmt = $pdo->query('
                 SELECT
                     h.id,
-                    ISNULL(h.baslik, \'\') AS name,
+                    ISNULL(' . $this->homeTitleSql('h', 'h.baslik') . ', \'\') AS name,
                     ISNULL(h.gavelBelgeNo, \'\') AS code,
                     ISNULL(TRY_CONVERT(int, h.yatak_odasi), 0) AS roomCount,
                     d.baslik AS dest_name,
@@ -3608,7 +3608,7 @@ WHERE k.odeme = {$paymentType}
             return $villas;
         } catch (\Throwable $e) {
             try {
-                $stmt = $pdo->query('SELECT h.id, ISNULL(h.baslik, \'\') AS name FROM dbo.homes h ORDER BY h.baslik ASC');
+                $stmt = $pdo->query('SELECT h.id, ISNULL(' . $this->homeTitleSql('h', 'h.baslik') . ', \'\') AS name FROM dbo.homes h ORDER BY h.baslik ASC');
                 $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
                 $villas = [];
                 foreach ($rows as $r) {

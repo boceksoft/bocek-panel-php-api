@@ -230,7 +230,7 @@ SELECT
 
     h.id AS villa_id,
 
-    ISNULL(h.baslik, k.adi) AS villa_ismi,
+    ISNULL(" . $this->homeTitleSql('h', 'h.baslik') . ", k.adi) AS villa_ismi,
 
     h.url AS full_villa_url,
 

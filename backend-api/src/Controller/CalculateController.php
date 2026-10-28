@@ -579,7 +579,7 @@ SELECT
     CASE WHEN h.kur{$uzanti} > 0 THEN h.kur{$uzanti} ELSE 0 END AS kur,
     h.depozito{$depozitoSuffix} AS depozito,
     dbo.FnRandomSplit(h.resim{$uzanti}, ',') AS resim,
-    h.baslik{$uzanti} AS baslik,
+    " . $this->homeTitleSql('h', "h.baslik{$uzanti}") . " AS baslik,
     h.hasar{$uzanti} AS hasar,
     h.kazancorani{$uzanti} AS kazancorani,
     ISNULL(ToC.CurrencyName, h.doviz{$uzanti}) AS CurrencyName,
