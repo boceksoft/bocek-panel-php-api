@@ -23,6 +23,7 @@ use PDO;
  *   GET /backend-api/reports/monthlyperformance -> aylık performans raporu
  *   GET /backend-api/reports/paxperformance     -> misafir (pax) performans raporu
  *   GET /backend-api/reports/monthlyperformance/filters -> aylık performans / pax filtre seçenekleri
+ *   GET /backend-api/reports/slugs -> verilen emlak ID'lerinin slug listesi
  *
  * Panel karşılığı: rapor-yonetimi.asp. Sadece okuma yapar.
  * Silinme kodu siteye özeldir (ayar: reservation_deleted_status); yanıtta her zaman 5 döner.
@@ -2718,7 +2719,7 @@ WHERE k.odeme = {$paymentType}
      * @Get("calendar")
      * @query site int Site kimliği (varsayılan 1)
      * @query year int Raporlama yılı (varsayılan cari yıl)
-     * @query months string|array Ay veya aylar listesi (1-12, örn. 2,3 veya 'all')
+     * @query months string|array Ay veya aylar listesi (1-12, örn. 2,3 veya 'all'. Boş ise tüm yıl / 1-12)
      * @query villas string|array Villa ID'leri (virgülle ayrılmış veya 'all')
      * @query sqlx string Ham SQL çıktısı modu ('json', 'raw', 'template')
      */
@@ -2744,7 +2745,7 @@ WHERE k.odeme = {$paymentType}
             ?? $this->request->input('ay');
         $months = $this->parseIntList($monthsRaw);
         if ($months === []) {
-            $months = [(int) date('n')];
+            $months = range(1, 12);
         }
         sort($months);
 
@@ -3369,10 +3370,14 @@ WHERE k.odeme = {$paymentType}
             ];
         }
 
-        $monthTitleParts = array_map(function ($m) use ($monthUpperNames) {
-            return $monthUpperNames[$m] ?? '';
-        }, $months);
-        $periodTitle = implode(', ', array_filter($monthTitleParts)) . ' (' . count($calendarDays) . ' GÜN) ' . $year . ' Matrisi';
+        if (count($months) === 12) {
+            $periodTitle = 'TÜM YIL (' . count($calendarDays) . ' GÜN) ' . $year . ' Matrisi';
+        } else {
+            $monthTitleParts = array_map(function ($m) use ($monthUpperNames) {
+                return $monthUpperNames[$m] ?? '';
+            }, $months);
+            $periodTitle = implode(', ', array_filter($monthTitleParts)) . ' (' . count($calendarDays) . ' GÜN) ' . $year . ' Matrisi';
+        }
 
         $this->response->success([
             'title' => 'Takvim Görünüm Raporlama',
@@ -3435,6 +3440,121 @@ WHERE k.odeme = {$paymentType}
                 ['id' => 12, 'name' => 'Aralık'],
             ],
         ]);
+    }
+
+    /**
+     * Verilen emlak/villa ID'lerinin URL slug listesini döner.
+     *
+     * @Get("slugs")
+     * @Get("estate-slugs")
+     * @Get("estate/slugs")
+     * @Get("estates/slugs")
+     * @Get("villas/slugs")
+     * @query ids string|array Villa/emlak ID listesi (virgülle ayrılmış veya dizi: 101,102)
+     * @query estate string|array Alternatif emlak ID parametresi
+     * @query villas string|array Alternatif villa ID parametresi
+     * @query raw bool 1 ise sarmalayıcısız doğrudan JSON listesi döner
+     */
+    public function slugs(): void
+    {
+        $pdo = $this->db->pdo();
+
+        $rawIds = $this->request->query('ids')
+            ?? $this->request->input('ids')
+            ?? $this->request->query('estate')
+            ?? $this->request->input('estate')
+            ?? $this->request->query('estate_ids')
+            ?? $this->request->input('estate_ids')
+            ?? $this->request->query('emlak')
+            ?? $this->request->input('emlak')
+            ?? $this->request->query('villas')
+            ?? $this->request->input('villas')
+            ?? $this->request->query('villa_ids')
+            ?? $this->request->input('villa_ids')
+            ?? $this->request->query('id')
+            ?? $this->request->input('id');
+
+        $json = $this->request->json();
+        if ($rawIds === null && is_array($json) && isset($json[0])) {
+            $rawIds = $json;
+        }
+
+        $ids = $this->parseIntList($rawIds);
+
+        $params = [];
+        $where = [];
+
+        if ($ids !== []) {
+            $phs = [];
+            foreach ($ids as $idx => $idVal) {
+                $ph = ':estate_' . $idx;
+                $phs[] = $ph;
+                $params[$ph] = $idVal;
+            }
+            $where[] = 'h.id IN (' . implode(',', $phs) . ')';
+        }
+
+        $whereSql = $where !== [] ? 'WHERE ' . implode(' AND ', $where) : '';
+
+        $sql = "
+            SELECT
+                h.id,
+                ISNULL(h.url, '') AS slug
+            FROM dbo.homes h
+            {$whereSql}
+            ORDER BY h.id ASC
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        foreach ($params as $k => $v) {
+            $stmt->bindValue($k, $v, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $map = [];
+        foreach ($rows as $r) {
+            $slug = trim((string) ($r['slug'] ?? ''));
+            if (preg_match('#^https?://[^/]+/(.*)$#i', $slug, $m)) {
+                $slug = $m[1];
+            }
+            $slug = ltrim($slug, '/');
+            if ($slug === '') {
+                $slug = 'villa/' . $r['id'];
+            }
+            $map[(int) $r['id']] = $slug;
+        }
+
+        $result = [];
+        if ($ids !== []) {
+            foreach ($ids as $idVal) {
+                if (isset($map[$idVal])) {
+                    $result[] = [
+                        'id' => $idVal,
+                        'slug' => $map[$idVal],
+                    ];
+                }
+            }
+        } else {
+            foreach ($rows as $r) {
+                $idVal = (int) $r['id'];
+                $result[] = [
+                    'id' => $idVal,
+                    'slug' => $map[$idVal] ?? ('villa/' . $idVal),
+                ];
+            }
+        }
+
+        // raw parametresi veya format=raw gönderildiyse salt dizi dön
+        $raw = $this->request->query('raw') ?? $this->request->input('raw');
+        $format = $this->request->query('format') ?? $this->request->input('format');
+        if ($raw === '1' || $raw === 'true' || $format === 'raw' || $format === 'flat') {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            exit;
+        }
+
+        $this->response->success($result);
     }
 
     /**
