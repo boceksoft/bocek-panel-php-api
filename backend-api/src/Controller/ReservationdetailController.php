@@ -410,12 +410,13 @@ final class ReservationdetailController extends Controller
         $flagCol = (string) ($pool['flag_column'] ?? '');
         $poolAmountCol = (string) ($pool['amount_column'] ?? '');
         if ($enabled($pool, $column($poolAmountCol))) {
-            $flag = $column($flagCol) ? $reservation[$flagCol] : null;
+            $poolAmount = $amount($poolAmountCol);
+            // Seçim kolonu yoksa (garantivillam: sadece kayitlar.isitma) tutar 0'dan büyükse isteniyor sayılır.
+            $requested = $column($flagCol)
+                ? in_array($reservation[$flagCol], [true, 1, '1'], true)
+                : $poolAmount['tutar'] > 0;
             $result['ozellikler']['havuz'] = true;
-            $result['havuz'] = array_merge(
-                ['istiyor' => $flag === true || $flag === 1 || $flag === '1'],
-                $amount($poolAmountCol)
-            );
+            $result['havuz'] = array_merge(['istiyor' => $requested], $poolAmount);
         }
 
         $extra = is_array($cfg['extra_payments'] ?? null) ? $cfg['extra_payments'] : [];
@@ -617,6 +618,8 @@ final class ReservationdetailController extends Controller
             'cdn' => $this->cdnFromDomain($domain),
             'telefon' => $g('telefon'),
             'gsm' => $g('gsm'),
+            // Rezervasyon hattı (genel.rez_tel; garantivillam sözleşmesi "Tel. : telefon - rez_tel").
+            'rezTel' => $g('rez_tel'),
             'whatsapp' => $g('whatsapp'),
             'mail' => $g('sitemail'),
             'instagram' => $g('instagram'),
@@ -626,6 +629,8 @@ final class ReservationdetailController extends Controller
             'adres' => $g('adres'),
             'unvan' => $g('unvan'),
         ];
+        // Belgelerdeki imza resmi (reservation_mail.signature_url; CDN'e göre yol ya da tam adres).
+        $site['imza'] = $this->signatureUrl($mailSettings['signature_url'], $site['cdn']);
 
         // Mail alt metinleri (panel: ms_fn(id) -> mailsablon.icerik{suffix}): ödeme bekliyor 6, onaylandı 3.
         // {saat} Natsisa'da opsiyon süresiyle doldurulur.
@@ -657,13 +662,13 @@ final class ReservationdetailController extends Controller
         }
 
         // Villa: sitenin dilinde ad ve bölge ("Üst bölge / Bölge"), ilk resim (panel: /uploads/400x320/<resim>)
-        $villa = ['adi' => '', 'bolge' => '', 'resim' => '', 'resimUrl' => '', 'no' => ''];
+        $villa = ['adi' => '', 'bolge' => '', 'resim' => '', 'resimUrl' => '', 'no' => '', 'url' => '', 'konumUrl' => ''];
         $homeId = (int) ($reservation['evid'] ?? 0);
         if ($homeId > 0) {
             try {
                 $row = $this->fetchOne(
                     $pdo,
-                    "SELECT " . $this->homeTitleSql('h', "h.baslik{$suffix}") . " AS adi, h.resim,
+                    "SELECT h.*, " . $this->homeTitleSql('h', "h.baslik{$suffix}") . " AS adi,
                             CONCAT(d2.baslik{$suffix}, ' / ', d3.baslik{$suffix}) AS bolge
                      FROM homes h
                      LEFT JOIN destinations d3 ON d3.id = h.emlak_bolgesi
@@ -684,6 +689,10 @@ final class ReservationdetailController extends Controller
                     'resimUrl' => $image !== '' && $site['cdn'] !== '' ? rtrim($site['cdn'], '/') . $image : '',
                     // Panel {-urun-no-} ("İlan No") = homes.id
                     'no' => (string) $homeId,
+                    // Panel {-urun-url-} ("Evi İncele"): domain / [ust_url{dbtable} /] url (garantivillam: domain/url).
+                    'url' => $this->villaPageUrl($row, $suffix, $linkDomain),
+                    // Panel "Konumu Gör": Google Haritalar yol tarifi (homes.enlem / boylam).
+                    'konumUrl' => $this->villaMapUrl($row),
                 ];
             }
         }
@@ -733,25 +742,52 @@ final class ReservationdetailController extends Controller
             // Sitenin tüm banka hesapları, her biri panelin mail kutusu (HTML) ile. Hangilerinin maile gireceği
             // Natsisa bildirim ayarında seçilir (seçim yoksa hepsi).
             'bankaHesaplari' => $this->mailBankAccounts($pdo, $english, $site['cdn'], $mailSettings),
+            // Panelde rezervasyona seçilmiş banka hesabı (kayitlar.banka; 0 = seçilmemiş).
+            'seciliBankaId' => (int) ($reservation['banka'] ?? 0),
         ];
     }
 
     /**
      * config reservation_mail (varsayılanlarla birleştirilmiş).
      *
-     * @return array{bank_html_style:string,active_bank_accounts_only:bool,relative_url_base:string}
+     * @return array{bank_html_style:string,active_bank_accounts_only:bool,relative_url_base:string,signature_url:string,payment_row_badges:bool,cleaning_label:string,heated_pool:array{label:string,format:bool}}
      */
     private function mailSettings(): array
     {
         $config = isset($this->app['reservation_mail']) && is_array($this->app['reservation_mail'])
             ? $this->app['reservation_mail']
             : [];
+        $heated = isset($config['heated_pool']) && is_array($config['heated_pool']) ? $config['heated_pool'] : [];
 
         return [
             'bank_html_style' => strtolower(trim((string) ($config['bank_html_style'] ?? 'modern'))) === 'classic' ? 'classic' : 'modern',
             'active_bank_accounts_only' => !empty($config['active_bank_accounts_only']),
             'relative_url_base' => trim((string) ($config['relative_url_base'] ?? '')),
+            'signature_url' => trim((string) ($config['signature_url'] ?? '')),
+            // Klasik ödeme satırları (ovillam varsayılanları; garantivillam app.local.php ile değiştirir).
+            'payment_row_badges' => !array_key_exists('payment_row_badges', $config) || !empty($config['payment_row_badges']),
+            'cleaning_label' => trim((string) ($config['cleaning_label'] ?? '')) !== ''
+                ? trim((string) $config['cleaning_label'])
+                : 'Kısa Süreli K. Ödemesi',
+            // Kolonlar reservation_extras.pool'dan (rezervasyon güncelleme ile aynı kaynak); burada sadece görünüm.
+            'heated_pool' => [
+                'label' => trim((string) ($heated['label'] ?? '')) !== '' ? trim((string) $heated['label']) : 'Isıtmalı Havuz Ücreti',
+                'format' => !empty($heated['format']),
+            ],
         ];
+    }
+
+    /** İmza resmi: http(s) ile başlıyorsa olduğu gibi, değilse CDN adresine eklenir. Ayar boşsa boş. */
+    private function signatureUrl(string $value, string $cdn): string
+    {
+        if ($value === '') {
+            return '';
+        }
+        if (preg_match('#^https?://#i', $value) === 1) {
+            return $value;
+        }
+
+        return $cdn !== '' ? rtrim($cdn, '/') . '/' . ltrim($value, '/') : '';
     }
 
     /**
@@ -763,7 +799,11 @@ final class ReservationdetailController extends Controller
      */
     private function mailClassicPayment(PDO $pdo, array $reservation, string $doviz, bool $partial): array
     {
-        $badge = function (string $text): string {
+        $settings = $this->mailSettings();
+        $badge = function (string $text) use ($settings): string {
+            if (!$settings['payment_row_badges']) {
+                return '';
+            }
             return " <span style='display:inline-block; margin-left:6px; font-size:11px; color:#555; background:#fff;"
                 . " border:1px solid #ddd; padding:2px 7px; border-radius:10px;'>" . htmlspecialchars($text, ENT_QUOTES, 'UTF-8') . '</span>';
         };
@@ -787,7 +827,7 @@ final class ReservationdetailController extends Controller
         $cleaning = $value($reservation['temizlik'] ?? '');
         if ($cleaning !== '' && $cleaning !== '0' && $this->feeNumber($cleaning) > 0) {
             $extraTotal += $this->feeNumber($cleaning);
-            $cleaningRow = $this->mailClassicRow('Kısa Süreli K. Ödemesi', $cleaning);
+            $cleaningRow = $this->mailClassicRow(htmlspecialchars($settings['cleaning_label'], ENT_QUOTES, 'UTF-8'), $cleaning);
         }
 
         $electricity = $value($reservation['elektrik'] ?? '');
@@ -796,11 +836,29 @@ final class ReservationdetailController extends Controller
             $electricityRow = $this->mailClassicRow('Elektrik Ücreti', $electricity);
         }
 
-        // Ovillam panelinde ısıtmalı havuz satırı yok ({-isitma-ucreti-html-} boş); kolon varsa ve seçiliyse eklenir.
-        $heated = $reservation['isitmaliHavuzBool'] ?? null;
-        if ($heated === true || $heated === 1 || $heated === '1') {
-            $extraTotal += $this->feeNumber($reservation['isitmaliHavuz'] ?? '');
-            $heatedRow = $this->mailClassicRow('Isıtmalı Havuz Ücreti', $value($reservation['isitmaliHavuz'] ?? ''));
+        // Isıtmalı havuz. Kolonlar reservation_extras.pool'dan (rezervasyon güncellemenin yazdığı yer). Ovillam:
+        // isitmaliHavuzBool seçiliyse isitmaliHavuz. Garantivillam: flag_column '' ve amount_column 'isitma'; tutar boş/0
+        // değilse yazılır. Etiket ve biçim reservation_mail.heated_pool'dan (format = true: "1.500 TL").
+        $pool = $settings['heated_pool'];
+        $localExtras = is_array($this->app['reservation_extras'] ?? null) ? $this->app['reservation_extras'] : [];
+        $poolCfg = array_replace_recursive(self::EXTRAS_DEFAULTS, $localExtras)['pool'] ?? [];
+        $row = array_change_key_case($reservation, CASE_LOWER);
+        $amountColumn = strtolower(trim((string) ($poolCfg['amount_column'] ?? '')));
+        $flagColumn = strtolower(trim((string) ($poolCfg['flag_column'] ?? '')));
+        $poolEnabled = $poolCfg['enabled'] ?? 'auto';
+        $poolAmount = $poolEnabled !== false && $amountColumn !== '' ? $value($row[$amountColumn] ?? '') : '';
+        if ($flagColumn !== '' && array_key_exists($flagColumn, $row)) {
+            $poolFlag = $row[$flagColumn];
+            $poolSelected = $poolFlag === true || $poolFlag === 1 || $poolFlag === '1';
+        } else {
+            $poolSelected = $poolAmount !== '' && $poolAmount !== '0' && $this->feeNumber($poolAmount) > 0;
+        }
+        if ($poolSelected) {
+            $extraTotal += $this->feeNumber($poolAmount);
+            $heatedRow = $this->mailClassicRow(
+                htmlspecialchars($pool['label'], ENT_QUOTES, 'UTF-8'),
+                $pool['format'] ? $this->mailPanelFormat($poolAmount, $doviz) : $poolAmount
+            );
         }
 
         try {
@@ -840,6 +898,24 @@ final class ReservationdetailController extends Controller
         ];
     }
 
+    /** Panel doviz_cevir_format(tutar, doviz): "1.500 TL" / "€ 1.200" / "1.500,50 TL" (sayı değilse olduğu gibi). */
+    private function mailPanelFormat(string $raw, string $doviz): string
+    {
+        $number = $this->moneyValue($raw);
+        if ($number === null) {
+            return $raw;
+        }
+        $number = (float) $number;
+        $decimals = abs($number - round($number)) > 0.000001 ? 2 : 0;
+        $text = number_format($number, $decimals, ',', '.');
+        $prefix = ['pound' => '£ ', 'gbp' => '£ ', 'dolar' => '$ ', 'usd' => '$ ', 'euro' => '€ ', 'eur' => '€ '];
+        if ($doviz === 'tl' || $doviz === 'try' || $doviz === '') {
+            return $text . ' TL';
+        }
+
+        return ($prefix[$doviz] ?? '') . $text;
+    }
+
     /** Panel doviz_cevir(tutar, d, d, true, "0"): "₺ 45.000" / "€ 1.200" (kuruşsuz, binlik "."). */
     private function mailClassicMoney(float $amount, string $doviz): string
     {
@@ -856,6 +932,43 @@ final class ReservationdetailController extends Controller
             . "<td width='217'><font style='font-size: 14px' size='2'>" . $titleHtml . '</font></td>'
             . "<td width='63'><font style='font-size: 14px' size='2'>" . htmlspecialchars($value, ENT_QUOTES, 'UTF-8') . '</font></td>'
             . '</tr>';
+    }
+
+    /**
+     * Villanın sitedeki sayfası. Ovillam paneli üst url'yi (ust_url{dbtable}) başa ekler; kolon yoksa sadece url.
+     *
+     * @param array<string,mixed> $home
+     */
+    private function villaPageUrl(array $home, string $suffix, string $domain): string
+    {
+        $home = array_change_key_case($home, CASE_LOWER);
+        $path = trim(trim((string) ($home['url'] ?? '')), '/');
+        if ($path === '' || $domain === '') {
+            return '';
+        }
+        if (preg_match('#^https?://#i', $path) === 1) {
+            return $path;
+        }
+        $parent = trim(trim((string) ($home['ust_url' . strtolower($suffix)] ?? '')), '/');
+
+        return rtrim($domain, '/') . '/' . ($parent !== '' ? $parent . '/' : '') . $path;
+    }
+
+    /**
+     * Google Haritalar yol tarifi (panel: google.com/maps/dir//{enlem},{boylam}/@{enlem},{boylam},17z). Konum yoksa boş.
+     *
+     * @param array<string,mixed> $home
+     */
+    private function villaMapUrl(array $home): string
+    {
+        $home = array_change_key_case($home, CASE_LOWER);
+        $lat = str_replace(',', '.', trim((string) ($home['enlem'] ?? '')));
+        $lng = str_replace(',', '.', trim((string) ($home['boylam'] ?? '')));
+        if (!is_numeric($lat) || !is_numeric($lng) || ((float) $lat == 0.0 && (float) $lng == 0.0)) {
+            return '';
+        }
+
+        return 'https://www.google.com/maps/dir//' . $lat . ',' . $lng . '/@' . $lat . ',' . $lng . ',17z';
     }
 
     /** genel{suffix} tablosundaki sayfa yolu alanı (panel qsql("kartileodeUrl") vb.); kolon yoksa boş. */
@@ -884,9 +997,9 @@ final class ReservationdetailController extends Controller
     {
         $labels = $english
             ? ['on' => 'Advance Payment Amount', 'kalan' => 'Amount to be Paid on Villa Entry', 'temizlik' => 'Cleaning Fee',
-               'elektrik' => 'Electricity Fee', 'isitma' => 'Heated Fee', 'toplam' => 'Total Amount to be Paid on Entry']
+                'elektrik' => 'Electricity Fee', 'isitma' => 'Heated Fee', 'toplam' => 'Total Amount to be Paid on Entry']
             : ['on' => 'Ön Ödeme Tutarı', 'kalan' => 'Villaya Girişte Ödenecek Tutar', 'temizlik' => 'Temizlik Ücreti',
-               'elektrik' => 'Elektrik Ücreti', 'isitma' => 'Isıtmalı Havuz Ücreti', 'toplam' => 'Girişte Ödenecek Toplam Tutar'];
+                'elektrik' => 'Elektrik Ücreti', 'isitma' => 'Isıtmalı Havuz Ücreti', 'toplam' => 'Girişte Ödenecek Toplam Tutar'];
 
         $html = '';
         $remaining = 0.0;
@@ -1004,8 +1117,8 @@ final class ReservationdetailController extends Controller
      * Her hesap için panelin mail kutusu (HTML) üretilir; seçim Natsisa'da yapılır.
      * reservation_mail.bank_html_style = classic: ovillam (odemeBekliyorMailSablonGetir) satırları.
      *
-     * @param array{bank_html_style:string,active_bank_accounts_only:bool,relative_url_base:string}|null $settings
-     * @return array<int,array{id:int,banka:string,hesapAdi:string,html:string}>
+     * @param array{bank_html_style:string,active_bank_accounts_only:bool,relative_url_base:string,signature_url:string}|null $settings
+     * @return array<int,array<string,mixed>> id, banka, hesapAdi, html, subeKodu, hesapNo, ibanTl, ibanEuro, ibanDolar, ibanPound
      */
     private function mailBankAccounts(PDO $pdo, bool $english, string $cdn, ?array $settings = null): array
     {
@@ -1038,13 +1151,13 @@ final class ReservationdetailController extends Controller
             $image = rtrim($cdn, '/') . '/uploads/' . trim((string) ($a['resim'] ?? '')) . '?l=0';
             $rows = $line($t['alici'], $a['hesap_adi'] ?? '');
             foreach ([
-                [$t['sube'], 'sube_kod'],
-                [$t['hesap'], 'hesap_no'],
-                ['TL IBAN', 'iban_tl'],
-                ['GBP IBAN', 'iban_pound'],
-                ['EUR IBAN', 'iban_euro'],
-                ['USD IBAN', 'iban_dolar'],
-            ] as [$label, $column]) {
+                         [$t['sube'], 'sube_kod'],
+                         [$t['hesap'], 'hesap_no'],
+                         ['TL IBAN', 'iban_tl'],
+                         ['GBP IBAN', 'iban_pound'],
+                         ['EUR IBAN', 'iban_euro'],
+                         ['USD IBAN', 'iban_dolar'],
+                     ] as [$label, $column]) {
                 if (trim((string) ($a[$column] ?? '')) !== '') {
                     $rows .= $line($label, $a[$column]);
                 }
@@ -1064,6 +1177,13 @@ final class ReservationdetailController extends Controller
                 'id' => (int) ($a['id'] ?? 0),
                 'banka' => trim((string) ($a['banka'] ?? '')),
                 'hesapAdi' => trim((string) ($a['hesap_adi'] ?? '')),
+                // Düz alanlar (WhatsApp / SMS değişkenleri: banka, alıcı, para birimine göre IBAN).
+                'subeKodu' => trim((string) ($a['sube_kod'] ?? '')),
+                'hesapNo' => trim((string) ($a['hesap_no'] ?? '')),
+                'ibanTl' => trim((string) ($a['iban_tl'] ?? '')),
+                'ibanEuro' => trim((string) ($a['iban_euro'] ?? '')),
+                'ibanDolar' => trim((string) ($a['iban_dolar'] ?? '')),
+                'ibanPound' => trim((string) ($a['iban_pound'] ?? '')),
                 'html' => $html,
             ];
         }
@@ -1076,7 +1196,7 @@ final class ReservationdetailController extends Controller
      * TL / EURO / GBP / USD IBAN, Şube Kodu, Hesap No. Şablonda dış tablo ve "Banka Hesap Bilgilerimiz" başlığı olur.
      *
      * @param array<int,array<string,mixed>> $accounts
-     * @return array<int,array{id:int,banka:string,hesapAdi:string,html:string}>
+     * @return array<int,array<string,mixed>> id, banka, hesapAdi, html, subeKodu, hesapNo, ibanTl, ibanEuro, ibanDolar, ibanPound
      */
     private function mailBankAccountsClassic(array $accounts, bool $english, string $cdn): array
     {
@@ -1101,13 +1221,13 @@ final class ReservationdetailController extends Controller
             $image = rtrim($cdn, '/') . '/uploads/' . trim((string) ($a['resim'] ?? '')) . '?l=0';
             $rows = $line($t['alici'], $a['hesap_adi'] ?? '');
             foreach ([
-                ['TL IBAN', 'iban_tl'],
-                ['EURO IBAN', 'iban_euro'],
-                ['GBP IBAN', 'iban_pound'],
-                ['USD IBAN', 'iban_dolar'],
-                [$t['sube'], 'sube_kod'],
-                [$t['hesap'], 'hesap_no'],
-            ] as [$label, $column]) {
+                         ['TL IBAN', 'iban_tl'],
+                         ['EURO IBAN', 'iban_euro'],
+                         ['GBP IBAN', 'iban_pound'],
+                         ['USD IBAN', 'iban_dolar'],
+                         [$t['sube'], 'sube_kod'],
+                         [$t['hesap'], 'hesap_no'],
+                     ] as [$label, $column]) {
                 if (trim((string) ($a[$column] ?? '')) !== '') {
                     $rows .= $line($label, $a[$column]);
                 }
@@ -1126,6 +1246,13 @@ final class ReservationdetailController extends Controller
                 'id' => (int) ($a['id'] ?? 0),
                 'banka' => trim((string) ($a['banka'] ?? '')),
                 'hesapAdi' => trim((string) ($a['hesap_adi'] ?? '')),
+                // Düz alanlar (WhatsApp / SMS değişkenleri: banka, alıcı, para birimine göre IBAN).
+                'subeKodu' => trim((string) ($a['sube_kod'] ?? '')),
+                'hesapNo' => trim((string) ($a['hesap_no'] ?? '')),
+                'ibanTl' => trim((string) ($a['iban_tl'] ?? '')),
+                'ibanEuro' => trim((string) ($a['iban_euro'] ?? '')),
+                'ibanDolar' => trim((string) ($a['iban_dolar'] ?? '')),
+                'ibanPound' => trim((string) ($a['iban_pound'] ?? '')),
                 'html' => $html,
             ];
         }
@@ -1378,6 +1505,9 @@ final class ReservationdetailController extends Controller
                 'emlakIsmi' => $this->firstValueFrom([$villa, $reservation], ['baslik', 'villa_adi', 'adi', 'emlak_adi']),
                 'emlak_tipi' => $this->firstValueFrom([$villa], ['emlak_tipi_baslik']),
                 'emlak_bolgesi' => $this->firstValueFrom([$villa], ['emlak_bolgesi_baslik']),
+                // Villanın giriş / çıkış saati (homes.giris_saat / cikis_saat; garantivillam sözleşmesi).
+                'girisSaati' => trim((string) $this->firstValueFrom([$villa], ['giris_saat'])),
+                'cikisSaati' => trim((string) $this->firstValueFrom([$villa], ['cikis_saat'])),
                 'resim_liste' => $this->homeImages($villa),
                 'kapak_resmi' => $this->homeCoverImage($villa),
                 'satisKanali' => $this->firstValueFrom([$reservation], ['satiskanali', 'satis_kanali', 'satisKanali']) ?: 'site',
@@ -2099,7 +2229,7 @@ final class ReservationdetailController extends Controller
                     l.aciklama,
                     l.kullanici_id,
                     (SELECT TOP 1 k.ad + ' ' + k.soyad FROM kullanici k WHERE k.id = l.kullanici_id) AS kullanici_adi"
-                . ($hasDetails ? ', l.degisiklikler' : ', NULL AS degisiklikler') . "
+            . ($hasDetails ? ', l.degisiklikler' : ', NULL AS degisiklikler') . "
              FROM kullanici_log_kaydi l
              WHERE l.islm = 'rezervasyon' AND l.islm_id = :id
              ORDER BY l.id DESC",
