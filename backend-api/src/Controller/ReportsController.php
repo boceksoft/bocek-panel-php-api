@@ -921,6 +921,7 @@ WHERE k.odeme = {$paymentType}
      * @query year int Rapor yılı (varsayılan cari yıl)
      * @query months string|array Ay veya aylar listesi (1-12)
      * @query villas string|array Villa id'leri (virgülle ayrılmış veya dizi)
+     * @query date_type string Tarih tipi ('islem_tarihi' | 'rez_tarihi', varsayılan 'islem_tarihi')
      */
     public function monthlyperformance(): void
     {
@@ -948,6 +949,17 @@ WHERE k.odeme = {$paymentType}
             ?? $this->request->input('villa');
         $villaIds = $this->parseIntList($villasRaw);
 
+        $dateTypeRaw = $this->request->query('date_type')
+            ?? $this->request->input('date_type')
+            ?? $this->request->query('dateType')
+            ?? $this->request->input('dateType')
+            ?? $this->request->query('date_field')
+            ?? $this->request->input('date_field')
+            ?? $this->request->query('tarih_tipi')
+            ?? $this->request->input('tarih_tipi');
+        $isRezTarihi = $this->isRezTarihi($dateTypeRaw);
+        $dateTypeStr = $isRezTarihi ? 'rez_tarihi' : 'islem_tarihi';
+
         $durumSql = $this->normalizedStatusSql('d.[Durum]');
 
         $cleanTutarSql = $this->hasFnTemizle($pdo)
@@ -968,12 +980,23 @@ WHERE k.odeme = {$paymentType}
             ) AS kisi"
             : "CROSS APPLY (SELECT 1 AS total) AS kisi";
 
-        $islemDateExpr = "COALESCE(
-            TRY_CONVERT(date, k.islem_tarihi, 104),
-            TRY_CONVERT(date, k.islem_tarihi, 103),
-            TRY_CONVERT(date, k.islem_tarihi, 120),
-            TRY_CONVERT(date, k.islem_tarihi)
-        )";
+        $islemDateExpr = $isRezTarihi
+            ? "COALESCE(
+                TRY_CONVERT(date, k.rez_tarihi, 104),
+                TRY_CONVERT(date, k.rez_tarihi, 103),
+                TRY_CONVERT(date, k.rez_tarihi, 120),
+                TRY_CONVERT(date, k.rez_tarihi),
+                TRY_CONVERT(date, d.tarih, 104),
+                TRY_CONVERT(date, d.tarih, 103),
+                TRY_CONVERT(date, d.tarih, 120),
+                TRY_CONVERT(date, d.tarih)
+            )"
+            : "COALESCE(
+                TRY_CONVERT(date, k.islem_tarihi, 104),
+                TRY_CONVERT(date, k.islem_tarihi, 103),
+                TRY_CONVERT(date, k.islem_tarihi, 120),
+                TRY_CONVERT(date, k.islem_tarihi)
+            )";
 
         $dateExpr = "COALESCE(
             TRY_CONVERT(date, d.tarih, 104),
@@ -1700,6 +1723,8 @@ WHERE k.odeme = {$paymentType}
                 'site' => $siteId,
                 'chartMonth' => $targetMonth,
                 'chartDays' => $numDays,
+                'dateType' => $dateTypeStr,
+                'dateField' => $dateTypeStr,
             ],
         ]);
     }
@@ -1716,6 +1741,7 @@ WHERE k.odeme = {$paymentType}
      * @query villas string|int Seçili villa ID'leri (virgülle ayrılmış veya 'all')
      * @query site int Site kimliği (varsayılan 1)
      * @query cutoff int Projeksiyon kesme günü (varsayılan 29 veya ayın son günü)
+     * @query date_type string Tarih tipi ('islem_tarihi' | 'rez_tarihi', varsayılan 'islem_tarihi')
      * @query sqlx string Ham SQL çıktısı modu ('json', 'raw', 'template')
      */
     public function paxperformance(): void
@@ -1744,6 +1770,17 @@ WHERE k.odeme = {$paymentType}
             ?? $this->request->input('villa');
         $villaIds = $this->parseIntList($villasRaw);
 
+        $dateTypeRaw = $this->request->query('date_type')
+            ?? $this->request->input('date_type')
+            ?? $this->request->query('dateType')
+            ?? $this->request->input('dateType')
+            ?? $this->request->query('date_field')
+            ?? $this->request->input('date_field')
+            ?? $this->request->query('tarih_tipi')
+            ?? $this->request->input('tarih_tipi');
+        $isRezTarihi = $this->isRezTarihi($dateTypeRaw);
+        $dateTypeStr = $isRezTarihi ? 'rez_tarihi' : 'islem_tarihi';
+
         $durumSql = $this->normalizedStatusSql('d.[Durum]');
 
         $cleanTutarSql = $this->hasFnTemizle($pdo)
@@ -1764,12 +1801,23 @@ WHERE k.odeme = {$paymentType}
             ) AS kisi"
             : "CROSS APPLY (SELECT 1 AS total) AS kisi";
 
-        $islemDateExpr = "COALESCE(
-            TRY_CONVERT(date, k.islem_tarihi, 104),
-            TRY_CONVERT(date, k.islem_tarihi, 103),
-            TRY_CONVERT(date, k.islem_tarihi, 120),
-            TRY_CONVERT(date, k.islem_tarihi)
-        )";
+        $islemDateExpr = $isRezTarihi
+            ? "COALESCE(
+                TRY_CONVERT(date, k.rez_tarihi, 104),
+                TRY_CONVERT(date, k.rez_tarihi, 103),
+                TRY_CONVERT(date, k.rez_tarihi, 120),
+                TRY_CONVERT(date, k.rez_tarihi),
+                TRY_CONVERT(date, d.tarih, 104),
+                TRY_CONVERT(date, d.tarih, 103),
+                TRY_CONVERT(date, d.tarih, 120),
+                TRY_CONVERT(date, d.tarih)
+            )"
+            : "COALESCE(
+                TRY_CONVERT(date, k.islem_tarihi, 104),
+                TRY_CONVERT(date, k.islem_tarihi, 103),
+                TRY_CONVERT(date, k.islem_tarihi, 120),
+                TRY_CONVERT(date, k.islem_tarihi)
+            )";
 
         $dateExpr = "COALESCE(
             TRY_CONVERT(date, d.tarih, 104),
@@ -2709,6 +2757,8 @@ WHERE k.odeme = {$paymentType}
                 'chartMonth' => $targetMonth,
                 'chartDays' => $numDays,
                 'cutoffDay' => $cutoffDay,
+                'dateType' => $dateTypeStr,
+                'dateField' => $dateTypeStr,
             ],
         ]);
     }
@@ -2758,6 +2808,21 @@ WHERE k.odeme = {$paymentType}
             ?? $this->request->query('villa')
             ?? $this->request->input('villa');
         $villaIds = $this->parseIntList($villasRaw);
+
+        $dateTypeRaw = $this->request->query('date_type')
+            ?? $this->request->input('date_type')
+            ?? $this->request->query('dateType')
+            ?? $this->request->input('dateType')
+            ?? $this->request->query('date_field')
+            ?? $this->request->input('date_field')
+            ?? $this->request->query('tarih_tipi')
+            ?? $this->request->input('tarih_tipi');
+        $isRezTarihi = $this->isRezTarihi($dateTypeRaw);
+        $dateTypeStr = $isRezTarihi ? 'rez_tarihi' : 'islem_tarihi';
+
+        $calDateExpr = $isRezTarihi
+            ? "COALESCE(TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi))"
+            : "COALESCE(TRY_CONVERT(date, k.islem_tarihi, 104), TRY_CONVERT(date, k.islem_tarihi, 103), TRY_CONVERT(date, k.islem_tarihi, 120), TRY_CONVERT(date, k.islem_tarihi))";
 
         $monthShortNames = [
             1 => 'OCA', 2 => 'ŞUB', 3 => 'MAR', 4 => 'NİS', 5 => 'MAY', 6 => 'HAZ',
@@ -2862,9 +2927,9 @@ WHERE k.odeme = {$paymentType}
         // 1. tableQuery (Satış, Ciro, Kazanç ve Talep metrikleri)
         $sql1 = "
             SELECT
-                DAY(k.islem_tarihi) AS rDateDay,
-                MONTH(k.islem_tarihi) AS rDateMonth,
-                YEAR(k.islem_tarihi) AS rDateYear,
+                DAY({$calDateExpr}) AS rDateDay,
+                MONTH({$calDateExpr}) AS rDateMonth,
+                YEAR({$calDateExpr}) AS rDateYear,
                 COUNT(k.id) AS RezAdet,
                 SUM(CASE WHEN k.kayit_durum = 3 THEN 1 ELSE 0 END) AS KesinRez,
                 SUM(CASE WHEN k.kayit_durum = 3 THEN 0 + ISNULL(TRY_CONVERT(int, k.yetiskin), 0) + ISNULL(TRY_CONVERT(int, k.cocuk), 0) ELSE 0 END) AS KesinPax,
@@ -2873,11 +2938,11 @@ WHERE k.odeme = {$paymentType}
             FROM dbo.kayitlar k
             INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
             INNER JOIN dbo.homes h ON h.id = k.evid
-            WHERE YEAR(k.islem_tarihi) = :cal_year
-              AND MONTH(k.islem_tarihi) IN ({$monthInSql})
+            WHERE YEAR({$calDateExpr}) = :cal_year
+              AND MONTH({$calDateExpr}) IN ({$monthInSql})
               {$villaWhereH}
-            GROUP BY YEAR(k.islem_tarihi), MONTH(k.islem_tarihi), DAY(k.islem_tarihi)
-            ORDER BY YEAR(k.islem_tarihi) ASC, MONTH(k.islem_tarihi) ASC, DAY(k.islem_tarihi) ASC
+            GROUP BY YEAR({$calDateExpr}), MONTH({$calDateExpr}), DAY({$calDateExpr})
+            ORDER BY YEAR({$calDateExpr}) ASC, MONTH({$calDateExpr}) ASC, DAY({$calDateExpr}) ASC
         ";
 
         // 2. table5Rapor (Günlük Girişler: rez_tarihi)
@@ -2985,10 +3050,10 @@ WHERE k.odeme = {$paymentType}
             INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
             INNER JOIN dbo.homes h ON h.id = k.evid
             WHERE k.kayit_durum = 3
-              AND YEAR(k.islem_tarihi) = :cal_year
-              AND MONTH(k.islem_tarihi) IN ({$monthInSql})
+              AND YEAR({$calDateExpr}) = :cal_year
+              AND MONTH({$calDateExpr}) IN ({$monthInSql})
               {$villaWhereH}
-            ORDER BY k.islem_tarihi ASC
+            ORDER BY {$calDateExpr} ASC
         ";
 
         // sqlx parametresi gönderildiyse ham SQL dön
@@ -3153,8 +3218,9 @@ WHERE k.odeme = {$paymentType}
             ];
 
             $allApprovedReservations[] = $resItem;
-            if ($islemDate !== '' && isset($calendarDays[$islemDate])) {
-                $calendarDays[$islemDate]['reservations'][] = $resItem;
+            $calendarTargetDate = $isRezTarihi ? ($r['giris_tarihi'] ?? '') : $islemDate;
+            if ($calendarTargetDate !== '' && isset($calendarDays[$calendarTargetDate])) {
+                $calendarDays[$calendarTargetDate]['reservations'][] = $resItem;
             }
         }
 
@@ -3406,6 +3472,8 @@ WHERE k.odeme = {$paymentType}
                 'minDate' => $minDate,
                 'maxDate' => $maxDate,
                 'totalDays' => count($calendarDays),
+                'dateType' => $dateTypeStr,
+                'dateField' => $dateTypeStr,
             ],
         ]);
     }
@@ -3438,6 +3506,10 @@ WHERE k.odeme = {$paymentType}
                 ['id' => 10, 'name' => 'Ekim'],
                 ['id' => 11, 'name' => 'Kasım'],
                 ['id' => 12, 'name' => 'Aralık'],
+            ],
+            'dateTypes' => [
+                ['id' => 'islem_tarihi', 'name' => 'İşlem Tarihi (Kayıt / Rezervasyon Oluşturulma Tarihi)', 'value' => 'islem_tarihi'],
+                ['id' => 'rez_tarihi', 'name' => 'Rezervasyon Tarihi (Giriş Tarihi)', 'value' => 'rez_tarihi'],
             ],
         ]);
     }
@@ -3704,6 +3776,18 @@ WHERE k.odeme = {$paymentType}
         }
 
         return array_values(array_unique($list));
+    }
+
+    /**
+     * @param mixed $raw
+     */
+    private function isRezTarihi($raw): bool
+    {
+        if ($raw === null || $raw === '') {
+            return false;
+        }
+        $val = strtolower(trim((string) $raw));
+        return in_array($val, ['rez_tarihi', 'rez', 'reztarihi', 'checkin', 'check_in', 'giris', 'giris_tarihi', '0', 'reservation'], true);
     }
 
     private function siteId(): int

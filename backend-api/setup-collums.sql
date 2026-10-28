@@ -4114,3 +4114,346 @@ BEGIN
 ALTER TABLE [dbo].[kayitlar] ADD [gorevliKullaniciAdi] nvarchar(100) NULL;
 END;
 GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar_odeme]', N'U') IS NULL
+BEGIN
+CREATE TABLE [dbo].[kayitlar_odeme](
+	[kayitid] [int] NOT NULL,
+	[satis_bedeli] [money] NULL,
+	[indirim_site] [money] NULL,
+	[indirim_evsahibi] [money] NULL,
+	[toplam_tutar] [money] NULL,
+	[on_odeme] [money] NULL,
+	[kalan] [money] NULL,
+	[ekstra_ucretler] [money] NULL,
+	[kazanc_tutari] [money] NULL,
+	[evsahibi_kazanc_tutari] [money] NULL,
+	[evsahibi_kalan] [money] NULL,
+	[doviz] [nvarchar](10) NULL,
+	[kur] [money] NULL,
+	[createdDate] [datetime] NULL,
+	[modifedDate] [datetime] NULL,
+ CONSTRAINT [PK_kayitlar_odeme] PRIMARY KEY CLUSTERED 
+(
+	[kayitid] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [PRIMARY]
+) ON [PRIMARY];
+
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_satis_bedeli]  DEFAULT ((0)) FOR [satis_bedeli];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_indirim_site]  DEFAULT ((0)) FOR [indirim_site];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_indirim]  DEFAULT ((0)) FOR [indirim_evsahibi];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_toplam_tutar]  DEFAULT ((0)) FOR [toplam_tutar];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_on_odeme]  DEFAULT ((0)) FOR [on_odeme];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_kalan]  DEFAULT ((0)) FOR [kalan];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_ekstra_ucretler]  DEFAULT ((0)) FOR [ekstra_ucretler];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_kazanc_tutari]  DEFAULT ((0)) FOR [kazanc_tutari];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_evsahibi_kazanc_tutari]  DEFAULT ((0)) FOR [evsahibi_kazanc_tutari];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_evsahibi_kalan]  DEFAULT ((0)) FOR [evsahibi_kalan];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_doviz]  DEFAULT (N'tl') FOR [doviz];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_kur]  DEFAULT ((1)) FOR [kur];
+ALTER TABLE [dbo].[kayitlar_odeme] ADD  CONSTRAINT [DF_kayitlar_odeme_createdDate]  DEFAULT (getdate()) FOR [createdDate];
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[fnTemizle]', N'FN') IS NULL
+BEGIN
+    EXEC(N'
+    CREATE FUNCTION [dbo].[fnTemizle](@val nvarchar(MAX))
+    RETURNS nvarchar(MAX)
+    AS
+    BEGIN
+        IF @val IS NULL RETURN NULL;
+        DECLARE @clean nvarchar(MAX) = LTRIM(RTRIM(@val));
+        SET @clean = REPLACE(@clean, N'' ₺'', N'''');
+        SET @clean = REPLACE(@clean, N''TL'', N'''');
+        SET @clean = REPLACE(@clean, N''EUR'', N'''');
+        SET @clean = REPLACE(@clean, N''USD'', N'''');
+        SET @clean = REPLACE(@clean, N''GBP'', N'''');
+        SET @clean = REPLACE(@clean, N''€'', N'''');
+        SET @clean = REPLACE(@clean, N''$'', N'''');
+        SET @clean = REPLACE(@clean, N''£'', N'''');
+        RETURN @clean;
+    END;
+    ');
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'eskifiyat') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[kayitlar] ADD [eskifiyat] nvarchar(50) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'indirimevsahibi') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[kayitlar] ADD [indirimevsahibi] bit NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND OBJECT_ID(N'[dbo].[kayitlar_odeme]', N'U') IS NOT NULL
+BEGIN
+    IF OBJECT_ID(N'[dbo].[tutarAktar]', N'TR') IS NOT NULL
+        DROP TRIGGER [dbo].[tutarAktar];
+
+    EXEC(N'
+    CREATE TRIGGER [dbo].[tutarAktar] 
+    ON [dbo].[kayitlar]
+    AFTER INSERT,UPDATE AS
+    BEGIN
+
+        DECLARE @satisbedeli nvarchar(20); /* eskifiyat */
+        DECLARE @indirime_evsahibi bit; /* indirimevsahibi */
+        DECLARE @toplamtutar nvarchar(20);
+        DECLARE @onodeme nvarchar(20);
+        DECLARE @kalan nvarchar(20);
+        DECLARE @temizlik nvarchar(20);
+        DECLARE @elektrik nvarchar(20);
+        DECLARE @isitma nvarchar(20);
+        DECLARE @kayitlarKar nvarchar(20);
+        DECLARE @odeme_turu int; /* tur */
+        DECLARE @doviz nvarchar(10);
+        DECLARE @kur money;
+        DECLARE @kayitid int;
+        DECLARE @ekstraUcretler money;
+        DECLARE @kazancTutari money;
+        DECLARE @evsahibiKazanc money;
+        DECLARE @kazancorani int;
+        DECLARE @indirim money;
+        DECLARE @evsahibiKalan money;
+
+        select top 1 
+            @satisbedeli                    = dbo.fnTemizle((case when isnull(nullif(ltrim(rtrim(eskifiyat)),''''),''0'')=''0'' then toplam_tutar else eskifiyat end)),
+            @indirime_evsahibi              = isnull(indirimevsahibi,0),
+            @toplamtutar                    = dbo.fnTemizle(toplam_tutar),
+            @onodeme                        = dbo.fnTemizle(on_odeme),
+            @kalan                          = dbo.fnTemizle(kalan),
+            @temizlik                       = dbo.fnTemizle(temizlik),
+            @elektrik                       = dbo.fnTemizle(elektrik),
+            @isitma                         = '''',
+            @odeme_turu                     = tur,
+            @doviz                          = isnull(doviz,''tl''),
+            @kur                            = (case when isnull(doviz,''tl'')=''tl'' then 1 else isnull(kur,1) end),
+            @kayitid                        = id,
+            @kazancorani                    = isnull(TRY_CONVERT(int, kazancorani),0),
+            @kayitlarKar                    = dbo.fnTemizle(kar)
+        from inserted i;
+
+        if @kayitid is not null 
+        begin
+            if @odeme_turu=2 
+            begin
+                SET @onodeme                    = @toplamtutar;
+                SET @kalan                      = 0;
+            end;
+        
+            /* küsüratlar nokta ile ayrılmadıysa noktaları siler */
+            select @satisbedeli                 = replace(@satisbedeli,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@satisbedeli,''.'');
+            select @toplamtutar                 = replace(@toplamtutar,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@toplamtutar,''.'');
+            select @onodeme                     = replace(@onodeme,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@onodeme,''.'');
+            select @kalan                       = replace(@kalan,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@kalan,''.'');
+            select @temizlik                    = replace(@temizlik,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@temizlik,''.'');
+            select @elektrik                    = replace(@elektrik,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@elektrik,''.'');
+            select @isitma                      = replace(@isitma,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@isitma,''.'');
+
+            /* küsüratlar virgül ile ayrılmadıysa virgül siler */							  
+            select @satisbedeli                 = replace(@satisbedeli,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@satisbedeli,'','');
+            select @toplamtutar                 = replace(@toplamtutar,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@toplamtutar,'','');
+            select @onodeme                     = replace(@onodeme,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@onodeme,'','');
+            select @kalan                       = replace(@kalan,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@kalan,'','');
+            select @temizlik                    = replace(@temizlik,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@temizlik,'','');
+            select @elektrik                    = replace(@elektrik,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@elektrik,'','');
+            select @isitma                      = replace(@isitma,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@isitma,'','');
+                              
+            /* küsüratlar virgül ile girildiyse nokta ile değiştirir ve money formatına çevirir. */	
+            DECLARE @NEWsatisbedeli money       = cast(isnull(replace(@satisbedeli,'','',''.''),0) as money);
+            DECLARE @NEWtoplamtutar money       = cast(isnull(replace(@toplamtutar,'','',''.''),0) as money);
+            DECLARE @NEWonodeme money           = cast(isnull(replace(@onodeme,'','',''.''),0) as money);
+            DECLARE @NEWkalan money             = cast(isnull(replace(@kalan,'','',''.''),0) as money);
+        
+            SET @temizlik                       = isnull(replace(@temizlik,'','',''.''),0);
+            SET @elektrik                       = isnull(replace(@elektrik,'','',''.''),0);
+            SET @isitma                         = isnull(replace(@isitma,'','',''.''),0);
+
+            DECLARE @NEWtemizlik money          = (case when isnumeric(@temizlik)=1 then cast(@temizlik as money) else 0 end);
+            DECLARE @NEWelektrik money          = (case when isnumeric(@elektrik)=1 then cast(@elektrik as money) else 0 end);
+            DECLARE @NEWisitma money            = (case when isnumeric(@isitma)=1 then cast(@isitma as money) else 0 end);
+
+            SET @indirim                        = @NEWsatisbedeli-@NEWtoplamtutar;
+            SET @indirim                        = (case when @indirim=-1 or @indirim=1 then 0 else @indirim end);
+
+            SET @ekstraUcretler                 = @NEWtemizlik+@NEWelektrik+@NEWisitma;
+            SET @kazancTutari                   = (case when not isnull(@kayitlarKar,'''')='''' then isnull(TRY_CONVERT(money,@kayitlarKar),0) else @NEWsatisbedeli/100*@kazancorani-(case when @indirime_evsahibi = 0 then @indirim else 0 end) end);
+            SET @evsahibiKazanc                 = @NEWsatisbedeli-@kazancTutari;
+            SET @evsahibiKalan                  = @NEWonodeme-@kazancTutari;
+
+            DECLARE @kayitlar_odeme_count int=0;
+            select @kayitlar_odeme_count=count(ko.kayitid) from kayitlar_odeme ko where ko.kayitid=@kayitid;
+
+            if @kayitlar_odeme_count=0
+            begin
+                insert into kayitlar_odeme(kayitid,satis_bedeli,indirim_site,indirim_evsahibi,toplam_tutar,on_odeme,kalan,ekstra_ucretler,kazanc_tutari,evsahibi_kazanc_tutari,evsahibi_kalan,doviz,kur)
+                values (@kayitid,@NEWsatisbedeli,(case when @indirime_evsahibi=1 then 0 else @indirim end),(case when @indirime_evsahibi=1 then @indirim else 0 end),@NEWtoplamtutar,@NEWonodeme,@NEWkalan,@ekstraUcretler,@kazancTutari,@evsahibiKazanc,@evsahibiKalan,@doviz,@kur);
+            end
+            else
+            begin
+                update kayitlar_odeme
+                set
+                    satis_bedeli                    = @NEWsatisbedeli,
+                    indirim_site                    = (case when @indirime_evsahibi=1 then 0 else @indirim end),
+                    indirim_evsahibi                = (case when @indirime_evsahibi=1 then @indirim else 0 end),
+                    toplam_tutar                    = @NEWtoplamtutar ,
+                    on_odeme                        = @NEWonodeme,
+                    kalan                           = @NEWkalan,
+                    ekstra_ucretler                 = @ekstraUcretler,
+                    kazanc_tutari                   = @kazancTutari,
+                    evsahibi_kazanc_tutari          = @evsahibiKazanc,
+                    evsahibi_kalan                  = @evsahibiKalan,
+                    doviz                           = @doviz,
+                    kur                             = @kur,
+                    modifedDate                     = getdate()
+                where kayitid=@kayitid;
+            end;
+
+        end;
+
+    END;
+    ');
+END;
+GO
+
+-- =====================================================================================
+-- DIKKAT / WARNING: MANUEL CALISTIRILMALIDIR / RUN MANUALLY!
+-- Bu blok tum mevcut rezervasyonlari kayitlar_odeme tablosuna aktarir (backfill cursor).
+-- Setup endpointi uzerinden calistirildiginda timeout olusup HTTP 500 donmemesi icin yoruma alinmistir.
+-- Kayitlari aktarmak icin asagidaki blogu SSMS uzerinde manuel calistiriniz.
+-- Run this block manually in SSMS; otherwise API setup returns HTTP 500 due to timeout.
+-- =====================================================================================
+-- IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+--     AND OBJECT_ID(N'[dbo].[kayitlar_odeme]', N'U') IS NOT NULL
+-- BEGIN
+--     DECLARE @cur_id int;
+--     DECLARE @cur_satisbedeli nvarchar(50);
+--     DECLARE @cur_indirime_evsahibi bit;
+--     DECLARE @cur_toplamtutar nvarchar(50);
+--     DECLARE @cur_onodeme nvarchar(50);
+--     DECLARE @cur_kalan nvarchar(50);
+--     DECLARE @cur_temizlik nvarchar(50);
+--     DECLARE @cur_elektrik nvarchar(50);
+--     DECLARE @cur_kayitlarKar nvarchar(50);
+--     DECLARE @cur_odeme_turu int;
+--     DECLARE @cur_doviz nvarchar(10);
+--     DECLARE @cur_kur money;
+--     DECLARE @cur_kazancorani int;
+-- 
+--     DECLARE @b_satis money;
+--     DECLARE @b_toplam money;
+--     DECLARE @b_onodeme money;
+--     DECLARE @b_kalan money;
+--     DECLARE @b_temizlik money;
+--     DECLARE @b_elektrik money;
+--     DECLARE @b_indirim money;
+--     DECLARE @b_ekstra money;
+--     DECLARE @b_kazanc money;
+--     DECLARE @b_evsahibiKazanc money;
+--     DECLARE @b_evsahibiKalan money;
+-- 
+--     DECLARE cur_kayitlar CURSOR LOCAL FAST_FORWARD FOR
+--         SELECT 
+--             k.id,
+--             dbo.fnTemizle(case when isnull(nullif(ltrim(rtrim(k.eskifiyat)),''),'0')='0' then k.toplam_tutar else k.eskifiyat end),
+--             isnull(k.indirimevsahibi,0),
+--             dbo.fnTemizle(k.toplam_tutar),
+--             dbo.fnTemizle(k.on_odeme),
+--             dbo.fnTemizle(k.kalan),
+--             dbo.fnTemizle(k.temizlik),
+--             dbo.fnTemizle(k.elektrik),
+--             k.tur,
+--             isnull(k.doviz,'tl'),
+--             (case when isnull(k.doviz,'tl')='tl' then 1 else isnull(k.kur,1) end),
+--             isnull(TRY_CONVERT(int, k.kazancorani), 0),
+--             dbo.fnTemizle(k.kar)
+--         FROM dbo.kayitlar k;
+-- 
+--     OPEN cur_kayitlar;
+--     FETCH NEXT FROM cur_kayitlar INTO 
+--         @cur_id, @cur_satisbedeli, @cur_indirime_evsahibi, @cur_toplamtutar, 
+--         @cur_onodeme, @cur_kalan, @cur_temizlik, @cur_elektrik,
+--         @cur_odeme_turu, @cur_doviz, @cur_kur, @cur_kazancorani, @cur_kayitlarKar;
+-- 
+--     WHILE @@FETCH_STATUS = 0
+--     BEGIN
+--         IF @cur_odeme_turu = 2
+--         BEGIN
+--             SET @cur_onodeme = @cur_toplamtutar;
+--             SET @cur_kalan = '0';
+--         END
+-- 
+--         SELECT @cur_satisbedeli = replace(@cur_satisbedeli,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_satisbedeli,'0'),'.');
+--         SELECT @cur_toplamtutar = replace(@cur_toplamtutar,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_toplamtutar,'0'),'.');
+--         SELECT @cur_onodeme = replace(@cur_onodeme,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_onodeme,'0'),'.');
+--         SELECT @cur_kalan = replace(@cur_kalan,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_kalan,'0'),'.');
+--         SELECT @cur_temizlik = replace(@cur_temizlik,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_temizlik,'0'),'.');
+--         SELECT @cur_elektrik = replace(@cur_elektrik,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_elektrik,'0'),'.');
+-- 
+--         SELECT @cur_satisbedeli = replace(@cur_satisbedeli,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_satisbedeli,'0'),',');
+--         SELECT @cur_toplamtutar = replace(@cur_toplamtutar,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_toplamtutar,'0'),',');
+--         SELECT @cur_onodeme = replace(@cur_onodeme,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_onodeme,'0'),',');
+--         SELECT @cur_kalan = replace(@cur_kalan,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_kalan,'0'),',');
+--         SELECT @cur_temizlik = replace(@cur_temizlik,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_temizlik,'0'),',');
+--         SELECT @cur_elektrik = replace(@cur_elektrik,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_elektrik,'0'),',');
+-- 
+--         SET @b_satis = ISNULL(TRY_CONVERT(money, replace(@cur_satisbedeli,',','.')), 0);
+--         SET @b_toplam = ISNULL(TRY_CONVERT(money, replace(@cur_toplamtutar,',','.')), 0);
+--         SET @b_onodeme = ISNULL(TRY_CONVERT(money, replace(@cur_onodeme,',','.')), 0);
+--         SET @b_kalan = ISNULL(TRY_CONVERT(money, replace(@cur_kalan,',','.')), 0);
+--         SET @b_temizlik = (case when isnumeric(replace(@cur_temizlik,',','.'))=1 then ISNULL(TRY_CONVERT(money, replace(@cur_temizlik,',','.')), 0) else 0 end);
+--         SET @b_elektrik = (case when isnumeric(replace(@cur_elektrik,',','.'))=1 then ISNULL(TRY_CONVERT(money, replace(@cur_elektrik,',','.')), 0) else 0 end);
+-- 
+--         SET @b_indirim = @b_satis - @b_toplam;
+--         SET @b_indirim = (case when @b_indirim = -1 or @b_indirim = 1 then 0 else @b_indirim end);
+-- 
+--         SET @b_ekstra = @b_temizlik + @b_elektrik;
+--         SET @b_kazanc = (case when not isnull(@cur_kayitlarKar,'')='' then TRY_CONVERT(money,@cur_kayitlarKar) else @b_satis/100*@cur_kazancorani-(case when @cur_indirime_evsahibi = 0 then @b_indirim else 0 end) end);
+--         SET @b_kazanc = isnull(@b_kazanc, 0);
+--         SET @b_evsahibiKazanc = @b_satis - @b_kazanc;
+--         SET @b_evsahibiKalan = @b_onodeme - @b_kazanc;
+-- 
+--         IF NOT EXISTS (SELECT 1 FROM dbo.kayitlar_odeme WHERE kayitid = @cur_id)
+--         BEGIN
+--             INSERT INTO dbo.kayitlar_odeme(kayitid, satis_bedeli, indirim_site, indirim_evsahibi, toplam_tutar, on_odeme, kalan, ekstra_ucretler, kazanc_tutari, evsahibi_kazanc_tutari, evsahibi_kalan, doviz, kur, createdDate)
+--             VALUES (@cur_id, @b_satis, (case when @cur_indirime_evsahibi=1 then 0 else @b_indirim end), (case when @cur_indirime_evsahibi=1 then @b_indirim else 0 end), @b_toplam, @b_onodeme, @b_kalan, @b_ekstra, @b_kazanc, @b_evsahibiKazanc, @b_evsahibiKalan, @cur_doviz, @cur_kur, getdate());
+--         END
+--         ELSE
+--         BEGIN
+--             UPDATE dbo.kayitlar_odeme
+--             SET satis_bedeli = @b_satis,
+--                 indirim_site = (case when @cur_indirime_evsahibi=1 then 0 else @b_indirim end),
+--                 indirim_evsahibi = (case when @cur_indirime_evsahibi=1 then @b_indirim else 0 end),
+--                 toplam_tutar = @b_toplam,
+--                 on_odeme = @b_onodeme,
+--                 kalan = @b_kalan,
+--                 ekstra_ucretler = @b_ekstra,
+--                 kazanc_tutari = @b_kazanc,
+--                 evsahibi_kazanc_tutari = @b_evsahibiKazanc,
+--                 evsahibi_kalan = @b_evsahibiKalan,
+--                 doviz = @cur_doviz,
+--                 kur = @cur_kur,
+--                 modifedDate = getdate()
+--             WHERE kayitid = @cur_id;
+--         END
+-- 
+--         FETCH NEXT FROM cur_kayitlar INTO 
+--             @cur_id, @cur_satisbedeli, @cur_indirime_evsahibi, @cur_toplamtutar, 
+--             @cur_onodeme, @cur_kalan, @cur_temizlik, @cur_elektrik,
+--             @cur_odeme_turu, @cur_doviz, @cur_kur, @cur_kazancorani, @cur_kayitlarKar;
+--     END
+-- 
+--     CLOSE cur_kayitlar;
+--     DEALLOCATE cur_kayitlar;
+-- END;
+-- GO
+
+
