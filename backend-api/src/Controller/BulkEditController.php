@@ -281,6 +281,8 @@ final class BulkEditController extends Controller
             'not' => ['label' => 'Not', 'type' => 'textarea', 'columns' => ['not2', 'not']],
             'bakimciad' => ['label' => 'Bakımcı Adı', 'type' => 'text', 'columns' => ['bakimciad']],
             'bakimcitel' => ['label' => 'Bakımcı Tel', 'type' => 'text', 'columns' => ['bakimcitel']],
+            // Ilan detayindaki "WhatsApp Grup Adı" ile ayni kolon (HomesManagementDetail: whatsapp_grup, yoksa rez_takip_yeri_adi).
+            'whatsapp_grup' => ['label' => 'WhatsApp Grup Adı', 'type' => 'text', 'columns' => ['whatsapp_grup', 'rez_takip_yeri_adi']],
             'cikis_saat' => ['label' => 'Çıkış Saati', 'type' => 'text', 'columns' => ['cikis_saat']],
             'giris_saat' => ['label' => 'Giriş Saati', 'type' => 'text', 'columns' => ['giris_saat']],
             'kat_sayisi' => ['label' => 'Kat Sayısı', 'type' => 'number', 'columns' => ['kat_sayisi', 'katsayisi', 'kat']],

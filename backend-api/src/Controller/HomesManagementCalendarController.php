@@ -44,6 +44,11 @@ final class HomesManagementCalendarController extends Controller
     private const OPTION_TYPE = 'opsiyon';
     private const OPTION_DURUM = 1;
     private const OPTION_MAX_HOURS = 720;
+    // Kiralama Takvimi'ndeki mevcut kaydi iptal (Reservation/Cancel).
+    private const CANCEL_TYPE = 'iptal';
+    // Kiralama Takvimi'ndeki mevcut kaydin basligini guncelle (KT reservation/update, dogrudan) / oku (Reservation/Item).
+    private const EDIT_TYPE = 'duzenle';
+    private const DETAIL_TYPE = 'detay';
 
     /** @var string|null dolu tablosundaki rezervasyon id kolonu (kayitid / kayitId) */
     private $kayitIdColumn = null;
@@ -178,6 +183,25 @@ final class HomesManagementCalendarController extends Controller
     {
         $emlakId = $this->positiveInt('id', 'Lutfen gecerli bir emlak ID gonderin.');
         [$start, $end] = $this->dateRange();
+
+        // Kiralama Takvimi'ndeki mevcut kayit (ReservationId secili tarihlerden bulunur): dolu'ya yazilmaz, sadece KT'ye istek gider.
+        // iptal: Reservation/Cancel, duzenle: baslik (KT reservation/update, dogrudan), detay: mevcut bilgiler (Reservation/Item).
+        $existingAction = (string) $this->request->input('rezTip', '');
+        if (in_array($existingAction, [self::CANCEL_TYPE, self::EDIT_TYPE, self::DETAIL_TYPE], true)) {
+            if (!filter_var($this->request->input('kiralamaTakvimi', false), FILTER_VALIDATE_BOOLEAN)) {
+                throw new HttpException('Bu islem sadece Kiralama Takvimi\'ne bagli villada yapilabilir.', 'VALIDATION', 422);
+            }
+            $pdo = $this->db->pdo();
+            if ($existingAction === self::CANCEL_TYPE) {
+                $this->cancelOnKiralamaTakvimi($pdo, $emlakId, $start, $end);
+            } elseif ($existingAction === self::EDIT_TYPE) {
+                $this->updateOnKiralamaTakvimi($pdo, $emlakId, $start, $end);
+            } else {
+                $this->detailOnKiralamaTakvimi($pdo, $emlakId, $start, $end);
+            }
+            return;
+        }
+
         $title = $this->title();
         $rezTip = $this->closureType(true);
         $isOption = $rezTip === self::OPTION_TYPE;
@@ -250,52 +274,65 @@ final class HomesManagementCalendarController extends Controller
         }
 
         $sendGroup = $this->kiralamaTakvimiSendGroup();
-        $adult = max(1, (int) $this->request->input('adultGuestCount', 1));
-        $child = max(0, (int) $this->request->input('childGuestCount', 0));
 
-        // Basarili: "0;/{ReservationId};/{EstateId}", hata: "1;/{mesaj}"
-        $raw = $this->panelApi('POST', 'Reservation/Create', [
-            'estateId' => $estateId,
-            'checkInDate' => $start,
-            'checkOutDate' => $end,
-            'customerEmail' => trim((string) $this->request->input('customerEmail', '')),
-            'customerFullName' => $title,
-            'customerPhone' => trim((string) $this->request->input('customerPhone', '')),
-            'adultGuestCount' => (string) $adult,
-            'childGuestCount' => (string) $child,
-        ]);
-        $parts = explode(';/', $raw);
-        if ($parts[0] !== '0' || !isset($parts[1]) || (int) $parts[1] <= 0) {
-            throw new HttpException($this->panelMessage($parts, 'Kiralama Takvimi\'nde rezervasyon olusturulamadi.'), 'KT_CREATE_FAILED', 502);
+        // Secilen tarihlerde Kiralama Takvimi'nden gelmis bir opsiyon varsa yeni rezervasyon acilmaz;
+        // islem o opsiyonun ReservationId'si ile yapilir.
+        $reservationId = $this->existingKtOptionReservationId($pdo, $emlakId, $start, $end);
+        $isExisting = $reservationId > 0;
+
+        if (!$isExisting) {
+            $adult = max(1, (int) $this->request->input('adultGuestCount', 1));
+            $child = max(0, (int) $this->request->input('childGuestCount', 0));
+
+            // Basarili: "0;/{ReservationId};/{EstateId}", hata: "1;/{mesaj}"
+            $raw = $this->panelApi('POST', 'Reservation/Create', [
+                'estateId' => $estateId,
+                'checkInDate' => $start,
+                'checkOutDate' => $end,
+                'customerEmail' => trim((string) $this->request->input('customerEmail', '')),
+                'customerFullName' => $title,
+                'customerPhone' => trim((string) $this->request->input('customerPhone', '')),
+                'adultGuestCount' => (string) $adult,
+                'childGuestCount' => (string) $child,
+            ]);
+            $parts = explode(';/', $raw);
+            if ($parts[0] !== '0' || !isset($parts[1]) || (int) $parts[1] <= 0) {
+                throw new HttpException($this->panelMessage($parts, 'Kiralama Takvimi\'nde rezervasyon olusturulamadi.'), 'KT_CREATE_FAILED', 502);
+            }
+            $reservationId = (int) $parts[1];
         }
-        $reservationId = (int) $parts[1];
 
         $isOption = $rezTip === self::OPTION_TYPE;
+        // Mevcut KT kaydi (ReservationId tarihten bulundu) POST ile, yeni acilan rezervasyon eskisi gibi GET ile.
+        // Panel API (Reservation::Option / Approve) parametreleri get() ile okudugu icin POST'ta da query'de gider.
+        $method = $isExisting ? 'POST' : 'GET';
         $result = $isOption
-            ? $this->panelApi('GET', 'Reservation/Option', [
+            ? $this->panelApi($method, 'Reservation/Option', [
                 'reservationId' => $reservationId,
                 'estateId' => $estateId,
                 'optionHours' => $optionHours,
                 'callbackParam' => '',
                 'isMinute' => '',
                 'sendWhatsappGroup' => $sendGroup ? '1' : '0',
-            ])
-            : $this->panelApi('GET', 'Reservation/Approve', [
+            ], true)
+            : $this->panelApi($method, 'Reservation/Approve', [
                 'reservationId' => $reservationId,
                 'estateId' => $estateId,
                 'sendWhatsappGroup' => $sendGroup ? '1' : '0',
-            ]);
+            ], true);
 
         if (trim($result) !== 'success') {
-            // Yarim kalan rezervasyon merkezi sistemde birakilmaz.
-            try {
-                $this->panelApi('GET', 'Reservation/Cancel', [
-                    'reservationId' => $reservationId,
-                    'estateId' => $estateId,
-                    'sendWhatsappGroup' => '0',
-                ]);
-            } catch (\Throwable $e) {
-                // Iptal de basarisizsa asil hata dondurulur.
+            // Yarim kalan (bu istekte acilan) rezervasyon merkezi sistemde birakilmaz; mevcut opsiyona dokunulmaz.
+            if (!$isExisting) {
+                try {
+                    $this->panelApi('GET', 'Reservation/Cancel', [
+                        'reservationId' => $reservationId,
+                        'estateId' => $estateId,
+                        'sendWhatsappGroup' => '0',
+                    ]);
+                } catch (\Throwable $e) {
+                    // Iptal de basarisizsa asil hata dondurulur.
+                }
             }
             throw new HttpException(
                 trim($result) !== '' ? trim($result) : ($isOption ? 'Kiralama Takvimi opsiyon islemi basarisiz.' : 'Kiralama Takvimi tarih kapatma islemi basarisiz.'),
@@ -306,8 +343,151 @@ final class HomesManagementCalendarController extends Controller
 
         $this->response->success([
             'message' => $isOption ? 'Kiralama Takvimi\'nde opsiyona alindi' : 'Kiralama Takvimi\'nde tarih kapatildi',
-            'kiralamaTakvimi' => ['reservationId' => $reservationId, 'estateId' => $estateId],
+            'kiralamaTakvimi' => ['reservationId' => $reservationId, 'estateId' => $estateId, 'existing' => $isExisting],
         ], 201);
+    }
+
+    /**
+     * Secilen tarihlerdeki Kiralama Takvimi kaydini (ReservationId tarihten bulunur) iptal eder: POST Reservation/Cancel.
+     */
+    private function cancelOnKiralamaTakvimi(PDO $pdo, int $emlakId, string $start, string $end): void
+    {
+        [$reservationId, $estateId] = $this->requireExistingKtReservation($pdo, $emlakId, $start, $end);
+
+        $sendGroup = $this->kiralamaTakvimiSendGroup();
+        // Panel API (Reservation::Cancel) parametreleri get() ile okur; POST'ta da query'de gider.
+        $result = $this->panelApi('POST', 'Reservation/Cancel', [
+            'reservationId' => $reservationId,
+            'sendWhatsappGroup' => $sendGroup ? '1' : '0',
+        ], true);
+
+        if (trim($result) !== 'success') {
+            throw new HttpException(trim($result) !== '' ? trim($result) : 'Kiralama Takvimi iptal islemi basarisiz.', 'KT_CANCEL_FAILED', 502);
+        }
+
+        $this->response->success([
+            'message' => 'Kiralama Takvimi\'nde rezervasyon iptal edildi',
+            'kiralamaTakvimi' => ['reservationId' => $reservationId, 'estateId' => $estateId, 'existing' => true],
+        ]);
+    }
+
+    /**
+     * Secilen tarihlerdeki Kiralama Takvimi kaydinin sadece basligini (KT customerFullName) gunceller; tarih degismez:
+     * Panelde karsiligi olmadigi icin istek dogrudan Kiralama Takvimi API'sine gider (reservation/item + reservation/update).
+     */
+    private function updateOnKiralamaTakvimi(PDO $pdo, int $emlakId, string $start, string $end): void
+    {
+        [$reservationId, $estateId] = $this->requireExistingKtReservation($pdo, $emlakId, $start, $end);
+
+        $title = $this->title();
+
+        // reservation/update gonderilmeyen alanlari bosaltabilir: mevcut kayit okunup sadece musteri adi degistirilir.
+        $item = $this->ktApi('GET', 'reservation/item', null, ['reservationId' => $reservationId]);
+        $this->ktApi('POST', 'reservation/update', [
+            'reservationId' => $reservationId,
+            'customerFullName' => $title,
+            'customerPhone' => (string) ($this->rowValue($item, 'customerPhone') ?? ''),
+            'customerEmail' => (string) ($this->rowValue($item, 'customerEmail') ?? ''),
+            'adultGuestCount' => (int) ($this->rowValue($item, 'adultGuestCount') ?? 0),
+            'childGuestCount' => (int) ($this->rowValue($item, 'childGuestCount') ?? 0),
+            'callbackParam' => (int) ($this->rowValue($item, 'callbackParam') ?? 0),
+            'description' => (string) ($this->rowValue($item, 'description') ?? ''),
+            'sendWhatsappGroup' => $this->kiralamaTakvimiSendGroup(),
+        ]);
+
+        $this->response->success([
+            'message' => 'Kiralama Takvimi\'nde rezervasyon guncellendi',
+            'kiralamaTakvimi' => ['reservationId' => $reservationId, 'estateId' => $estateId, 'existing' => true],
+        ]);
+    }
+
+    /**
+     * Secilen tarihlerdeki Kiralama Takvimi kaydinin musteri bilgileri (duzenle penceresini doldurmak icin): Reservation/Item.
+     */
+    private function detailOnKiralamaTakvimi(PDO $pdo, int $emlakId, string $start, string $end): void
+    {
+        [$reservationId, $estateId] = $this->requireExistingKtReservation($pdo, $emlakId, $start, $end);
+
+        // Panel Reservation::Item reservationId'yi post() ile okur ve KT cevabini oldugu gibi basar.
+        $item = json_decode($this->panelApi('POST', 'Reservation/Item', ['reservationId' => $reservationId]), true);
+        if (!is_array($item)) {
+            throw new HttpException('Kiralama Takvimi kaydi okunamadi.', 'KT_ITEM_FAILED', 502);
+        }
+
+        $this->response->success([
+            'reservationId' => $reservationId,
+            'estateId' => $estateId,
+            'customerFullName' => (string) ($this->rowValue($item, 'customerFullName') ?? ''),
+            'customerPhone' => (string) ($this->rowValue($item, 'customerPhone') ?? ''),
+            'customerEmail' => (string) ($this->rowValue($item, 'customerEmail') ?? ''),
+            'state' => $this->rowValue($item, 'state'),
+        ]);
+    }
+
+    /**
+     * Villanin KT EstateId'si ve secili tarihlerle cakisan KT kaydinin ReservationId'si; yoksa hata.
+     *
+     * @return int[] [reservationId, estateId]
+     */
+    private function requireExistingKtReservation(PDO $pdo, int $emlakId, string $start, string $end): array
+    {
+        $stmt = $pdo->prepare('SELECT TOP 1 EstateId FROM KiralamaTakvimi.CalendarHomes WHERE homesId = :id');
+        $stmt->execute([':id' => $emlakId]);
+        $estateId = (int) ($stmt->fetchColumn() ?: 0);
+        if ($estateId <= 0) {
+            throw new HttpException('Villa Kiralama Takvimi\'ne bagli degil.', 'KT_NOT_CONNECTED', 422);
+        }
+
+        // Frontend ReservationId'yi (detay cevabindan) gonderirse o kullanilir; villanin dolu kaydinda oldugu dogrulanir.
+        $requested = (int) $this->request->input('reservationId', 0);
+        if ($requested > 0) {
+            $check = $pdo->prepare('SELECT TOP 1 ReservationId FROM dbo.dolu WHERE emlak = :emlak AND ReservationId = :rid');
+            $check->execute([':emlak' => $emlakId, ':rid' => $requested]);
+            if ((int) ($check->fetchColumn() ?: 0) !== $requested) {
+                throw new HttpException('Kiralama Takvimi kaydi bu villaya ait degil.', 'KT_NOT_FOUND', 404);
+            }
+
+            return [$requested, $estateId];
+        }
+
+        $reservationId = $this->existingKtOptionReservationId($pdo, $emlakId, $start, $end);
+        if ($reservationId <= 0) {
+            throw new HttpException('Secilen tarihlerde Kiralama Takvimi kaydi bulunamadi.', 'KT_NOT_FOUND', 404);
+        }
+
+        return [$reservationId, $estateId];
+    }
+
+    // KT cevabinda alan adi buyuk/kucuk harf farkli gelebilir (customerFullName / CustomerFullName).
+    private function rowValue(array $row, string $key)
+    {
+        foreach ($row as $name => $value) {
+            if (strcasecmp((string) $name, $key) === 0) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Secilen aralikla cakisan, Kiralama Takvimi'nden gelmis kaydin (opsiyon, kapali ya da dolu; ReservationId > 0) ReservationId'si; yoksa 0.
+     */
+    private function existingKtOptionReservationId(PDO $pdo, int $emlakId, string $start, string $end): int
+    {
+        if (!$this->hasColumn($pdo, 'dbo.dolu', 'ReservationId')) {
+            return 0;
+        }
+
+        $stmt = $pdo->prepare(
+            'SELECT TOP 1 ReservationId FROM dbo.dolu
+             WHERE emlak = :emlak AND ReservationId > 0
+               AND tarih < :end AND tarih2 > :start
+             ORDER BY tarih'
+        );
+        $stmt->execute([':emlak' => $emlakId, ':start' => $start, ':end' => $end]);
+
+        return (int) ($stmt->fetchColumn() ?: 0);
     }
 
     // Islem bildirimi villanin WhatsApp grubuna gitsin mi (gonderimi merkezi sistem yapar). Gelmezse true.
@@ -325,7 +505,7 @@ final class HomesManagementCalendarController extends Controller
      * Panel API'sine (orn. https://www.site.com/api/Reservation/Option) istek atar, ham metin yanit doner.
      * ReservationStatusController::panelApi ile ayni.
      */
-    private function panelApi(string $method, string $path, array $data): string
+    private function panelApi(string $method, string $path, array $data, bool $queryOnly = false): string
     {
         $url = $this->panelUrl() . '/' . $path;
         $headers = array_values((array) ($this->app['kiralamatakvimi_panel_api_headers'] ?? []));
@@ -337,6 +517,11 @@ final class HomesManagementCalendarController extends Controller
         ];
         if ($method === 'GET') {
             $url .= '?' . http_build_query($data);
+        } elseif ($queryOnly) {
+            // POST, parametreler query'de (panel get() ile okur); body bos.
+            $url .= '?' . http_build_query($data);
+            $options[CURLOPT_POST] = true;
+            $options[CURLOPT_POSTFIELDS] = '';
         } else {
             $options[CURLOPT_POST] = true;
             $options[CURLOPT_POSTFIELDS] = http_build_query($data);
@@ -358,8 +543,99 @@ final class HomesManagementCalendarController extends Controller
                 502
             );
         }
+        // Panel / Kiralama Takvimi hatasi: donen metin oldugu gibi (HTML sayfasiysa etiketleri ayiklanarak) iletilir.
+        if ($status >= 400) {
+            $text = trim(preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags((string) $raw), ENT_QUOTES, 'UTF-8')) ?? '');
+            $decoded = json_decode((string) $raw, true);
+            if (is_array($decoded)) {
+                $messages = $this->rowValue($decoded, 'messages');
+                $text = is_array($messages) && isset($messages[0]) ? (string) $messages[0] : (string) ($this->rowValue($decoded, 'message') ?? $text);
+            }
+            throw new HttpException(
+                ($text !== '' ? (function_exists('mb_substr') ? mb_substr($text, 0, 500) : substr($text, 0, 500)) : 'Bos yanit') . ' (' . $path . ', HTTP ' . $status . ')',
+                'KT_PANEL_ERROR',
+                502
+            );
+        }
 
         return trim((string) $raw);
+    }
+
+    /**
+     * Kiralama Takvimi API'sine (https://backend.kiralamatakvimi.com/api) dogrudan JSON istek atar, cevabi dizi olarak doner.
+     * Kimlik: X-API-Key ve EstablishmentId header'lari. Ayarlar (config/app.local.php):
+     *   kiralamatakvimi_api_url (bos: https://backend.kiralamatakvimi.com/api),
+     *   kiralamatakvimi_api_key, kiralamatakvimi_establishment_id (bos: panel api/config.php'deki $config degerleri).
+     * Hata (200 disi): KT'nin mesaji (messages[0]) oldugu gibi iletilir.
+     *
+     * @param array<string,mixed>|null $body
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function ktApi(string $method, string $path, ?array $body, array $query = []): array
+    {
+        // Anahtar ve EstablishmentId: once app.local.php, sonra sitenin genel tablosu (apiKey / EstablishmentId kolonu),
+        // en son panelin api/config.php'si ($config['EstablishmentId']).
+        $panel = (array) ($this->app['_panel_config'] ?? []);
+        $genel = $this->db->pdo()->query('SELECT TOP 1 * FROM genel')->fetch(PDO::FETCH_ASSOC) ?: [];
+        $apiKey = trim((string) ($this->app['kiralamatakvimi_api_key'] ?? ''));
+        if ($apiKey === '') {
+            $apiKey = trim((string) ($this->rowValue($genel, 'apiKey') ?? ''));
+        }
+        $establishmentId = trim((string) ($this->app['kiralamatakvimi_establishment_id'] ?? ''));
+        if ($establishmentId === '') {
+            $establishmentId = trim((string) ($this->rowValue($genel, 'EstablishmentId') ?? ($panel['EstablishmentId'] ?? '')));
+        }
+        if ($apiKey === '' || $establishmentId === '') {
+            throw new HttpException(
+                'Kiralama Takvimi API ayarlari eksik: ' . ($apiKey === '' ? 'genel.apiKey bos' : 'EstablishmentId bulunamadi')
+                . ' (config/app.local.php: kiralamatakvimi_api_key / kiralamatakvimi_establishment_id).',
+                'KT_CONFIG_MISSING',
+                500
+            );
+        }
+
+        $base = rtrim(trim((string) ($this->app['kiralamatakvimi_api_url'] ?? '')) ?: 'https://backend.kiralamatakvimi.com/api', '/');
+        $url = $base . '/' . $path . ($query ? '?' . http_build_query($query) : '');
+        $options = [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT => 60,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'Content-Type: application/json',
+                'X-API-Key: ' . $apiKey,
+                'EstablishmentId: ' . $establishmentId,
+            ],
+        ];
+        if ($method !== 'GET') {
+            $options[CURLOPT_POST] = true;
+            $options[CURLOPT_POSTFIELDS] = json_encode($body ?? new \stdClass(), JSON_UNESCAPED_UNICODE);
+        }
+
+        $curl = curl_init($url);
+        curl_setopt_array($curl, $options);
+        $raw = curl_exec($curl);
+        $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        curl_close($curl);
+
+        if ($raw === false || $status === 0) {
+            throw new HttpException('Kiralama Takvimi API\'sine ulasilamadi.', 'KT_UNREACHABLE', 502);
+        }
+        $decoded = json_decode((string) $raw, true);
+        if ($status < 200 || $status >= 300) {
+            $message = '';
+            if (is_array($decoded)) {
+                $messages = $this->rowValue($decoded, 'messages');
+                $message = is_array($messages) && isset($messages[0]) ? (string) $messages[0] : (string) ($this->rowValue($decoded, 'message') ?? '');
+            }
+            if ($message === '') {
+                $message = trim(strip_tags((string) $raw)) ?: 'Kiralama Takvimi istegi basarisiz.';
+            }
+            throw new HttpException($message . ' (' . $path . ', HTTP ' . $status . ')', 'KT_REQUEST_FAILED', 502);
+        }
+
+        return is_array($decoded) ? $decoded : [];
     }
 
     // KiralamatakvimiController::panelUrl ile ayni kural.

@@ -90,7 +90,7 @@ final class AvailabilityController extends Controller
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS doluGirisler,
             ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS doluCikislar,
             ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS doluGunler
-            FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId . $excludeSql
+            FROM dolu WHERE TRY_CONVERT(date,tarih2,103) > TRY_CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId . $excludeSql
             . ($separateManual ? " AND " . $reservationRowSql : '');
 
         // separateManual: rezervasyonsuz kapatmalar (takvimden: durum 0, eski panel: durum 3; kayitid -1 / NULL) ayri liste.
@@ -99,7 +99,7 @@ final class AvailabilityController extends Controller
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS manuelGirisler,
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS manuelCikislar,
                     ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS manuelGunler
-                    FROM dolu WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum IN (0, 3)
+                    FROM dolu WHERE TRY_CONVERT(date,tarih2,103) > TRY_CONVERT(date,GETDATE(),103) AND durum IN (0, 3)
                     AND NOT " . $reservationRowSql . " AND emlak = " . $entityId . $excludeSql . ") AS manuel," : '';
 
         // Oda tipi (hotel availability) kontrolü
@@ -135,16 +135,16 @@ final class AvailabilityController extends Controller
         $verisql = $doluTarihlerSqlWith . "
             SELECT * FROM
                 (SELECT
-                    ISNULL(STRING_AGG(CONVERT(date,tarih1,103),','),'') AS sondakikaGirisler,
-                    ISNULL(STRING_AGG(CONVERT(date,tarih2,103),','),'') AS sondakikaCikislar,
-                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(CONVERT(date,tarih1,103),CONVERT(date,tarih2,103)),','),'') AS sondakikaGunler
-                    FROM sonDakika WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND site = " . $siteVal . " AND islem_id = " . $entityId . ") AS sonDakika,
+                    ISNULL(STRING_AGG(TRY_CONVERT(date,tarih1,103),','),'') AS sondakikaGirisler,
+                    ISNULL(STRING_AGG(TRY_CONVERT(date,tarih2,103),','),'') AS sondakikaCikislar,
+                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(TRY_CONVERT(date,tarih1,103),TRY_CONVERT(date,tarih2,103)),','),'') AS sondakikaGunler
+                    FROM sonDakika WHERE TRY_CONVERT(date,tarih2,103) > TRY_CONVERT(date,GETDATE(),103) AND site = " . $siteVal . " AND islem_id = " . $entityId . ") AS sonDakika,
                 (" . $doluTarihlerSql . ") AS dolu,
                 (SELECT
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS dolu_fakeGirisler,
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih2),'-',FORMAT(tarih2,'MM'),'-',FORMAT(tarih2,'dd')),','),'') AS dolu_fakeCikislar,
                     ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(tarih,tarih2),','),'') AS dolu_fakeGunler
-                    FROM dolu_fake WHERE CONVERT(date,tarih2,103) > CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId . ") AS fake_dolu,
+                    FROM dolu_fake WHERE TRY_CONVERT(date,tarih2,103) > TRY_CONVERT(date,GETDATE(),103) AND durum = 3 AND emlak = " . $entityId . ") AS fake_dolu,
                 " . $manuelSql . "
                 (SELECT ISNULL((SELECT
                     ISNULL(STRING_AGG(
@@ -162,8 +162,8 @@ final class AvailabilityController extends Controller
                     ISNULL(STRING_AGG(CONCAT(YEAR(dolu.tarih),'-',FORMAT(dolu.tarih,'MM'),'-',FORMAT(dolu.tarih,'dd')),','),'') AS odemeGirisler,
                     ISNULL(STRING_AGG(CONCAT(YEAR(dolu.tarih2),'-',FORMAT(dolu.tarih2,'MM'),'-',FORMAT(dolu.tarih2,'dd')),','),'') AS odemeCikislar,
                     ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(dolu.tarih,dolu.tarih2),','),'') AS odemeGunler,
-                    ISNULL(STRING_AGG(CONCAT(REPLICATE(CONCAT(DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,kayitlar.saat,103)),','),DATEDIFF(day,CONVERT(date,dolu.tarih,103),CONVERT(date,dolu.tarih2,103))),DATEDIFF(HOUR,CONVERT(datetime,GETDATE(),103),CONVERT(datetime,kayitlar.saat,103))),','),'') AS odemeSaatler
-                    FROM dolu LEFT JOIN kayitlar ON kayitlar.id = " . $doluKayitIdSql . " WHERE CONVERT(date,dolu.tarih2,103) > CONVERT(date,GETDATE(),103) AND dolu.durum = 1 AND dolu.emlak = " . $entityId . $excludeSql . ") AS odeme,
+                    ISNULL(STRING_AGG(CONCAT(REPLICATE(CONCAT(DATEDIFF(HOUR,TRY_CONVERT(datetime,GETDATE(),103),TRY_CONVERT(datetime,kayitlar.saat,103)),','),DATEDIFF(day,TRY_CONVERT(date,dolu.tarih,103),TRY_CONVERT(date,dolu.tarih2,103))),DATEDIFF(HOUR,TRY_CONVERT(datetime,GETDATE(),103),TRY_CONVERT(datetime,kayitlar.saat,103))),','),'') AS odemeSaatler
+                    FROM dolu LEFT JOIN kayitlar ON kayitlar.id = " . $doluKayitIdSql . " WHERE TRY_CONVERT(date,dolu.tarih2,103) > TRY_CONVERT(date,GETDATE(),103) AND dolu.durum = 1 AND dolu.emlak = " . $entityId . $excludeSql . ") AS odeme,
                 (SELECT
                     ISNULL((SELECT r.baslik,
                     CONVERT(VARCHAR, r.date1, 103) AS date1,
@@ -176,25 +176,34 @@ final class AvailabilityController extends Controller
                         FROM ruleshomes rh INNER JOIN rules r ON r.id = " . $ruleshomesRulesIdSql . " WHERE r.isactive = 1 AND " . $ruleshomesHomesIdSql . " = " . $entityId . " FOR JSON PATH),'') AS kurallar ) AS kurallar,
                 (SELECT 
                     ISNULL(STRING_AGG(
-                        CAST(CONCAT(YEAR(CONVERT(date,tarih1,103)),'-',FORMAT(CONVERT(date,tarih1,103),'MM'),'-',FORMAT(CONVERT(date,tarih1,103),'dd'),',',
-                        dbo.Natsisa_Fn_aratarihler2(CONVERT(date,tarih1,103),CONVERT(date,tarih2,103)),
-                        ',',YEAR(CONVERT(date,tarih2,103)),'-',FORMAT(CONVERT(date,tarih2,103),'MM'),'-',FORMAT(CONVERT(date,tarih2,103),'dd')) AS NVARCHAR(MAX)),','),'') AS fiyatlarTarihler,
-                    ISNULL(STRING_AGG(CAST(REPLICATE(CONVERT(NVARCHAR,(CAST((ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7) AS decimal(10,0))))+',',DATEDIFF(day,CONVERT(date,tarih1,103),CONVERT(date,tarih2,103)))+CONVERT(NVARCHAR,(CAST(ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7 AS decimal(10,0)))) AS NVARCHAR(MAX)),','),'') AS fiyatlar
+                        CAST(CONCAT(YEAR(TRY_CONVERT(date,tarih1,103)),'-',FORMAT(TRY_CONVERT(date,tarih1,103),'MM'),'-',FORMAT(TRY_CONVERT(date,tarih1,103),'dd'),',',
+                        dbo.Natsisa_Fn_aratarihler2(TRY_CONVERT(date,tarih1,103),TRY_CONVERT(date,tarih2,103)),
+                        ',',YEAR(TRY_CONVERT(date,tarih2,103)),'-',FORMAT(TRY_CONVERT(date,tarih2,103),'MM'),'-',FORMAT(TRY_CONVERT(date,tarih2,103),'dd')) AS NVARCHAR(MAX)),','),'') AS fiyatlarTarihler,
+                    ISNULL(STRING_AGG(CAST(REPLICATE(CONVERT(NVARCHAR,(CAST((ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7) AS decimal(10,0))))+',',DATEDIFF(day,TRY_CONVERT(date,tarih1,103),TRY_CONVERT(date,tarih2,103)))+CONVERT(NVARCHAR,(CAST(ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7 AS decimal(10,0)))) AS NVARCHAR(MAX)),','),'') AS fiyatlar
                     FROM sezonlar
                     LEFT JOIN kanun7464 ka ON ka.homeId=" . (int) $home['id'] . "
                     LEFT JOIN Finance.Currency FromC ON FromC.CurrencyName='" . $home['doviz'] . "'
                     LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
                     LEFT JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
                         AND RD.FromCurrencyId = FromC.CurrencyId AND RD.RateId = :RateId
-                WHERE site = " . $siteVal . " AND islem_id = " . $entityId . " AND islem = 'emlak' AND CONVERT(date,tarih2,103) >= CONVERT(date,GETDATE(),103)) AS fiyatlar";
+                WHERE site = " . $siteVal . " AND islem_id = " . $entityId . " AND islem = 'emlak' AND TRY_CONVERT(date,tarih2,103) >= TRY_CONVERT(date,GETDATE(),103)) AS fiyatlar";
 
         $bindRateId = defined('RATE_ID')
             ? constant('RATE_ID') 
             : (class_exists('Rate') ? \Rate::GetLastRate() : 1);
 
-        $stmt = $pdo->prepare($verisql);
-        $stmt->execute(['RateId' => $bindRateId, 'DefaultCurrencyId' => $defaultCurrencyId]);
-        $raw = $stmt->fetch();
+        // Toplu istekte bir villanın bozuk verisi (ör. çevrilemeyen tarih) bütün listeyi düşürmesin; o villa boş döner.
+        try {
+            $stmt = $pdo->prepare($verisql);
+            $stmt->execute(['RateId' => $bindRateId, 'DefaultCurrencyId' => $defaultCurrencyId]);
+            $raw = $stmt->fetch();
+        } catch (\PDOException $e) {
+            if (!$isBulk) {
+                throw $e;
+            }
+            error_log('Availability emlak ' . $entityId . ': ' . $e->getMessage());
+            $raw = false;
+        }
 
         // Virgülle birleşik alanları diziye çevir, kurallar JSON'unu decode et
         $data = [];
