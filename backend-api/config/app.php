@@ -85,10 +85,21 @@ return [
     //   active_bank_accounts_only: true ise sadece hesaplar.aktif = 1 olanlar (ovillam paneli böyle).
     //   relative_url_base:         mailsablon metnindeki "../../../../../" yerine yazılan adres (panel UrlDuzenle,
     //                              örn. 'https://web.ovillam.com/'). Boşsa sitenin adresi (genel.domain) kullanılır.
+    //   signature_url:             belgelerdeki imza resmi ({{site_imza}}). Tam adres ya da CDN'e göre yol
+    //                              ('uploads/imza.jpg' -> https://cdn.site.com/uploads/imza.jpg). Boşsa değişken boş.
+    //   payment_row_badges:        ödeme satırlarında "Kredi Kartı - Havale" / "Nakit - Havale" etiketleri (ovillam: true).
+    //   cleaning_label:            temizlik satırının adı (ovillam: 'Kısa Süreli K. Ödemesi', garantivillam: 'Temizlik Ücreti').
+    //   heated_pool:               ısıtmalı havuz satırının adı ve biçimi (format = true: panel doviz_cevir_format,
+    //                              "1.500 TL"). Kolonlar reservation_extras.pool'dan okunur (flag_column yoksa tutar
+    //                              boş/0 değilse yazılır). garantivillam: ['label' => 'Havuz Isıtma Ücreti', 'format' => true]
     'reservation_mail' => [
         'bank_html_style' => 'modern',
         'active_bank_accounts_only' => false,
         'relative_url_base' => '',
+        'signature_url' => '',
+        'payment_row_badges' => true,
+        'cleaning_label' => 'Kısa Süreli K. Ödemesi',
+        'heated_pool' => ['label' => 'Isıtmalı Havuz Ücreti', 'format' => false],
     ],
 
     // Rezervasyon detayindaki POS secimi (GET /virtual-pos). Yapi rezervasyona gore secilir:
@@ -123,6 +134,9 @@ return [
     // farklı panelde app.local.php içinde sadece değişen anahtarlar yazılır (controller varsayılanlarla derin birleştirir).
     //   enabled: 'auto' (kolon/tablo varsa açık) | true | false (panelde yok, gösterilmez)
     //   *_column: kayitlar tablosundaki kolon adı
+    //   pool.flag_column: '' ise ayrı "isteniyor" kolonu yok; tutar 0'dan büyükse isteniyor sayılır, istenmezse 0 yazılır.
+    //   pool.amount_format: 'money' ("1.500 TL", varsayılan) | 'number' (düz sayı). Kolon sayısal tipteyse her zaman sayı.
+    //                     garantivillam: 'pool' => ['flag_column' => '', 'amount_column' => 'isitma', 'amount_format' => 'number']
     //   extra_payments.sources: sırayla denenen tablo/view'lar; ilk bulunan kullanılır.
     //   extra_payments.columns: kaynak kolon adları (id, title, type 0 gecelik/1 konaklama boyu, night, amount, total, symbol)
     'reservation_extras' => [

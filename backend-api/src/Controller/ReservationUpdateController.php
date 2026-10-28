@@ -298,7 +298,17 @@ final class ReservationUpdateController extends Controller
                 $labels[$poolFlagCol] = 'Isıtmalı havuz isteniyor';
             }
             $poolBody = $pool !== null && array_key_exists('tutar', $pool) ? ['havuzTutar' => $pool['tutar']] : [];
-            $this->feeChange($poolBody, 'havuzTutar', $poolAmountCol, 'Isıtmalı havuz', $free, $reservation, $currency, $currencyChanged, $set, $labels);
+            // Seçim kolonu yoksa (garantivillam: sadece kayitlar.isitma) "istemiyor" tutarı 0 yazar; yoksa tutar
+            // kalır ve mail / sözleşme havuz ücretini göstermeye devam eder.
+            if ($pool !== null && $poolFlagCol === '' && array_key_exists('istiyor', $pool)
+                && !filter_var($pool['istiyor'], FILTER_VALIDATE_BOOLEAN)) {
+                $poolBody = ['havuzTutar' => 0];
+            }
+            // Tutar sayı olarak yazılır: kolon sayısal tipteyse ya da amount_format = 'number' ise (garantivillam
+            // kayitlar.isitma: panel type=number input, sözleşme "<tutar> TL" diye yazar). Aksi halde "1.500 TL".
+            $poolNumeric = in_array($kayitlar[strtolower($poolAmountCol)]['type'] ?? '', ['int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney'], true)
+                || strtolower((string) ($poolCfg['amount_format'] ?? 'money')) === 'number';
+            $this->feeChange($poolBody, 'havuzTutar', $poolAmountCol, 'Isıtmalı havuz', $free, $reservation, $currency, $currencyChanged, $set, $labels, $poolNumeric);
         }
 
         // tutar (int): ödeme sayfasının çektiği tutar; tur 1 ise ön ödeme, değilse toplam (panel rez_kayit).
@@ -539,15 +549,20 @@ final class ReservationUpdateController extends Controller
         string $currency,
         bool $currencyChanged,
         array &$set,
-        array &$labels
+        array &$labels,
+        bool $plainNumber = false
     ): void {
         if (array_key_exists($key, $body)) {
             $amount = $this->amount($body[$key], $label);
-            $set[$col] = $amount === 0 ? $zeroText : $this->formatMoney($amount, $currency);
+            if ($plainNumber) {
+                $set[$col] = $amount;
+            } else {
+                $set[$col] = $amount === 0 ? $zeroText : $this->formatMoney($amount, $currency);
+            }
             $labels[$col] = $label;
             return;
         }
-        if ($currencyChanged) {
+        if ($currencyChanged && !$plainNumber) {
             $existing = $this->parseMoney($reservation[$col] ?? null);
             if ($existing !== null && $existing > 0) {
                 $set[$col] = $this->formatMoney($existing, $currency);

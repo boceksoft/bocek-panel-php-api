@@ -38,15 +38,22 @@ final class MailSiteController extends Controller
             return isset($genel[$key]) ? trim((string) $genel[$key]) : '';
         };
         $domain = rtrim($g('domain'), '/');
+        $cdn = $this->cdn($domain);
+        $mailConfig = isset($this->app['reservation_mail']) && is_array($this->app['reservation_mail']) ? $this->app['reservation_mail'] : [];
+        $signature = trim((string) ($mailConfig['signature_url'] ?? ''));
+        if ($signature !== '' && preg_match('#^https?://#i', $signature) !== 1) {
+            $signature = $cdn !== '' ? rtrim($cdn, '/') . '/' . ltrim($signature, '/') : '';
+        }
 
         $this->response->success([
             'site' => [
                 'id' => $siteId,
                 'adi' => $g('siteadi'),
                 'domain' => str_replace('web.', 'www.', $domain),
-                'cdn' => $this->cdn($domain),
+                'cdn' => $cdn,
                 'telefon' => $g('telefon'),
                 'gsm' => $g('gsm'),
+                'rezTel' => $g('rez_tel'),
                 'whatsapp' => $g('whatsapp'),
                 'mail' => $g('sitemail'),
                 'instagram' => $g('instagram'),
@@ -55,6 +62,8 @@ final class MailSiteController extends Controller
                 'twitter' => $g('twitter'),
                 'adres' => $g('adres'),
                 'unvan' => $g('unvan'),
+                // Belgelerdeki imza (reservation_mail.signature_url; reservationdetail ile aynı kural).
+                'imza' => $signature,
             ],
         ]);
     }
