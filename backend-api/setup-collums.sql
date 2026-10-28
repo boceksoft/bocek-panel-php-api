@@ -4204,8 +4204,8 @@ BEGIN
     AFTER INSERT,UPDATE AS
     BEGIN
 
-        DECLARE @satisbedeli nvarchar(20); --eskifiyat
-        DECLARE @indirime_evsahibi bit; --indirimevsahibi
+        DECLARE @satisbedeli nvarchar(20); /* eskifiyat */
+        DECLARE @indirime_evsahibi bit; /* indirimevsahibi */
         DECLARE @toplamtutar nvarchar(20);
         DECLARE @onodeme nvarchar(20);
         DECLARE @kalan nvarchar(20);
@@ -4213,7 +4213,7 @@ BEGIN
         DECLARE @elektrik nvarchar(20);
         DECLARE @isitma nvarchar(20);
         DECLARE @kayitlarKar nvarchar(20);
-        DECLARE @odeme_turu int; --tur
+        DECLARE @odeme_turu int; /* tur */
         DECLARE @doviz nvarchar(10);
         DECLARE @kur money;
         DECLARE @kayitid int;
@@ -4239,49 +4239,50 @@ BEGIN
             @kayitid                        = id,
             @kazancorani                    = kazancorani,
             @kayitlarKar                    = kar
-        from inserted i
+        from inserted i;
+
         if @kayitid is not null 
         begin
             if @odeme_turu=2 
             begin
                 SET @onodeme                    = @toplamtutar;
                 SET @kalan                      = 0;
-            end
+            end;
         
-            --küsüratlar nokta ile ayrılmadıysa noktaları siler
-            select @satisbedeli                 = replace(@satisbedeli,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@satisbedeli,''.'')
-            select @toplamtutar                 = replace(@toplamtutar,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@toplamtutar,''.'')
-            select @onodeme                     = replace(@onodeme,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@onodeme,''.'')
-            select @kalan                       = replace(@kalan,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@kalan,''.'')
-            select @temizlik                    = replace(@temizlik,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@temizlik,''.'')
-            select @elektrik                    = replace(@elektrik,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@elektrik,''.'')
-            select @isitma                      = replace(@isitma,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@isitma,''.'')
+            /* küsüratlar nokta ile ayrılmadıysa noktaları siler */
+            select @satisbedeli                 = replace(@satisbedeli,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@satisbedeli,''.'');
+            select @toplamtutar                 = replace(@toplamtutar,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@toplamtutar,''.'');
+            select @onodeme                     = replace(@onodeme,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@onodeme,''.'');
+            select @kalan                       = replace(@kalan,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@kalan,''.'');
+            select @temizlik                    = replace(@temizlik,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@temizlik,''.'');
+            select @elektrik                    = replace(@elektrik,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@elektrik,''.'');
+            select @isitma                      = replace(@isitma,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@isitma,''.'');
 
-            --küsüratlar virgül ile ayrılmadıysa virgül siler							  
-            select @satisbedeli                 = replace(@satisbedeli,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@satisbedeli,'',''')
-            select @toplamtutar                 = replace(@toplamtutar,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@toplamtutar,'',''')
-            select @onodeme                     = replace(@onodeme,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@onodeme,'',''')
-            select @kalan                       = replace(@kalan,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@kalan,'',''')
-            select @temizlik                    = replace(@temizlik,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@temizlik,'',''')
-            select @elektrik                    = replace(@elektrik,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@elektrik,'',''')
-            select @isitma                      = replace(@isitma,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@isitma,'',''')
+            /* küsüratlar virgül ile ayrılmadıysa virgül siler */							  
+            select @satisbedeli                 = replace(@satisbedeli,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@satisbedeli,'','');
+            select @toplamtutar                 = replace(@toplamtutar,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@toplamtutar,'','');
+            select @onodeme                     = replace(@onodeme,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@onodeme,'','');
+            select @kalan                       = replace(@kalan,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@kalan,'','');
+            select @temizlik                    = replace(@temizlik,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@temizlik,'','');
+            select @elektrik                    = replace(@elektrik,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@elektrik,'','');
+            select @isitma                      = replace(@isitma,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@isitma,'','');
                               
-            --küsüratlar virgül ile girildiyse nokta ile değiştirir ve money formatına çevirir.	
-            DECLARE @NEWsatisbedeli money       = cast(isnull(replace(@satisbedeli,'','',''.''),0) as money)
-            DECLARE @NEWtoplamtutar money       = cast(isnull(replace(@toplamtutar,'','',''.''),0) as money)
-            DECLARE @NEWonodeme money           = cast(isnull(replace(@onodeme,'','',''.''),0) as money)
-            DECLARE @NEWkalan money             = cast(isnull(replace(@kalan,'','',''.''),0) as money)
+            /* küsüratlar virgül ile girildiyse nokta ile değiştirir ve money formatına çevirir. */	
+            DECLARE @NEWsatisbedeli money       = cast(isnull(replace(@satisbedeli,'','',''.''),0) as money);
+            DECLARE @NEWtoplamtutar money       = cast(isnull(replace(@toplamtutar,'','',''.''),0) as money);
+            DECLARE @NEWonodeme money           = cast(isnull(replace(@onodeme,'','',''.''),0) as money);
+            DECLARE @NEWkalan money             = cast(isnull(replace(@kalan,'','',''.''),0) as money);
         
-            SET @temizlik                       = isnull(replace(@temizlik,'','',''.''),0) 
-            SET @elektrik                       = isnull(replace(@elektrik,'','',''.''),0) 
-            SET @isitma                         = isnull(replace(@isitma,'','',''.''),0) 
+            SET @temizlik                       = isnull(replace(@temizlik,'','',''.''),0);
+            SET @elektrik                       = isnull(replace(@elektrik,'','',''.''),0);
+            SET @isitma                         = isnull(replace(@isitma,'','',''.''),0);
 
-            DECLARE @NEWtemizlik money          = (case when isnumeric(@temizlik)=1 then cast(@temizlik as money) else 0 end)
-            DECLARE @NEWelektrik money          = (case when isnumeric(@elektrik)=1 then cast(@elektrik as money) else 0 end) 
-            DECLARE @NEWisitma money            = (case when isnumeric(@isitma)=1 then cast(@isitma as money) else 0 end)
+            DECLARE @NEWtemizlik money          = (case when isnumeric(@temizlik)=1 then cast(@temizlik as money) else 0 end);
+            DECLARE @NEWelektrik money          = (case when isnumeric(@elektrik)=1 then cast(@elektrik as money) else 0 end);
+            DECLARE @NEWisitma money            = (case when isnumeric(@isitma)=1 then cast(@isitma as money) else 0 end);
 
             SET @indirim                        = @NEWsatisbedeli-@NEWtoplamtutar;
-            SET @indirim                        = (case when @indirim=-1 or @indirim=1 then 0 else @indirim end)
+            SET @indirim                        = (case when @indirim=-1 or @indirim=1 then 0 else @indirim end);
 
             SET @ekstraUcretler                 = @NEWtemizlik+@NEWelektrik+@NEWisitma;
             SET @kazancTutari                   = (case when not isnull(@kayitlarKar,'''')='''' then convert(money,@kayitlarKar) else @NEWsatisbedeli/100*@kazancorani-(case when @indirime_evsahibi = 0 then @indirim else 0 end) end);
@@ -4289,12 +4290,12 @@ BEGIN
             SET @evsahibiKalan                  = @NEWonodeme-@kazancTutari;
 
             DECLARE @kayitlar_odeme_count int=0;
-            select @kayitlar_odeme_count=count(ko.kayitid) from kayitlar_odeme ko where ko.kayitid=@kayitid
+            select @kayitlar_odeme_count=count(ko.kayitid) from kayitlar_odeme ko where ko.kayitid=@kayitid;
 
             if @kayitlar_odeme_count=0
             begin
                 insert into kayitlar_odeme(kayitid,satis_bedeli,indirim_site,indirim_evsahibi,toplam_tutar,on_odeme,kalan,ekstra_ucretler,kazanc_tutari,evsahibi_kazanc_tutari,evsahibi_kalan,doviz,kur)
-                values (@kayitid,@NEWsatisbedeli,(case when @indirime_evsahibi=1 then 0 else @indirim end),(case when @indirime_evsahibi=1 then @indirim else 0 end),@NEWtoplamtutar,@NEWonodeme,@NEWkalan,@ekstraUcretler,@kazancTutari,@evsahibiKazanc,@evsahibiKalan,@doviz,@kur)
+                values (@kayitid,@NEWsatisbedeli,(case when @indirime_evsahibi=1 then 0 else @indirim end),(case when @indirime_evsahibi=1 then @indirim else 0 end),@NEWtoplamtutar,@NEWonodeme,@NEWkalan,@ekstraUcretler,@kazancTutari,@evsahibiKazanc,@evsahibiKalan,@doviz,@kur);
             end
             else
             begin
@@ -4313,10 +4314,10 @@ BEGIN
                     doviz                           = @doviz,
                     kur                             = @kur,
                     modifedDate                     = getdate()
-                where kayitid=@kayitid
-            end
+                where kayitid=@kayitid;
+            end;
 
-        end
+        end;
 
     END;
     ');
