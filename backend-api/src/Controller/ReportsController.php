@@ -2809,6 +2809,21 @@ WHERE k.odeme = {$paymentType}
             ?? $this->request->input('villa');
         $villaIds = $this->parseIntList($villasRaw);
 
+        $dateTypeRaw = $this->request->query('date_type')
+            ?? $this->request->input('date_type')
+            ?? $this->request->query('dateType')
+            ?? $this->request->input('dateType')
+            ?? $this->request->query('date_field')
+            ?? $this->request->input('date_field')
+            ?? $this->request->query('tarih_tipi')
+            ?? $this->request->input('tarih_tipi');
+        $isRezTarihi = $this->isRezTarihi($dateTypeRaw);
+        $dateTypeStr = $isRezTarihi ? 'rez_tarihi' : 'islem_tarihi';
+
+        $calDateExpr = $isRezTarihi
+            ? "COALESCE(TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi))"
+            : "COALESCE(TRY_CONVERT(date, k.islem_tarihi, 104), TRY_CONVERT(date, k.islem_tarihi, 103), TRY_CONVERT(date, k.islem_tarihi, 120), TRY_CONVERT(date, k.islem_tarihi))";
+
         $monthShortNames = [
             1 => 'OCA', 2 => 'ŞUB', 3 => 'MAR', 4 => 'NİS', 5 => 'MAY', 6 => 'HAZ',
             7 => 'TEM', 8 => 'AĞU', 9 => 'EYL', 10 => 'EKİ', 11 => 'KAS', 12 => 'ARA',
@@ -2912,9 +2927,9 @@ WHERE k.odeme = {$paymentType}
         // 1. tableQuery (Satış, Ciro, Kazanç ve Talep metrikleri)
         $sql1 = "
             SELECT
-                DAY(k.islem_tarihi) AS rDateDay,
-                MONTH(k.islem_tarihi) AS rDateMonth,
-                YEAR(k.islem_tarihi) AS rDateYear,
+                DAY({$calDateExpr}) AS rDateDay,
+                MONTH({$calDateExpr}) AS rDateMonth,
+                YEAR({$calDateExpr}) AS rDateYear,
                 COUNT(k.id) AS RezAdet,
                 SUM(CASE WHEN k.kayit_durum = 3 THEN 1 ELSE 0 END) AS KesinRez,
                 SUM(CASE WHEN k.kayit_durum = 3 THEN 0 + ISNULL(TRY_CONVERT(int, k.yetiskin), 0) + ISNULL(TRY_CONVERT(int, k.cocuk), 0) ELSE 0 END) AS KesinPax,
@@ -2923,11 +2938,11 @@ WHERE k.odeme = {$paymentType}
             FROM dbo.kayitlar k
             INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
             INNER JOIN dbo.homes h ON h.id = k.evid
-            WHERE YEAR(k.islem_tarihi) = :cal_year
-              AND MONTH(k.islem_tarihi) IN ({$monthInSql})
+            WHERE YEAR({$calDateExpr}) = :cal_year
+              AND MONTH({$calDateExpr}) IN ({$monthInSql})
               {$villaWhereH}
-            GROUP BY YEAR(k.islem_tarihi), MONTH(k.islem_tarihi), DAY(k.islem_tarihi)
-            ORDER BY YEAR(k.islem_tarihi) ASC, MONTH(k.islem_tarihi) ASC, DAY(k.islem_tarihi) ASC
+            GROUP BY YEAR({$calDateExpr}), MONTH({$calDateExpr}), DAY({$calDateExpr})
+            ORDER BY YEAR({$calDateExpr}) ASC, MONTH({$calDateExpr}) ASC, DAY({$calDateExpr}) ASC
         ";
 
         // 2. table5Rapor (Günlük Girişler: rez_tarihi)
@@ -3035,10 +3050,10 @@ WHERE k.odeme = {$paymentType}
             INNER JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id
             INNER JOIN dbo.homes h ON h.id = k.evid
             WHERE k.kayit_durum = 3
-              AND YEAR(k.islem_tarihi) = :cal_year
-              AND MONTH(k.islem_tarihi) IN ({$monthInSql})
+              AND YEAR({$calDateExpr}) = :cal_year
+              AND MONTH({$calDateExpr}) IN ({$monthInSql})
               {$villaWhereH}
-            ORDER BY k.islem_tarihi ASC
+            ORDER BY {$calDateExpr} ASC
         ";
 
         // sqlx parametresi gönderildiyse ham SQL dön
@@ -3203,8 +3218,9 @@ WHERE k.odeme = {$paymentType}
             ];
 
             $allApprovedReservations[] = $resItem;
-            if ($islemDate !== '' && isset($calendarDays[$islemDate])) {
-                $calendarDays[$islemDate]['reservations'][] = $resItem;
+            $calendarTargetDate = $isRezTarihi ? ($r['giris_tarihi'] ?? '') : $islemDate;
+            if ($calendarTargetDate !== '' && isset($calendarDays[$calendarTargetDate])) {
+                $calendarDays[$calendarTargetDate]['reservations'][] = $resItem;
             }
         }
 
@@ -3456,6 +3472,8 @@ WHERE k.odeme = {$paymentType}
                 'minDate' => $minDate,
                 'maxDate' => $maxDate,
                 'totalDays' => count($calendarDays),
+                'dateType' => $dateTypeStr,
+                'dateField' => $dateTypeStr,
             ],
         ]);
     }
