@@ -200,8 +200,11 @@ WHERE {$filterColumn} >= {$range['start']} AND {$filterColumn} < {$range['end']}
     /**
      * Günlük talep ve fırsat dağılımı (potansiyel rapor). Tutarlar rezervasyon kuru ile TL'dir.
      *   Talep/potansiyel: o gün açılan her rezervasyon kaydı (kayitlar.islem_tarihi).
-     *   Gerçekleşen/kaçan: o gün açılan kayıtlar (kayitlar.islem_tarihi);
+     *   Gerçekleşen/kaçan: o gün durumu değişen kayıtlar (kayitlar.son_durum_guncelleme), panel raporu gibi;
      *   gerçekleşen dolu.durum 3, kaçan 2 (süresi doldu) + 4 (iptal) + silinen. Önceki günlerin talepleri de gelir.
+     *   Alınan ön ödeme (prepaymentTotal): panel rapor-yonetimi.asp "Toplam Alınan Ön Ödeme" (işlem tarihi) ile aynı;
+     *   onaylı kayıtların (kayitlar.kayit_durum 3) ön ödemesi (kayitlar.tutar), onaylandığı güne
+     *   (kayitlar.son_durum_guncelleme) göre.
      *
      * @Get("potential")
      * @query startDate string Başlangıç tarihi (YYYY-MM-DD veya DD.MM.YYYY), varsayılan 6 gün önce
@@ -263,10 +266,10 @@ SELECT
 WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}{$filter}
 GROUP BY CAST(k.islem_tarihi AS date)";
 
-        // Sonuçlar: işlem tarihine göre.
+        // Sonuçlar: onaylandığı / kaçtığı (son durum değişikliği) güne göre.
         $resultSql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.islem_tarihi AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
     SUM(CASE WHEN {$durum} = 3 THEN 1 ELSE 0 END) AS gerceklesen,
     SUM(CASE WHEN {$durum} = 3 THEN {$gece} ELSE 0 END) AS gerceklesen_gece,
     SUM(CASE WHEN {$durum} = 3 THEN {$tutar} ELSE 0 END) AS gerceklesen_ciro,
@@ -274,12 +277,23 @@ SELECT
     SUM(CASE WHEN {$lost} THEN {$tutar} ELSE 0 END) AS kacan_ciro,
     SUM(CASE WHEN {$durum} = 2 THEN 1 ELSE 0 END) AS suresi_dolan
 {$from}
-WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}
+WHERE k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}
   AND ({$durum} = 3 OR {$lost}){$filter}
-GROUP BY CAST(k.islem_tarihi AS date)";
+GROUP BY CAST(k.son_durum_guncelleme AS date)";
+
+        // Alınan ön ödeme: panelde dolu tablosuna bakılmaz, kur boşsa tutar sayılmaz (panel ile aynı).
+        $prepaymentFrom = $joins ? "FROM kayitlar k{$joins}" : 'FROM kayitlar k';
+        $prepaymentSql = "
+SELECT
+    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
+    SUM(k.tutar * (CASE WHEN k.doviz = 'tl' THEN 1 ELSE k.kur END)) AS on_odeme
+{$prepaymentFrom}
+WHERE k.kayit_durum = 3
+  AND k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}{$filter}
+GROUP BY CAST(k.son_durum_guncelleme AS date)";
 
         $byDay = [];
-        foreach ([$requestSql, $resultSql] as $sql) {
+        foreach ([$requestSql, $resultSql, $prepaymentSql] as $sql) {
             foreach ($this->db->pdo()->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $row) {
                 $key = (string) $row['gun'];
                 $byDay[$key] = array_merge($byDay[$key] ?? [], $row);
@@ -301,6 +315,7 @@ GROUP BY CAST(k.islem_tarihi AS date)";
                 'totalInquiries' => (int) ($row['talep'] ?? 0),
                 'totalNightsRequested' => (int) ($row['talep_gece'] ?? 0),
                 'potentialRevenue' => $this->money($row['potansiyel'] ?? 0),
+                'prepaymentTotal' => $this->money($row['on_odeme'] ?? 0),
                 'confirmedBookings' => (int) ($row['gerceklesen'] ?? 0),
                 'confirmedNights' => (int) ($row['gerceklesen_gece'] ?? 0),
                 'confirmedRevenue' => $this->money($row['gerceklesen_ciro'] ?? 0),
@@ -347,7 +362,7 @@ GROUP BY CAST(k.islem_tarihi AS date)";
 
         $sql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.islem_tarihi AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
     k.evid,
     CONVERT(varchar(10), CAST(k.rez_tarihi AS date), 23) AS giris,
     CONVERT(varchar(10), CAST(k.gelecek_tarih AS date), 23) AS cikis,
@@ -372,7 +387,7 @@ OUTER APPLY (
        AND CAST(k.rez_tarihi AS date) BETWEEN TRY_CONVERT(date, s.tarih1, 104) AND TRY_CONVERT(date, s.tarih2, 104)
      ORDER BY s.id DESC
 ) AS sz
-WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}
+WHERE k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}
   AND {$lost}{$filter}";
 
         $hasShortStayFunction = $this->objectExists('dbo.kisasureli3', 'IF') || $this->objectExists('dbo.kisasureli3', 'TF');
