@@ -98,11 +98,16 @@ final class KullanicilarController extends Controller
      */
     private function fetchOwners(PDO $pdo): array
     {
+        // Panel kullanici_duzenle.asp (yetki 2) adres kolonunu okur; her sitenin tablosunda yok.
+        $addressSql = $this->columnExists($pdo, 'dbo', 'kullanici', 'adres') ? 'kullanici.adres' : "N''";
+
         $stmt = $pdo->query(
-            "SELECT id, ad, soyad, tel, email
+            "SELECT kullanici.id, ad, soyad, tel, tel2, email, tc, vkTuru, vkUnvan, vkN, {$addressSql} AS adres,
+                    bh.hesap_adi, bh.iban
              FROM kullanici
+             OUTER APPLY (SELECT TOP 1 hesap_adi, iban FROM hesaplar WHERE hesaplar.kullanici = kullanici.id) AS bh
              WHERE yetki = 2
-             ORDER BY id DESC"
+             ORDER BY kullanici.id DESC"
         );
 
         $owners = [];
@@ -112,12 +117,24 @@ final class KullanicilarController extends Controller
                 continue;
             }
 
+            // Panel ev sahibi formundaki ek alanlar: tur (kullanici.vkTuru: 1 Bireysel, 2 Tuzel Kisi), tc, unvan (vkUnvan), vkn (vkN).
             $owners[] = [
                 'id' => (int) ($row['id'] ?? 0),
                 'ad' => $this->cleanName((string) ($row['ad'] ?? '')),
                 'soyad' => $this->cleanName((string) ($row['soyad'] ?? '')),
                 'tel' => $phone,
                 'email' => $this->cleanEmail((string) ($row['email'] ?? '')),
+                // Panel formu vkTuru bos/1 iken "Bireysel" gosterir.
+                'tur' => (int) ($row['vkTuru'] ?? 0) === 2 ? 2 : 1,
+                'tur_adi' => (int) ($row['vkTuru'] ?? 0) === 2 ? 'Tüzel Kişi' : 'Bireysel',
+                'tc_kimlik_no' => trim((string) ($row['tc'] ?? '')),
+                'unvan' => trim((string) ($row['vkUnvan'] ?? '')),
+                'vkn' => trim((string) ($row['vkN'] ?? '')),
+                'adres' => trim((string) ($row['adres'] ?? '')),
+                'tel2' => $this->normalizePhone((string) ($row['tel2'] ?? '')),
+                // Panel ev sahibi listesindeki gibi ilk banka hesabi (hesaplar)
+                'hesap_adi' => trim((string) ($row['hesap_adi'] ?? '')),
+                'iban' => trim((string) ($row['iban'] ?? '')),
             ];
         }
 
@@ -260,3 +277,4 @@ final class KullanicilarController extends Controller
         return trim($email);
     }
 }
+
