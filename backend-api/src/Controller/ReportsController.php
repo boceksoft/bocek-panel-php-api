@@ -25,6 +25,8 @@ use PDO;
  *   GET /backend-api/reports/paxperformance     -> misafir (pax) performans raporu
  *   GET /backend-api/reports/monthlyperformance/filters -> aylık performans / pax filtre seçenekleri
  *   GET /backend-api/reports/slugs -> verilen emlak ID'lerinin slug listesi
+ *   GET /backend-api/reports/vault -> kasa ve ödeme raporu (Acenta & Ev Sahibi cari takibi)
+ *   GET /backend-api/reports/vaultfilters -> kasa / ödeme raporu filtre seçenekleri
  *
  * Panel karşılığı: rapor-yonetimi.asp. Sadece okuma yapar.
  * Silinme kodu siteye özeldir (ayar: reservation_deleted_status); yanıtta her zaman 5 döner.
@@ -3959,5 +3961,741 @@ WHERE k.odeme = {$paymentType}
 
         return $deleted === 5 ? $column : "(CASE WHEN {$column} = {$deleted} THEN 5 ELSE {$column} END)";
     }
-}
 
+    /**
+     * Kasa / Ödeme raporu: Acenta ve Ev Sahibi cari takibi listesi ve özet kartları.
+     *
+     * @Get("vault")
+     * @query startDate string Başlangıç tarihi (YYYY-MM-DD veya DD.MM.YYYY)
+     * @query endDate string Bitiş tarihi (YYYY-MM-DD veya DD.MM.YYYY)
+     * @query dateType string Tarih alanı: rez_tarihi (varsayılan), gelecek_tarih, islem_tarihi
+     * @query villas string|array Villa ID listesi (virgülle ayrılmış veya dizi, örn: 101,102 veya 'all')
+     * @query paymentType string|int Ödeme tipi: 1 (Kredi Kartı), 2 (Havale / EFT), 3 (Nakit) veya 'all'
+     * @query paidStatus string|int Ödendi durumu: 1 (Ödenen), 0 (Bekleyen) veya 'all'
+     * @query site int|string Site ID veya 'all'
+     * @query search string Arama terimi (müşteri, villa adı, rez no)
+     */
+    public function vault(): void
+    {
+        $pdo = $this->db->pdo();
+        $deleted = $this->deletedStatus();
+
+        // 1. Tarih filtreleri
+        $startDateRaw = $this->request->query('startDate');
+
+        $endDateRaw = $this->request->query('endDate');
+
+        $dateTypeRaw = $this->request->query('dateType')
+            ?? 'rez_tarihi';
+
+        $startDate = null;
+        if ($startDateRaw !== null && trim((string) $startDateRaw) !== '') {
+            $sRaw = strtolower(trim((string) $startDateRaw));
+            if ($sRaw !== 'all' && $sRaw !== 'tum' && $sRaw !== 'tumu') {
+                $startDate = $this->parseDate((string) $startDateRaw, '');
+            }
+        }
+
+        $endDate = null;
+        if ($endDateRaw !== null && trim((string) $endDateRaw) !== '') {
+            $eRaw = strtolower(trim((string) $endDateRaw));
+            if ($eRaw !== 'all' && $eRaw !== 'tum' && $eRaw !== 'tumu') {
+                $endDate = $this->parseDate((string) $endDateRaw, '');
+            }
+        }
+
+        if ($startDate !== null && $endDate !== null && $endDate < $startDate) {
+            $tmp = $startDate;
+            $startDate = $endDate;
+            $endDate = $tmp;
+        }
+
+        $dateTypeLower = strtolower(trim((string) $dateTypeRaw));
+        if (in_array($dateTypeLower, ['gelecek_tarih', 'cikis', 'cikis_tarihi', 'checkout', 'check_out'], true)) {
+            $dateCol = 'k.gelecek_tarih';
+            $dateType = 'gelecek_tarih';
+        } elseif (in_array($dateTypeLower, ['islem_tarihi', 'islem', 'created', 'created_at', 'kayit_tarihi'], true)) {
+            $dateCol = 'k.islem_tarihi';
+            $dateType = 'islem_tarihi';
+        } else {
+            $dateCol = 'k.rez_tarihi';
+            $dateType = 'rez_tarihi';
+        }
+        $dateExpr = "COALESCE(TRY_CONVERT(date, {$dateCol}, 104), TRY_CONVERT(date, {$dateCol}, 103), TRY_CONVERT(date, {$dateCol}, 120), TRY_CONVERT(date, {$dateCol}))";
+
+        // 2. Villalar
+        $villasRaw = $this->request->query('villas');
+        $villaIds = $this->parseIntList($villasRaw);
+
+        // 3. Ödeme şekli
+        $paymentTypeRaw = $this->request->query('paymentType');
+
+        $paymentTypes = [];
+        if ($paymentTypeRaw !== null && $paymentTypeRaw !== '' && $paymentTypeRaw !== 'all') {
+            $rawItems = is_array($paymentTypeRaw) ? $paymentTypeRaw : explode(',', (string) $paymentTypeRaw);
+            foreach ($rawItems as $item) {
+                $itemStr = strtolower(trim((string) $item));
+                if ($itemStr === '1' || $itemStr === 'credit_card' || $itemStr === 'kredi_karti' || $itemStr === 'card') {
+                    $paymentTypes[] = 1;
+                } elseif ($itemStr === '2' || $itemStr === 'transfer' || $itemStr === 'havale' || $itemStr === 'eft') {
+                    $paymentTypes[] = 2;
+                } elseif ($itemStr === '3' || $itemStr === 'cash' || $itemStr === 'nakit') {
+                    $paymentTypes[] = 3;
+                }
+            }
+            $paymentTypes = array_values(array_unique($paymentTypes));
+        }
+
+        // 4. Ödenme durumu
+        $paidStatusRaw = $this->request->query('paidStatus')
+            ?? $this->request->input('paidStatus')
+            ?? $this->request->query('paid_status')
+            ?? $this->request->input('paid_status')
+            ?? $this->request->query('odendi')
+            ?? $this->request->input('odendi')
+            ?? $this->request->query('odenenler')
+            ?? $this->request->input('odenenler');
+
+        $paidStatus = null;
+        if ($paidStatusRaw !== null && $paidStatusRaw !== '' && $paidStatusRaw !== 'all' && $paidStatusRaw !== 'tumu') {
+            $pStr = strtolower(trim((string) $paidStatusRaw));
+            if ($pStr === '1' || $pStr === 'paid' || $pStr === 'odenen' || $pStr === 'true') {
+                $paidStatus = 1;
+            } elseif ($pStr === '0' || $pStr === 'pending' || $pStr === 'bekleyen' || $pStr === 'false') {
+                $paidStatus = 0;
+            }
+        }
+
+        // 5. Site filtresi
+        $siteRaw = $this->request->query('site')
+            ?? $this->request->input('site')
+            ?? $this->request->query('site_id')
+            ?? $this->request->input('site_id');
+        $siteId = ($siteRaw !== null && $siteRaw !== '' && $siteRaw !== 'all' && is_numeric($siteRaw)) ? (int) $siteRaw : 0;
+
+        // 6. Genel arama
+        $search = trim((string) ($this->request->query('search')
+            ?? $this->request->input('search')
+            ?? $this->request->query('q')
+            ?? $this->request->input('q')
+            ?? ''));
+
+        // 7. Rezervasyon durumu (varsayılan: 3 - Onaylandı)
+        $statusRaw = $this->request->query('status') ?? $this->request->input('status');
+
+        $where = [];
+        $params = [];
+
+        $where[] = "d.durum != {$deleted}";
+        if ($statusRaw === null || $statusRaw === '') {
+            $where[] = 'd.durum = 3';
+        } elseif ($statusRaw !== 'all') {
+            $where[] = 'd.durum = :status_val';
+            $params[':status_val'] = (int) $statusRaw;
+        }
+
+        if ($startDate !== null && $startDate !== '') {
+            $where[] = "{$dateExpr} >= :start_date";
+            $params[':start_date'] = $startDate;
+        }
+        if ($endDate !== null && $endDate !== '') {
+            $where[] = "{$dateExpr} <= :end_date";
+            $params[':end_date'] = $endDate;
+        }
+
+        if ($villaIds !== []) {
+            $vPhs = [];
+            foreach ($villaIds as $idx => $vId) {
+                $ph = ':villa_' . $idx;
+                $vPhs[] = $ph;
+                $params[$ph] = $vId;
+            }
+            $where[] = 'k.evid IN (' . implode(',', $vPhs) . ')';
+        }
+
+        if ($paymentTypes !== []) {
+            $pPhs = [];
+            foreach ($paymentTypes as $idx => $pVal) {
+                $ph = ':pay_' . $idx;
+                $pPhs[] = $ph;
+                $params[$ph] = $pVal;
+            }
+            $where[] = 'k.odeme IN (' . implode(',', $pPhs) . ')';
+        }
+
+        if ($paidStatus !== null) {
+            if ($paidStatus === 1) {
+                $where[] = 'ISNULL(k.odendi, 0) = 1';
+            } else {
+                $where[] = 'ISNULL(k.odendi, 0) = 0';
+            }
+        }
+
+        if ($siteId > 0) {
+            $where[] = 'k.site = :site_id';
+            $params[':site_id'] = $siteId;
+        }
+
+        if ($search !== '') {
+            $where[] = '(k.musteri LIKE :search OR k.adi LIKE :search OR CAST(k.id AS varchar) LIKE :search)';
+            $params[':search'] = '%' . $search . '%';
+        }
+
+        $whereSql = implode(' AND ', $where);
+
+        // Tablo joins: Site
+        $hasSiteTable = $this->hasTable($pdo, 'site');
+        $hasSitesTable = $this->hasTable($pdo, 'sites');
+        $siteJoin = '';
+        $siteSelect = "k.site AS site_id, '' AS site_name, '' AS site_short";
+        if ($hasSiteTable || $hasSitesTable) {
+            $siteTable = $hasSiteTable ? 'dbo.site' : 'dbo.sites';
+            $siteIdCol = 'id';
+            $siteNameCol = 'site';
+            $siteKisaCol = 'kisa';
+
+            try {
+                $tableNameRaw = $hasSiteTable ? 'site' : 'sites';
+                $stmtCols = $pdo->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{$tableNameRaw}'");
+                $columns = $stmtCols ? array_map('strtolower', $stmtCols->fetchAll(PDO::FETCH_COLUMN)) : [];
+                if (in_array('sites', $columns, true) && !in_array('id', $columns, true)) {
+                    $siteIdCol = 'Sites';
+                }
+                if (in_array('site', $columns, true)) {
+                    $siteNameCol = 'site';
+                } elseif (in_array('siteadi', $columns, true)) {
+                    $siteNameCol = 'siteadi';
+                } elseif (in_array('name', $columns, true)) {
+                    $siteNameCol = 'name';
+                }
+                if (in_array('kisa', $columns, true)) {
+                    $siteKisaCol = 'kisa';
+                } else {
+                    $siteKisaCol = $siteNameCol;
+                }
+            } catch (\Throwable $e) {}
+
+            $siteJoin = "LEFT JOIN {$siteTable} s ON s.{$siteIdCol} = k.site";
+            $siteSelect = "k.site AS site_id, ISNULL(s.{$siteNameCol}, '') AS site_name, ISNULL(s.{$siteKisaCol}, '') AS site_short";
+        }
+
+        // VirtualPos join
+        $hasVirtualPos = $this->hasVirtualPosTable($pdo);
+        $posJoin = $hasVirtualPos ? 'LEFT JOIN [Finance].[VirtualPos] vp ON vp.Id = TRY_CONVERT(int, k.banka)' : '';
+        $posSelect = $hasVirtualPos ? 'vp.Name AS pos_banka_name' : 'NULL AS pos_banka_name';
+
+        // kayitlar_odeme join
+        $hasKo = $this->hasTable($pdo, 'kayitlar_odeme');
+        $koJoin = $hasKo ? 'LEFT JOIN dbo.kayitlar_odeme ko ON ko.kayitid = k.id' : '';
+        $koSelect = $hasKo ? "
+            ko.satis_bedeli AS ko_satis_bedeli,
+            ko.indirim_site AS ko_indirim_site,
+            ko.indirim_evsahibi AS ko_indirim_evsahibi,
+            ko.toplam_tutar AS ko_toplam_tutar,
+            ko.on_odeme AS ko_on_odeme,
+            ko.kalan AS ko_kalan,
+            ko.kazanc_tutari AS ko_kazanc_tutari,
+            ko.evsahibi_kalan AS ko_evsahibi_kalan,
+            ko.doviz AS ko_doviz,
+            ko.kur AS ko_kur
+        " : "
+            NULL AS ko_satis_bedeli,
+            NULL AS ko_indirim_site,
+            NULL AS ko_indirim_evsahibi,
+            NULL AS ko_toplam_tutar,
+            NULL AS ko_on_odeme,
+            NULL AS ko_kalan,
+            NULL AS ko_kazanc_tutari,
+            NULL AS ko_evsahibi_kalan,
+            NULL AS ko_doviz,
+            NULL AS ko_kur
+        ";
+
+        // homes join
+        $hasHomes = $this->hasTable($pdo, 'homes');
+        $homesJoin = $hasHomes ? 'LEFT JOIN dbo.homes h ON h.id = k.evid' : '';
+        $homesSelect = $hasHomes ? "ISNULL(" . $this->homeTitleSql('h', 'h.baslik') . ", '') AS home_title" : "'' AS home_title";
+
+        // safeStatus join
+        $hasSafeStatus = $this->hasTable($pdo, 'safeStatus');
+        $safeStatusJoin = $hasSafeStatus ? 'LEFT JOIN dbo.safeStatus ss ON ss.kayitId = k.id' : '';
+        $safeStatusSelect = $hasSafeStatus ? 'ss.status AS safe_status' : 'NULL AS safe_status';
+
+        $sql = "
+            SELECT
+                k.id,
+                k.evid,
+                k.adi AS kayit_adi,
+                {$homesSelect},
+                k.musteri,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi)), 104) AS giris_tarihi,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi)), 23) AS giris_tarihi_iso,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 104) AS cikis_tarihi,
+                CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 23) AS cikis_tarihi_iso,
+                k.banka AS kayit_banka,
+                {$posSelect},
+                {$siteSelect},
+                k.odeme,
+                k.odendi AS kayit_odendi,
+                k.oznot,
+                k.doviz AS k_doviz,
+                k.kur AS k_kur,
+                k.toplam_tutar AS k_toplam_tutar,
+                k.on_odeme AS k_on_odeme,
+                k.kalan AS k_kalan,
+                k.tutar AS k_tutar,
+                k.eskifiyat AS k_eskifiyat,
+                k.kar AS k_kar,
+                k.kazancorani AS k_kazancorani,
+                k.indirimevsahibi AS k_indirimevsahibi,
+                k.tur AS k_tur,
+                {$safeStatusSelect},
+                {$koSelect}
+            FROM dbo.kayitlar k
+            INNER JOIN dbo.dolu d ON d.kayitid = k.id
+            {$siteJoin}
+            {$homesJoin}
+            {$posJoin}
+            {$safeStatusJoin}
+            {$koJoin}
+            WHERE {$whereSql}
+            ORDER BY {$dateExpr} DESC, k.id DESC
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        foreach ($params as $k => $v) {
+            $stmt->bindValue($k, $v);
+        }
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $items = [];
+        $sumToplamTutar = 0.0;
+        $sumOnOdeme = 0.0;
+        $sumHesapEvsahibi = 0.0;
+        $sumKalan = 0.0;
+        $sumKar = 0.0;
+
+        foreach ($rows as $r) {
+            $kur = 1.0;
+            if (isset($r['ko_kur']) && is_numeric($r['ko_kur']) && (float) $r['ko_kur'] > 0) {
+                $kur = (float) $r['ko_kur'];
+            } elseif (isset($r['k_kur']) && is_numeric($r['k_kur']) && (float) $r['k_kur'] > 0) {
+                $kur = (float) $r['k_kur'];
+            }
+
+            $toplamTutarRaw = 0.0;
+            if (isset($r['ko_toplam_tutar']) && is_numeric($r['ko_toplam_tutar'])) {
+                $toplamTutarRaw = (float) $r['ko_toplam_tutar'];
+            } elseif (isset($r['k_toplam_tutar']) && is_numeric($r['k_toplam_tutar'])) {
+                $toplamTutarRaw = (float) $r['k_toplam_tutar'];
+            }
+            $toplamTutar = round($toplamTutarRaw * $kur, 2);
+
+            $asilFiyatiRaw = 0.0;
+            if (isset($r['ko_satis_bedeli']) && is_numeric($r['ko_satis_bedeli']) && (float) $r['ko_satis_bedeli'] > 0) {
+                $asilFiyatiRaw = (float) $r['ko_satis_bedeli'];
+            } elseif (isset($r['k_eskifiyat']) && is_numeric($r['k_eskifiyat']) && (float) $r['k_eskifiyat'] > 0) {
+                $asilFiyatiRaw = (float) $r['k_eskifiyat'];
+            } else {
+                $asilFiyatiRaw = $toplamTutarRaw;
+            }
+            $asilFiyati = round($asilFiyatiRaw * $kur, 2);
+
+            $indirimSite = (float) ($r['ko_indirim_site'] ?? 0);
+            $indirimEvsahibi = (float) ($r['ko_indirim_evsahibi'] ?? 0);
+            $indirimRaw = ($indirimSite + $indirimEvsahibi) > 0
+                ? ($indirimSite + $indirimEvsahibi)
+                : max(0.0, $asilFiyatiRaw - $toplamTutarRaw);
+            $indirim = round($indirimRaw * $kur, 2);
+
+            $indirimKim = ((int) ($r['k_indirimevsahibi'] ?? 0) === 1 || $indirimEvsahibi > 0) ? 'E' : ($indirimSite > 0 ? 'S' : '');
+            $indirimYuzde = ($asilFiyati > 0 && $indirim > 0) ? (int) round(($indirim / $asilFiyati) * 100) : 0;
+            $indirimFormatted = number_format($indirim, 0, ',', '.') . ' TL';
+            if ($indirimYuzde > 0) {
+                $indirimFormatted .= ' (%' . $indirimYuzde . ')';
+            } elseif ($indirimKim !== '') {
+                $indirimFormatted .= ' (' . $indirimKim . ')';
+            }
+
+            $onOdemeRaw = 0.0;
+            if (isset($r['ko_on_odeme']) && is_numeric($r['ko_on_odeme'])) {
+                $onOdemeRaw = (float) $r['ko_on_odeme'];
+            } elseif (isset($r['k_on_odeme']) && is_numeric($r['k_on_odeme'])) {
+                $onOdemeRaw = (float) $r['k_on_odeme'];
+            } elseif (isset($r['k_tutar']) && is_numeric($r['k_tutar'])) {
+                $onOdemeRaw = (float) $r['k_tutar'];
+            }
+            $onOdeme = round($onOdemeRaw * $kur, 2);
+
+            $kalanRaw = 0.0;
+            if ((string) ($r['k_tur'] ?? '') === '2') {
+                $kalanRaw = 0.0;
+            } elseif (isset($r['ko_kalan']) && is_numeric($r['ko_kalan'])) {
+                $kalanRaw = (float) $r['ko_kalan'];
+            } elseif (isset($r['k_kalan']) && is_numeric($r['k_kalan'])) {
+                $kalanRaw = (float) $r['k_kalan'];
+            } else {
+                $kalanRaw = max(0.0, $toplamTutarRaw - $onOdemeRaw);
+            }
+            $kalanOdeme = round($kalanRaw * $kur, 2);
+
+            $karRaw = 0.0;
+            if (isset($r['ko_kazanc_tutari']) && is_numeric($r['ko_kazanc_tutari']) && (float) $r['ko_kazanc_tutari'] > 0) {
+                $karRaw = (float) $r['ko_kazanc_tutari'];
+            } elseif (isset($r['k_kar']) && is_numeric($r['k_kar']) && (float) $r['k_kar'] > 0) {
+                $karRaw = (float) $r['k_kar'];
+            } else {
+                $kazancOrani = (float) ($r['k_kazancorani'] ?? 0);
+                $karRaw = $toplamTutarRaw * ($kazancOrani / 100);
+            }
+            $kar = round($karRaw * $kur, 2);
+
+            $hesapEvsahibiRaw = 0.0;
+            if (isset($r['ko_evsahibi_kalan']) && is_numeric($r['ko_evsahibi_kalan'])) {
+                $hesapEvsahibiRaw = (float) $r['ko_evsahibi_kalan'];
+            } else {
+                $hesapEvsahibiRaw = $toplamTutarRaw - $karRaw;
+            }
+            $hesapEvsahibi = round($hesapEvsahibiRaw * $kur, 2);
+
+            $odemeVal = (int) ($r['odeme'] ?? 0);
+            $odemeSekli = '-';
+            if ($odemeVal === 1) {
+                $odemeSekli = 'Kredi Kartı';
+            } elseif ($odemeVal === 2) {
+                $odemeSekli = 'Havale';
+            } elseif ($odemeVal === 3) {
+                $odemeSekli = 'Nakit';
+            }
+
+            $posName = trim((string) ($r['pos_banka_name'] ?? ''));
+            if ($posName !== '') {
+                $odenilenBanka = $posName;
+            } elseif ($odemeVal === 1) {
+                $odenilenBanka = 'Banka';
+            } else {
+                $odenilenBanka = '-';
+            }
+
+            $sonDurum = '-';
+            $safeStatus = (int) ($r['safe_status'] ?? 0);
+            if ($safeStatus === 1) {
+                $sonDurum = 'Müşteri Bekliyor';
+            } elseif ($safeStatus === 2) {
+                $sonDurum = 'Ev Sahibi Karşıladı';
+            } elseif ($safeStatus === 3) {
+                $sonDurum = 'Ödeme Kasaya';
+            } elseif ($safeStatus === 4) {
+                $sonDurum = 'Ödeme Ev Sahibine';
+            } elseif ($safeStatus === 5) {
+                $sonDurum = 'Müşteri İptal';
+            } elseif ((int) ($r['kayit_odendi'] ?? 0) === 1) {
+                $sonDurum = 'Ödendi';
+            }
+
+            $villaAdi = trim((string) ($r['kayit_adi'] ?? ''));
+            if ($villaAdi === '') {
+                $villaAdi = trim((string) ($r['home_title'] ?? ''));
+            }
+
+            $siteName = trim((string) ($r['site_name'] ?? ''));
+            $siteShort = trim((string) ($r['site_short'] ?? ''));
+            if ($siteShort === '' && $siteName !== '') {
+                $siteShort = mb_substr($siteName, 0, 1, 'UTF-8');
+            }
+
+            $sumToplamTutar += $toplamTutar;
+            $sumOnOdeme += $onOdeme;
+            $sumHesapEvsahibi += $hesapEvsahibi;
+            $sumKalan += $kalanOdeme;
+            $sumKar += $kar;
+
+            $items[] = [
+                'id' => (int) $r['id'],
+                'rez_no' => (int) $r['id'],
+                'rez_no_label' => 'Rez. No ' . $r['id'],
+                'site' => $siteShort ?: ($siteName ?: (string) $r['site_id']),
+                'site_name' => $siteName,
+                'site_short' => $siteShort,
+                'site_id' => (int) $r['site_id'],
+                'villa_id' => (int) $r['evid'],
+                'villa_adi' => $villaAdi,
+                'giris' => (string) ($r['giris_tarihi'] ?? ''),
+                'giris_iso' => (string) ($r['giris_tarihi_iso'] ?? ''),
+                'cikis' => (string) ($r['cikis_tarihi'] ?? ''),
+                'cikis_iso' => (string) ($r['cikis_tarihi_iso'] ?? ''),
+                'musteri' => trim((string) ($r['musteri'] ?? '')),
+                'asil_fiyati' => $asilFiyati,
+                'asil_fiyati_formatted' => number_format($asilFiyati, 0, ',', '.') . ' TL',
+                'toplam_tutar' => $toplamTutar,
+                'toplam_tutar_formatted' => number_format($toplamTutar, 0, ',', '.') . ' TL',
+                'indirim' => $indirim,
+                'indirim_formatted' => $indirimFormatted,
+                'indirim_kim' => $indirimKim,
+                'indirim_yuzde' => $indirimYuzde,
+                'on_odeme' => $onOdeme,
+                'on_odeme_formatted' => number_format($onOdeme, 0, ',', '.') . ' TL',
+                'kalan_odeme' => $kalanOdeme,
+                'kalan_odeme_formatted' => number_format($kalanOdeme, 0, ',', '.') . ' TL',
+                'odeme_sekli' => $odemeSekli,
+                'odeme_val' => $odemeVal,
+                'odenilen_banka' => $odenilenBanka,
+                'hesap_evsahibi' => $hesapEvsahibi,
+                'hesap_evsahibi_formatted' => number_format($hesapEvsahibi, 0, ',', '.') . ' TL',
+                'kar' => $kar,
+                'kar_formatted' => number_format($kar, 0, ',', '.') . ' TL',
+                'son_durum' => $sonDurum,
+                'odendi' => ((int) ($r['kayit_odendi'] ?? 0) === 1),
+                'paid_status' => ((int) ($r['kayit_odendi'] ?? 0) === 1),
+                'not' => trim((string) ($r['oznot'] ?? '')),
+            ];
+        }
+
+        $cards = [
+            'kayit_sayisi' => count($items),
+            'kayit_sayisi_label' => count($items) . ' Rezervasyon',
+            'toplam_satis_tutari' => round($sumToplamTutar, 2),
+            'toplam_satis_tutari_formatted' => number_format($sumToplamTutar, 0, ',', '.') . ' TL',
+            'acenta_on_odemesi' => round($sumOnOdeme, 2),
+            'acenta_on_odemesi_formatted' => number_format($sumOnOdeme, 0, ',', '.') . ' TL',
+            'ev_sahibine_odenen' => round($sumHesapEvsahibi, 2),
+            'ev_sahibine_odenen_formatted' => number_format($sumHesapEvsahibi, 0, ',', '.') . ' TL',
+            'kalan_tahsilat' => round($sumKalan, 2),
+            'kalan_tahsilat_formatted' => number_format($sumKalan, 0, ',', '.') . ' TL',
+            'toplam_acenta_kari' => round($sumKar, 2),
+            'toplam_acenta_kari_formatted' => number_format($sumKar, 0, ',', '.') . ' TL',
+        ];
+
+        $this->response->success([
+            'items' => $items,
+            'cards' => $cards,
+            'totals' => $cards,
+            'summary' => $cards,
+            'meta' => [
+                'total' => count($items),
+                'count' => count($items),
+                'dateRange' => [
+                    'startDate' => $startDate,
+                    'endDate' => $endDate,
+                    'dateType' => $dateType,
+                ],
+                'filters' => [
+                    'villas' => $villaIds,
+                    'paymentTypes' => $paymentTypes,
+                    'paidStatus' => $paidStatus,
+                    'siteId' => $siteId,
+                    'search' => $search,
+                ],
+            ],
+        ]);
+    }
+
+    /**
+     * Kasa / Ödeme raporu filtre seçenekleri: Villalar, ödeme yöntemleri, ödenme durumları, siteler, tarih tipleri.
+     *
+     * @Get("vault/filters")
+     */
+    public function vaultfilters(): void
+    {
+        $pdo = $this->db->pdo();
+        $villasList = $this->fetchVillasList($pdo);
+        $sitesList = $this->fetchSitesList($pdo);
+
+        $this->response->success([
+            'villas' => $villasList,
+            'paymentTypes' => [
+                ['id' => 'all', 'name' => 'Tüm Ödemeler', 'code' => 'all'],
+                ['id' => 2, 'name' => 'Havale / EFT', 'code' => 'transfer', 'value' => 2],
+                ['id' => 1, 'name' => 'Kredi Kartı', 'code' => 'credit_card', 'value' => 1],
+                ['id' => 3, 'name' => 'Nakit', 'code' => 'cash', 'value' => 3],
+            ],
+            'paidStatuses' => [
+                ['id' => 'all', 'name' => 'Tümü', 'value' => null],
+                ['id' => 'paid', 'name' => 'Ödenen', 'value' => 1],
+                ['id' => 'pending', 'name' => 'Bekleyen', 'value' => 0],
+            ],
+            'dateTypes' => [
+                ['id' => 'rez_tarihi', 'name' => 'Giriş Tarihi (rez_tarihi)', 'value' => 'rez_tarihi'],
+                ['id' => 'gelecek_tarih', 'name' => 'Çıkış Tarihi (gelecek_tarih)', 'value' => 'gelecek_tarih'],
+                ['id' => 'islem_tarihi', 'name' => 'İşlem Tarihi (islem_tarihi)', 'value' => 'islem_tarihi'],
+            ],
+        ]);
+    }
+
+    private function hasVirtualPosTable(PDO $pdo): bool
+    {
+        try {
+            $stmt = $pdo->query("SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID(N'Finance.VirtualPos') AND type = 'U'");
+            return $stmt && (bool) $stmt->fetchColumn();
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * @return array<int,array{id:int,name:string,code:string}>
+     */
+    private function fetchSitesList(PDO $pdo): array
+    {
+        $hasSiteTable = $this->hasTable($pdo, 'site');
+        $hasSitesTable = $this->hasTable($pdo, 'sites');
+        if (!$hasSiteTable && !$hasSitesTable) {
+            return [
+                ['id' => 1, 'name' => 'Site 1', 'code' => 'S1'],
+            ];
+        }
+
+        $table = $hasSiteTable ? 'dbo.site' : 'dbo.sites';
+        try {
+            $stmt = $pdo->query("SELECT * FROM {$table}");
+            $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+            $sites = [];
+            foreach ($rows as $r) {
+                $id = (int) ($r['id'] ?? ($r['Sites'] ?? ($r['site_id'] ?? 0)));
+                $name = trim((string) ($r['site'] ?? ($r['siteadi'] ?? ($r['name'] ?? ''))));
+                $kisa = trim((string) ($r['kisa'] ?? ($r['code'] ?? $name)));
+                if ($id > 0) {
+                    $sites[] = [
+                        'id' => $id,
+                        'name' => $name !== '' ? $name : ('Site ' . $id),
+                        'code' => $kisa !== '' ? $kisa : (string) $id,
+                    ];
+                }
+            }
+            return $sites;
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * Kasa / Ödeme raporu kayıt güncelleme: Ödendi durumu ve not güncellemesi.
+     *
+     * @Post("vault/update")
+     * @body id int required Rezervasyon kimliği
+     * @body paid_status bool|int Ödendi durumu (1/0, true/false)
+     * @body odendi bool|int Alternatif ödendi alanı
+     * @body not string Not metni (kayitlar.oznot)
+     * @body note string Alternatif not alanı
+     */
+    public function vaultUpdate(): void
+    {
+        $pdo = $this->db->pdo();
+
+        $id = (int) ($this->request->input('id')
+            ?? 0);
+
+        if ($id <= 0) {
+            throw new HttpException('Geçerli bir rezervasyon ID (id) belirtilmelidir.', 'VALIDATION_ERROR', 422);
+        }
+
+        $stmt = $pdo->prepare('SELECT id, evid, site, musteri, toplam_tutar, kazancorani, oznot, odendi FROM dbo.kayitlar WHERE id = :id');
+        $stmt->execute([':id' => $id]);
+        $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$reservation) {
+            throw new HttpException('Rezervasyon bulunamadı.', 'NOT_FOUND', 404);
+        }
+
+        $hasPaidStatus = false;
+        $newPaid = null;
+        foreach (['paid_status'] as $key) {
+            $val = $this->request->input($key) ?? $this->request->query($key);
+            if ($val !== null) {
+                $hasPaidStatus = true;
+                if (is_bool($val)) {
+                    $newPaid = $val ? 1 : 0;
+                } else {
+                    $vStr = strtolower(trim((string) $val));
+                    $newPaid = in_array($vStr, ['true'], true) ? 1 : 0;
+                }
+                break;
+            }
+        }
+
+        $hasNote = false;
+        $newNote = null;
+        foreach (['oz_not'] as $key) {
+            $val = $this->request->input($key) ?? $this->request->query($key);
+            if ($val !== null) {
+                $hasNote = true;
+                $newNote = trim((string) $val);
+                break;
+            }
+        }
+
+        if (!$hasPaidStatus && !$hasNote) {
+            throw new HttpException('paid_status (odendi) veya not (note) alanlarından en az biri gönderilmelidir.', 'VALIDATION_ERROR', 422);
+        }
+
+        // Ödendi durumu güncellemesi (odemeraporsayfasi.asp mantığı)
+        if ($hasPaidStatus) {
+            $upStmt = $pdo->prepare('UPDATE dbo.kayitlar SET odendi = :odendi WHERE id = :id');
+            $upStmt->execute([':odendi' => $newPaid, ':id' => $id]);
+
+            // safeVilla tablosu varsa cari/kasa kaydı güncelle
+            if ($this->hasTable($pdo, 'safeVilla')) {
+                $safeText = $id . ' - Ev Sahibi Ödemesi';
+                $delSafe = $pdo->prepare('DELETE FROM dbo.safeVilla WHERE kayitId = :id AND text = :text');
+                $delSafe->execute([':id' => $id, ':text' => $safeText]);
+
+                if ($newPaid === 1) {
+                    $payout = 0.0;
+                    if ($this->hasTable($pdo, 'kayitlar_odeme')) {
+                        $koStmt = $pdo->prepare('SELECT evsahibi_kalan, toplam_tutar, kazanc_tutari FROM dbo.kayitlar_odeme WHERE kayitid = :id');
+                        $koStmt->execute([':id' => $id]);
+                        $koRow = $koStmt->fetch(PDO::FETCH_ASSOC);
+                        if ($koRow && isset($koRow['evsahibi_kalan']) && is_numeric($koRow['evsahibi_kalan'])) {
+                            $payout = (float) $koRow['evsahibi_kalan'];
+                        } elseif ($koRow && isset($koRow['toplam_tutar']) && is_numeric($koRow['toplam_tutar'])) {
+                            $payout = (float) $koRow['toplam_tutar'] - (float) ($koRow['kazanc_tutari'] ?? 0);
+                        }
+                    }
+
+                    if ($payout <= 0) {
+                        $toplamTutar = (float) ($reservation['toplam_tutar'] ?? 0);
+                        $kazancOrani = (float) ($reservation['kazancorani'] ?? 0);
+                        $payout = $toplamTutar - ($toplamTutar / 100 * $kazancOrani);
+                    }
+
+                    $safePrice = '-' . number_format(abs($payout), 2, '.', '');
+                    $insSafe = $pdo->prepare('
+                        INSERT INTO dbo.safeVilla (price, kayitId, villaId, odeme, text, rate, currency)
+                        VALUES (:price, :kayitId, :villaId, 1, :text, 1, \'tl\')
+                    ');
+                    $insSafe->execute([
+                        ':price' => $safePrice,
+                        ':kayitId' => $id,
+                        ':villaId' => (int) ($reservation['evid'] ?? 0),
+                        ':text' => $safeText,
+                    ]);
+                }
+            }
+        }
+
+        // Not güncellemesi (kayitlar.oznot)
+        if ($hasNote) {
+            $noteStmt = $pdo->prepare('UPDATE dbo.kayitlar SET oznot = :not WHERE id = :id');
+            $noteStmt->execute([
+                ':not' => $newNote === '' ? null : $newNote,
+                ':id' => $id,
+            ]);
+        }
+
+        // Güncel durumu çek
+        $fetchStmt = $pdo->prepare('SELECT id, odendi, oznot FROM dbo.kayitlar WHERE id = :id');
+        $fetchStmt->execute([':id' => $id]);
+        $row = $fetchStmt->fetch(PDO::FETCH_ASSOC);
+
+        $finalPaid = ((int) ($row['odendi'] ?? 0) === 1);
+        $finalNote = trim((string) ($row['oznot'] ?? ''));
+
+        $this->response->success([
+            'id' => $id,
+            'odendi' => $finalPaid,
+            'paid_status' => $finalPaid,
+            'not' => $finalNote,
+            'message' => 'Rezervasyon bilgileri başarıyla güncellendi.',
+        ]);
+    }
+}
