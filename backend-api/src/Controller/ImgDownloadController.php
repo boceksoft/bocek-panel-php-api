@@ -168,13 +168,14 @@ final class ImgDownloadController extends Controller
         }
 
         // MIME ve Dosya Tipi KontrolÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼
-        $allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+        // Villa fotograflari sadece JPEG (sitede PNG/WEBP kullanilmiyor).
+        $allowedMimes = ['image/jpeg'];
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
         $mime = finfo_file($finfo, $_FILES['image']['tmp_name']);
         finfo_close($finfo);
 
         if (!in_array($mime, $allowedMimes)) {
-            throw new HttpException('Sadece JPEG, PNG ve WEBP formatlari desteklenmektedir.', 'INVALID_FILE_TYPE', 400);
+            throw new HttpException('Sadece JPG / JPEG fotograf yuklenebilir.', 'INVALID_FILE_TYPE', 400);
         }
 
         // Maksimum boyut (ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“rn: 10MB)
@@ -219,7 +220,8 @@ final class ImgDownloadController extends Controller
             throw new HttpException('Uploads klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ bulunamadi veya geÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§erli bir dizin degil: ' . $uploadsDir, 'UPLOADS_DIR_INVALID', 500);
         }
 
-        $productDir = $uploadsDir . DIRECTORY_SEPARATOR . 'product';
+        // Villa fotograflari uploads/property/{villaId}/ altina yazilir (silme de ayni klasorden yapar).
+        $productDir = $uploadsDir . DIRECTORY_SEPARATOR . 'property';
         $oldNatsisaDir = $uploadsDir . DIRECTORY_SEPARATOR . 'natsisa';
 
         if (is_dir($oldNatsisaDir) && !is_dir($productDir)) {
@@ -228,7 +230,7 @@ final class ImgDownloadController extends Controller
 
         if (!is_dir($productDir)) {
             if (!@mkdir($productDir, 0755, true)) {
-                throw new HttpException('product klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ olusturulamadi.', 'MKDIR_FAILED', 500);
+                throw new HttpException('property klasoru olusturulamadi.', 'MKDIR_FAILED', 500);
             }
         }
 
@@ -237,20 +239,24 @@ final class ImgDownloadController extends Controller
             if (!@mkdir($villaDir, 0755, true)) {
                 throw new HttpException('villa klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ olusturulamadi.', 'MKDIR_FAILED', 500);
             }
-        }  
+        } 
 
-        $fileInfo = pathinfo($_FILES['image']['name']);
-        $ext = isset($fileInfo['extension']) ? strtolower($fileInfo['extension']) : 'jpg';
-        
-        try {
-            $filename = bin2hex(random_bytes(16)) . '.' . $ext;
-        } catch (\Exception $e) {
-            $filename = md5(uniqid('', true)) . '.' . $ext;
-        }
+        // Sadece JPEG kabul edildigi icin uzanti her zaman .jpg (istemcinin dosya adindan alinmaz).
+        $ext = 'jpg';
+
+        // fileName: istenen dosya adi (uzantisiz); bos ise eskisi gibi rastgele ad.
+        // width / height: hedef boyut (piksel, 0/bos = verilmedi); ikisi de bossa orijinal boyut, bkz. saveResized().
+        $width = $this->dimensionInput('width', 'Genislik');
+        $height = $this->dimensionInput('height', 'Yukseklik');
+        $filename = $this->uniqueFileName($villaDir, $this->slugFileName((string) $this->request->input('fileName', '')), $ext);
 
         $targetFile = $villaDir . DIRECTORY_SEPARATOR . $filename;
 
-        if (Uploads::saveUploadedFile((string) $_FILES['image']['tmp_name'], $targetFile)) {
+        $saved = $width > 0 || $height > 0
+            ? $this->saveResized((string) $_FILES['image']['tmp_name'], $targetFile, $width, $height)
+            : Uploads::saveUploadedFile((string) $_FILES['image']['tmp_name'], $targetFile);
+
+        if ($saved) {
             try {
                 if ($sira === null || !is_numeric($sira)) {
                     $sira = 99;
@@ -269,7 +275,8 @@ final class ImgDownloadController extends Controller
                 
                 $stmt->execute([
                     'filename' => $dbFileName,
-                    'filesize' => $_FILES['image']['size'],
+                    // Boyut secildiyse kucultulmus dosyanin gercek boyutu yazilir.
+                    'filesize' => (int) (@filesize($targetFile) ?: $_FILES['image']['size']),
                     'villaId' => $villaId,
                     'sira' => $sira
                 ]);
@@ -317,6 +324,176 @@ final class ImgDownloadController extends Controller
             'fileName' => $filename,
             'url' => Uploads::cdnDomain() . '/uploads/images/' . $filename,
         ], 201);
+    }
+
+    /**
+     * Istenen dosya adini URL'e uygun hale getirir: Turkce karakterler sadelesir, kucuk harf, sadece a-z 0-9 ve tire.
+     * "Havuz Manzarası (1).JPG" -> "havuz-manzarasi-1". Bos kalirsa rastgele ad uretilir.
+     */
+    private function slugFileName(string $name): string
+    {
+        $name = trim(preg_replace('/\.jpe?g$/i', '', trim($name)) ?? '');
+        $name = strtr($name, ['ç' => 'c', 'Ç' => 'c', 'ğ' => 'g', 'Ğ' => 'g', 'ı' => 'i', 'İ' => 'i', 'ö' => 'o', 'Ö' => 'o',
+            'ş' => 's', 'Ş' => 's', 'ü' => 'u', 'Ü' => 'u', 'â' => 'a', 'î' => 'i', 'û' => 'u']);
+        $name = strtolower($name);
+        $name = trim((string) preg_replace('/[^a-z0-9]+/', '-', $name), '-');
+        $name = substr($name, 0, 80);
+        $name = rtrim($name, '-');
+        if ($name !== '') {
+            return $name;
+        }
+        try {
+            return bin2hex(random_bytes(16));
+        } catch (\Exception $e) {
+            return md5(uniqid('', true));
+        }
+    }
+
+    /**
+     * Ayni ad hem klasorde hem upload tablosunda (tum villalar; eski resizer dosyayi sadece adla bulabilir) yoksa kullanilir,
+     * varsa sonuna -2, -3 ... eklenir.
+     */
+    private function uniqueFileName(string $dir, string $base, string $ext): string
+    {
+        $stmt = $this->db->pdo()->prepare('SELECT COUNT(*) FROM dbo.upload WHERE FileName = :name');
+        for ($i = 1; $i < 1000; $i++) {
+            $candidate = ($i === 1 ? $base : $base . '-' . $i) . '.' . $ext;
+            if (@file_exists($dir . DIRECTORY_SEPARATOR . $candidate)) {
+                continue;
+            }
+            $stmt->execute(['name' => $candidate]);
+            if ((int) $stmt->fetchColumn() === 0) {
+                return $candidate;
+            }
+        }
+        throw new HttpException('Bu isimde cok fazla dosya var; farkli bir isim girin.', 'VALIDATION', 422);
+    }
+
+    // Genislik/yukseklik: bos veya 0 = verilmedi; aksi halde 50-6000 piksel.
+    private function dimensionInput(string $key, string $label): int
+    {
+        $raw = trim((string) $this->request->input($key, ''));
+        if ($raw === '' || $raw === '0') {
+            return 0;
+        }
+        $value = filter_var($raw, FILTER_VALIDATE_INT);
+        if ($value === false || $value < 50 || $value > 6000) {
+            throw new HttpException($label . ' 50-6000 piksel arasi olmalidir.', 'VALIDATION', 422);
+        }
+        return $value;
+    }
+
+    /**
+     * Gorseli istenen boyuta getirip $target'a yazar (GD, JPEG kalite 85). JPEG'de EXIF yonu uygulanir.
+     *   - Genislik ve yukseklik ikisi de verildiyse tam o olcu: oran bozulmasin diye olcuyu dolduracak kadar
+     *     olceklenir, tasan kisim ortadan kirpilir.
+     *   - Sadece biri verildiyse o kenar tam verilen deger olur (gerekirse buyutulur, gerekirse kucultulur),
+     *     digeri orana gore. Sonuc zaten ayni boyuttaysa yeniden sikistirilmadan oldugu gibi kaydedilir.
+     */
+    private function saveResized(string $tmpName, string $target, int $targetWidth, int $targetHeight): bool
+    {
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            return false;
+        }
+        if (!function_exists('imagecreatetruecolor') || !function_exists('imagecreatefromjpeg')) {
+            throw new HttpException('Sunucuda resim boyutlandirma (PHP GD) yok; boyut vermeden (orijinal) yukleyin.', 'RESIZE_UNSUPPORTED', 500);
+        }
+
+        $info = @getimagesize($tmpName);
+        if (!is_array($info) || $info[0] <= 0 || $info[1] <= 0) {
+            throw new HttpException('Gorsel okunamadi.', 'INVALID_FILE_TYPE', 400);
+        }
+        $orientation = 1;
+        if (function_exists('exif_read_data')) {
+            $exif = @exif_read_data($tmpName);
+            $orientation = is_array($exif) ? (int) ($exif['Orientation'] ?? 1) : 1;
+        }
+        // Yan donuk (EXIF 6/8) fotografta genislik ve yukseklik yer degistirir.
+        $sourceWidth = in_array($orientation, [5, 6, 7, 8], true) ? $info[1] : $info[0];
+        $sourceHeight = in_array($orientation, [5, 6, 7, 8], true) ? $info[0] : $info[1];
+        $exact = $targetWidth > 0 && $targetHeight > 0;
+        if ($exact) {
+            [$outWidth, $outHeight] = [$targetWidth, $targetHeight];
+        } else {
+            // Tek kenar verildi: o kenar tam deger, digeri orana gore (buyutme de olabilir).
+            $scale = $targetWidth > 0 ? $targetWidth / $sourceWidth : $targetHeight / $sourceHeight;
+            $outWidth = max(1, (int) round($sourceWidth * $scale));
+            $outHeight = max(1, (int) round($sourceHeight * $scale));
+        }
+        if ($outWidth > 10000 || $outHeight > 10000) {
+            throw new HttpException('Bu boyutla fotografin diger kenari ' . max($outWidth, $outHeight) . ' piksel oluyor; daha kucuk bir deger girin.', 'VALIDATION', 422);
+        }
+        if ($outWidth === $sourceWidth && $outHeight === $sourceHeight && $orientation === 1) {
+            return Uploads::saveUploadedFile($tmpName, $target);
+        }
+        $this->ensureImageMemory($sourceWidth, $sourceHeight, $outWidth, $outHeight);
+
+        $source = @imagecreatefromjpeg($tmpName);
+        if (!$source) {
+            throw new HttpException('Gorsel okunamadi.', 'INVALID_FILE_TYPE', 400);
+        }
+        $rotations = [3 => 180, 6 => -90, 8 => 90];
+        if (isset($rotations[$orientation])) {
+            $rotated = imagerotate($source, $rotations[$orientation], 0);
+            if ($rotated) {
+                imagedestroy($source);
+                $source = $rotated;
+            }
+        }
+
+        $width = imagesx($source);
+        $height = imagesy($source);
+        if ($exact) {
+            // Tam olcu: kaynaktan hedef oraninda, ortalanmis bir bolge alinir (cover + merkezden kirpma).
+            $scale = max($targetWidth / $width, $targetHeight / $height);
+            $cropWidth = min($width, (int) round($targetWidth / $scale));
+            $cropHeight = min($height, (int) round($targetHeight / $scale));
+            $cropX = (int) floor(($width - $cropWidth) / 2);
+            $cropY = (int) floor(($height - $cropHeight) / 2);
+            $canvas = imagecreatetruecolor($targetWidth, $targetHeight);
+            imagecopyresampled($canvas, $source, 0, 0, $cropX, $cropY, $targetWidth, $targetHeight, $cropWidth, $cropHeight);
+        } else {
+            $canvas = imagecreatetruecolor($outWidth, $outHeight);
+            imagecopyresampled($canvas, $source, 0, 0, 0, 0, $outWidth, $outHeight, $width, $height);
+        }
+        imagedestroy($source);
+
+        $ok = imagejpeg($canvas, $target, 85);
+        imagedestroy($canvas);
+        @unlink($tmpName);
+        if (!$ok) {
+            @unlink($target);
+        }
+        return (bool) $ok;
+    }
+
+    /**
+     * GD her piksel icin ~5 bayt tutar (kaynak + hedef; yon cevirmede kaynak bir kez daha). Gerekirse memory_limit
+     * 512MB'a kadar yukseltilir; yine yetmezse PHP fatal error vermesin diye anlasilir hata doner.
+     */
+    private function ensureImageMemory(int $sourceWidth, int $sourceHeight, int $outWidth, int $outHeight): void
+    {
+        $needed = (int) (($sourceWidth * $sourceHeight * 2 + $outWidth * $outHeight) * 5) + 16 * 1048576;
+        $limit = $this->memoryLimitBytes();
+        if ($limit < 0 || memory_get_usage() + $needed <= $limit) {
+            return;
+        }
+        $wanted = min(512 * 1048576, memory_get_usage() + $needed);
+        if ($wanted > $limit && @ini_set('memory_limit', (string) $wanted) !== false && memory_get_usage() + $needed <= $this->memoryLimitBytes()) {
+            return;
+        }
+        throw new HttpException('Fotograf bu boyutta islenemeyecek kadar buyuk; daha kucuk bir boyut girin.', 'RESIZE_TOO_LARGE', 400);
+    }
+
+    private function memoryLimitBytes(): int
+    {
+        $raw = trim((string) ini_get('memory_limit'));
+        if ($raw === '' || $raw === '-1') {
+            return -1;
+        }
+        $value = (int) $raw;
+        $unit = strtolower(substr($raw, -1));
+        return $unit === 'g' ? $value * 1073741824 : ($unit === 'm' ? $value * 1048576 : ($unit === 'k' ? $value * 1024 : $value));
     }
 
     private function imageName(string $value): string
