@@ -928,6 +928,9 @@ final class HomesManagementDetailController extends Controller
                 'showdate1' => $this->firstNonEmptyValue($row, ['showdate1_formatted', 'showdate1']),
                 'showdate2' => $this->firstNonEmptyValue($row, ['showdate2_formatted', 'showdate2']),
                 'oran' => $this->firstNonEmptyValue($row, ['oran']),
+                'sahte_oran' => $this->firstNonEmptyValue($row, ['sahte_oran']),
+                // 1 Acenta, 2 Ev Sahibi, 3 Genel; NULL/bos kayitlar Genel sayilir.
+                'discountType' => in_array((int) ($row['discountType'] ?? 0), [1, 2, 3], true) ? (int) $row['discountType'] : 3,
             ];
         }
 
