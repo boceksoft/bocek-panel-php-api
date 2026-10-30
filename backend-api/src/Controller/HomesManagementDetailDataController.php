@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Support\HomesCode;
+use App\Support\HomesEmptySeasons;
+use App\Support\HomesExtraFields;
+use App\Support\UploadLimits;
 use PDO;
 
 /*
@@ -36,6 +40,23 @@ final class HomesManagementDetailDataController extends Controller
         $selectableData['bolgeler_tree'] = $bolgelerTree;
         $selectableData['ozellikler'] = $ozelliklerTree;
         $selectedValues = $this->selectedValues($home, $sites);
+        // Site-ozel ek alanlar (config homes_extra_fields); secili degilse bos liste.
+        $siteId = max(1, (int) $this->request->query('site', 1));
+        $selectableData['ek_alanlar'] = HomesExtraFields::definitions(
+            $pdo,
+            $this->app,
+            HomesExtraFields::siteSuffix($this->app, $siteId)
+        );
+        // Ev kodu ayari (config homes_code): mode, format, sonrakiId (onizleme icin).
+        $selectableData['evkodu'] = HomesCode::definition($pdo, $this->app);
+        // Yeni ilanda bos aylik sezon olusturma (config homes_empty_seasons): enabled, nights.
+        $selectableData['bos_sezon'] = HomesEmptySeasons::definition($this->app);
+        // Sezon temizlik ucretinin adi (config reservation_mail.cleaning_label; ovillam 'Kisa Sureli K. Odemesi').
+        $mailConfig = is_array($this->app['reservation_mail'] ?? null) ? $this->app['reservation_mail'] : [];
+        $cleaningLabel = trim((string) ($mailConfig['cleaning_label'] ?? ''));
+        $selectableData['temizlik_etiketi'] = $cleaningLabel !== '' ? $cleaningLabel : 'Temizlik Ücreti';
+        // Sunucunun tek dosya yukleme siniri (bayt); frontend fotograflari bunun altina kucultur.
+        $selectableData['yukleme_siniri'] = UploadLimits::maxBytes();
 
         $this->response->success([
             'fields' => $this->fields(),
@@ -68,6 +89,11 @@ final class HomesManagementDetailDataController extends Controller
             'fiyat_tipleri' => $selectableData['fiyat_tipleri'],
             'ekstra_ucret_tipleri' => $selectableData['ekstra_ucret_tipleri'],
             'iptal_sartlari' => $selectableData['iptal_sartlari'],
+            'ek_alanlar' => $selectableData['ek_alanlar'],
+            'evkodu' => $selectableData['evkodu'],
+            'bos_sezon' => $selectableData['bos_sezon'],
+            'temizlik_etiketi' => $selectableData['temizlik_etiketi'],
+            'yukleme_siniri' => $selectableData['yukleme_siniri'],
         ]);
     }
 

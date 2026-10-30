@@ -65,6 +65,7 @@ final class HomesManagementPricesController extends Controller
             throw new HttpException('Sezon bilgileri kaydedilemedi.', 'DB_UPDATE_FAILED', 500, $e);
         }
 
+        $seasonColumns = $this->sezonlarColumns($pdo);
         $this->response->success([
             'id' => $id,
             'updated' => $result['updated'] > 0,
@@ -72,6 +73,8 @@ final class HomesManagementPricesController extends Controller
                 'sezonlar' => $result['updated'],
             ],
             'skipped_related_rows' => $result['skipped'],
+            // Sezon temizlik alanlari (temizlikFiyat / temizlikGece) bu surumde yaziliyor mu; frontend eski API'yi ayirt eder.
+            'sezon_temizlik' => isset($seasonColumns['temizlikfiyat']) || isset($seasonColumns['temizlikgece']),
         ]);
     }
 
@@ -374,10 +377,20 @@ final class HomesManagementPricesController extends Controller
 
         $pdo = $this->db->pdo();
 
-        $stmt = $pdo->prepare('DELETE FROM indirimler WHERE id = :discountId');
-        $stmt->execute([
-            ':discountId' => $discountId,
-        ]);
+        // Emlak verildiyse sadece o villanin indirimi silinir (yanlis indirim id'siyle baska villanin indirimi silinmesin).
+        $homeId = $this->resolveId($payload);
+        if ($homeId > 0) {
+            $stmt = $pdo->prepare('DELETE FROM indirimler WHERE id = :discountId AND emlak = :homeId');
+            $stmt->execute([
+                ':discountId' => $discountId,
+                ':homeId' => $homeId,
+            ]);
+        } else {
+            $stmt = $pdo->prepare('DELETE FROM indirimler WHERE id = :discountId');
+            $stmt->execute([
+                ':discountId' => $discountId,
+            ]);
+        }
 
         if ($stmt->rowCount() <= 0) {
             throw new HttpException('Secilen indirim bulunamadi.', 'NOT_FOUND', 404);
@@ -463,6 +476,10 @@ final class HomesManagementPricesController extends Controller
                      'fiyat_tipi',
                      'sezonId',
                      'seasonId',
+                     'temizlikGece',
+                     'temizlik_gece',
+                     'temizlikFiyat',
+                     'temizlik_fiyat',
                  ] as $key) {
             if (array_key_exists($key, $payload)) {
                 $single[$key] = $payload[$key];
@@ -649,7 +666,9 @@ final class HomesManagementPricesController extends Controller
                 $minStay = $minStay > 0 ? $minStay : (int) ($existingSeason['gece'] ?? 0);
             }
 
-            if ($startDate === '' || $endDate === '' || $price <= 0 || $minStay <= 0) {
+            // Mevcut sezon fiyati 0 olabilir (bos sezonlar: fiyat sonra girilir); yeni sezonda fiyat zorunlu.
+            $priceMissing = $existingSeason !== [] ? $price < 0 : $price <= 0;
+            if ($startDate === '' || $endDate === '' || $priceMissing || $minStay <= 0) {
                 $skipped[] = [
                     'section' => 'sezonlar',
                     'index' => (string) $index,
@@ -663,13 +682,46 @@ final class HomesManagementPricesController extends Controller
                 $seasonTitle = $this->normalizeScalar($existingSeason['sezon'] ?? '');
             }
 
+            // Sezon temizlik ucreti / temizlik gecesi (sezonlar.temizlikFiyat, sezonlar.temizlikGece; tum panellerde).
+            // Hesap: konaklama temizlikGece'den kisaysa temizlikFiyat eklenir. Gonderilmezse update'te mevcut deger kalir,
+            // insert'te 0 yazilir (panel gibi).
+            $cleaningSet = '';
+            $cleaningColumns = '';
+            $cleaningValues = '';
+            $cleaningParams = [];
+            $seasonColumns = $this->sezonlarColumns($pdo);
+            foreach ([
+                         'temizlikGece' => ['temizlikGece', 'temizlik_gece'],
+                         'temizlikFiyat' => ['temizlikFiyat', 'temizlik_fiyat'],
+                     ] as $column => $keys) {
+                if (!isset($seasonColumns[strtolower($column)])) {
+                    continue;
+                }
+                $hasValue = false;
+                foreach ($keys as $key) {
+                    if (array_key_exists($key, $row)) {
+                        $hasValue = true;
+                    }
+                }
+                if (!$hasValue && $seasonId > 0) {
+                    continue;
+                }
+                $raw = $hasValue ? str_replace(',', '.', trim((string) $this->firstPayloadValue($row, $keys))) : '0';
+                $value = is_numeric($raw) && (float) $raw > 0 ? $raw : '0';
+                $param = ':' . $column;
+                $cleaningSet .= ', [' . $column . '] = ' . $param;
+                $cleaningColumns .= ', [' . $column . ']';
+                $cleaningValues .= ', ' . $param;
+                $cleaningParams[$param] = $column === 'temizlikGece' ? (string) (int) $value : $value;
+            }
+
             if ($seasonId > 0) {
                 $stmt = $pdo->prepare(
                     "UPDATE sezonlar
-                     SET tarih1 = :tarih1, tarih2 = :tarih2, fiyat = :fiyat, gece = :gece, sezon = :sezon
+                     SET tarih1 = :tarih1, tarih2 = :tarih2, fiyat = :fiyat, gece = :gece, sezon = :sezon{$cleaningSet}
                      WHERE id = :id AND islem_id = :homeId AND islem = 'emlak'"
                 );
-                $stmt->execute([
+                $stmt->execute(array_merge([
                     ':tarih1' => $startDate,
                     ':tarih2' => $endDate,
                     ':fiyat' => $price,
@@ -677,16 +729,16 @@ final class HomesManagementPricesController extends Controller
                     ':sezon' => $seasonTitle,
                     ':id' => $seasonId,
                     ':homeId' => $homeId,
-                ]);
+                ], $cleaningParams));
                 $updated += max(1, $stmt->rowCount());
                 continue;
             }
 
             $stmt = $pdo->prepare(
-                "INSERT INTO sezonlar (site, islem, islem_id, tarih1, tarih2, fiyat, gece, sezon)
-                 VALUES (:site, 'emlak', :homeId, :tarih1, :tarih2, :fiyat, :gece, :sezon)"
+                "INSERT INTO sezonlar (site, islem, islem_id, tarih1, tarih2, fiyat, gece, sezon{$cleaningColumns})
+                 VALUES (:site, 'emlak', :homeId, :tarih1, :tarih2, :fiyat, :gece, :sezon{$cleaningValues})"
             );
-            $stmt->execute([
+            $stmt->execute(array_merge([
                 ':site' => $siteId,
                 ':homeId' => $homeId,
                 ':tarih1' => $startDate,
@@ -694,7 +746,7 @@ final class HomesManagementPricesController extends Controller
                 ':fiyat' => $price,
                 ':gece' => $minStay,
                 ':sezon' => $seasonTitle,
-            ]);
+            ], $cleaningParams));
             $updated++;
         }
 

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Support\Uploads;
+
 final class CategoriesController extends Controller
 { 
     /**
@@ -300,7 +302,7 @@ final class CategoriesController extends Controller
         }
 
         $target = $this->uploadsDir() . DIRECTORY_SEPARATOR . $filename;
-        if (!move_uploaded_file($_FILES['image']['tmp_name'], $target)) {
+        if (!Uploads::saveUploadedFile((string) $_FILES['image']['tmp_name'], $target)) {
             throw new \App\Core\HttpException('Gorsel kaydedilemedi.', 'SAVE_FAILED', 500);
         }
 

@@ -218,7 +218,7 @@ final class BlogCategoriesController extends Controller
         } catch (\Exception $e) {
             $filename = md5(uniqid('', true)) . '.svg';
         }
-        if (!move_uploaded_file($_FILES['image']['tmp_name'], Uploads::dir() . DIRECTORY_SEPARATOR . $filename)) {
+        if (!Uploads::saveUploadedFile((string) $_FILES['image']['tmp_name'], Uploads::dir() . DIRECTORY_SEPARATOR . $filename)) {
             throw new HttpException('Gorsel kaydedilemedi.', 'SAVE_FAILED', 500);
         }
         return $filename;

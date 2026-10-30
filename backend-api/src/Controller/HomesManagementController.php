@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use PDO;
+use App\Support\Uploads;
 
 /*
  * Homes management list resource.
@@ -317,7 +318,8 @@ WHERE {$whereSql}
         $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
         foreach ($rows as &$row) {
             unset($row['totalCount']);
-            $imageList = $this->imageList((string) $row['image'], $cdnBase);
+            // Villa fotograflari yeni CDN yapisinda (/uploads/property/small/{villaId}/)
+            $imageList = $this->imageList((string) $row['image'], Uploads::homeImageBase($cdnBase, (int) ($row['id'] ?? 0), $this->app));
             $row = [
                 'id' => (int) $row['id'],
                 'site_id' => (int) $row['site_id'],

@@ -98,7 +98,7 @@ final class Uploads
             throw new HttpException($subDir . ' klasoru olusturulamadi.', 'MKDIR_FAILED', 500);
         }
 
-        if (!move_uploaded_file($_FILES[$field]['tmp_name'], $targetDir . DIRECTORY_SEPARATOR . $filename)) {
+        if (!self::saveUploadedFile((string) $_FILES[$field]['tmp_name'], $targetDir . DIRECTORY_SEPARATOR . $filename)) {
             throw new HttpException('Gorsel kaydedilemedi.', 'SAVE_FAILED', 500);
         }
 
@@ -120,5 +120,45 @@ final class Uploads
 
         $info = @getimagesize($path);
         return is_array($info) && isset($info['mime']) ? (string) $info['mime'] : null;
+    }
+
+    /**
+     * Yuklenen dosyayi hedefe kaydeder. move_uploaded_file yerine kopyalar: Windows/IIS'te tasinan dosya gecici klasorun
+     * (upload_tmp_dir) izinlerini korur ve CDN gibi baska kullanicilar okuyamaz; kopya hedef klasorun izinlerini alir.
+     */
+    public static function saveUploadedFile(string $tmpName, string $target): bool
+    {
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            return false;
+        }
+
+        if (!@copy($tmpName, $target)) {
+            return false;
+        }
+
+        @unlink($tmpName);
+
+        return true;
+    }
+
+    /**
+     * Villa fotografi adresinin tabani. Yeni CDN yapisi (resizer): {domain}/uploads/property/{boyut}/{villaId}/{dosya};
+     * resizer once uploads/product/{villaId}/, yoksa eski duz uploads/ klasorune bakar. Villa no yoksa eski yapi.
+     * $base eski taban olabilir ("https://cdn.site.com/uploads/small/"): boyut ve alan adi ondan alinir.
+     * Sadece config homes_image_property_urls acikken (sitenin resizer'i yeni yapiyi destekliyorsa); kapaliysa eski taban.
+     *
+     * @param array<string,mixed> $app
+     */
+    public static function homeImageBase(string $base, int $homeId, array $app = []): string
+    {
+        if ($homeId <= 0 || empty($app['homes_image_property_urls'])) {
+            return $base;
+        }
+
+        if (preg_match('#^(.*)/uploads/([^/]+)/$#', $base, $m) === 1) {
+            return $m[1] . '/uploads/property/' . $m[2] . '/' . $homeId . '/';
+        }
+
+        return $base;
     }
 }

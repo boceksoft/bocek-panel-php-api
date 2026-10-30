@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\HomesCode;
+use App\Support\HomesEmptySeasons;
+use App\Support\HomesExtraFields;
 use PDO;
 
 /*
@@ -47,7 +50,10 @@ final class HomesManagementDetailUpdateController extends Controller
         $mesafeler = $this->mesafelerPayload($payload);
         $hasBakimciContactPayload = $this->hasBakimciContactPayload($payload);
         $belge = $this->belgePayload($payload);
-        if ($updates === [] && $mesafeler === [] && !$hasBakimciContactPayload && $belge === null) {
+        $hasRelationPayload = HomesExtraFields::hasRelationPayload($this->app, $payload);
+        if ($updates === [] && $mesafeler === [] && !$hasBakimciContactPayload && $belge === null && !$hasRelationPayload
+            && !array_key_exists('bos_sezon_yili', $payload)
+        ) {
             throw new HttpException('Guncellenecek alan bulunamadi.', 'VALIDATION', 422);
         }
 
@@ -57,6 +63,12 @@ final class HomesManagementDetailUpdateController extends Controller
                 ? $this->updateHomes($pdo, $id, $updates)
                 : ['updated_columns' => [], 'skipped_columns' => []];
             $mesafelerResult = $this->updateMesafeler($pdo, $id, $mesafeler);
+            // Ek iliski alanlari (config homes_extra_fields; orn. takvim kurallari -> rulesHomes).
+            $ekIliskiResult = HomesExtraFields::saveRelations($pdo, $this->app, $id, $payload);
+            // Otomatik ev kodu (config homes_code mode auto; evkodu bossa).
+            // Bos aylik sezonlar (config homes_empty_seasons; payload bos_sezon_yili / bos_sezon_baslangic_ay).
+            $emptySeasonResult = HomesEmptySeasons::apply($pdo, $this->app, $id, $payload);
+            $autoCode = HomesCode::applyAuto($pdo, $this->app, $id, $payload, false);
             $bakimciAssignmentResult = $this->safeSyncBakimciAssignment($pdo, $id, $updates);
             $bakimciResult = $this->safeUpdateBakimciContact($pdo, $id, $payload);
             $belgeResult = $belge !== null
@@ -73,8 +85,12 @@ final class HomesManagementDetailUpdateController extends Controller
 
         $this->response->success([
             'id' => $id,
+            // Otomatik verilen ev kodu (verilmediyse null).
+            'evkodu' => $autoCode,
             'updated' => count($updateResult['updated_columns']) > 0
                 || $mesafelerResult['updated'] > 0
+                || $ekIliskiResult['updated'] > 0
+                || $emptySeasonResult['created'] > 0
                 || $bakimciAssignmentResult['updated'] > 0
                 || $bakimciResult['updated'] > 0
                 || $belgeResult['updated'] > 0,
@@ -82,12 +98,17 @@ final class HomesManagementDetailUpdateController extends Controller
             'skipped_columns' => $updateResult['skipped_columns'],
             'updated_related_sections' => [
                 'mesafeler' => $mesafelerResult['updated'],
+                'ek_iliskiler' => $ekIliskiResult['updated'],
+                'evkodu' => $autoCode !== null ? 1 : 0,
+                'bos_sezonlar' => $emptySeasonResult['created'],
                 'bakimci_assignment' => $bakimciAssignmentResult['updated'],
                 'bakimci' => $bakimciResult['updated'],
                 'belge' => $belgeResult['updated'],
             ],
             'skipped_related_rows' => array_merge(
                 $mesafelerResult['skipped'],
+                $ekIliskiResult['skipped'],
+                $emptySeasonResult['skipped'],
                 $bakimciAssignmentResult['skipped'],
                 $bakimciResult['skipped'],
                 $belgeResult['skipped']
@@ -344,14 +365,14 @@ final class HomesManagementDetailUpdateController extends Controller
             'banyo' => 'banyo',
             'girissaati' => 'giris_saat',
             'cikissaati' => 'cikis_saat',
-            'iptalsarti' => 'ozel_sartlar',
-            'iptalpolitikasi' => 'iptal_politikasi',
+            // Iptal sarti / politikasi (ozel_sartlar, iptal_politikasi) yeni ekrandan yazilmiyor (kaldirildi).
             'bakimciadi' => 'bakimciad',
             'bakimcitel' => 'bakimcitel',
             'evsahibi' => 'evsahibi',
             'whatsappgrupadi' => 'whatsapp_grup',
             'yetkilifirma' => 'yetkilifirma',
-            'ilannotlari' => 'not2',
+            // Ilan notu: panel homes.not kullaniyor (not2'yi hicbir panel formu doldurmuyor).
+            'ilannotlari' => 'not',
             'icerik' => 'icerik',
             'parabirimi' => 'doviz',
             'depozitoorani' => 'depozito',
@@ -379,13 +400,12 @@ final class HomesManagementDetailUpdateController extends Controller
             'genelBilgiler.villaDetaylari.banyo_sayisi' => 'banyo',
             'genelBilgiler.konaklamaKurallari.giris_saati' => 'giris_saat',
             'genelBilgiler.konaklamaKurallari.cikis_saati' => 'cikis_saat',
-            'genelBilgiler.konaklamaKurallari.iptal_sarti' => 'ozel_sartlar',
             'genelBilgiler.iletisimBilgileri.bakimciBilgisi.ad_soyad' => 'bakimciad',
             'genelBilgiler.iletisimBilgileri.bakimciBilgisi.telefon' => 'bakimcitel',
             'genelBilgiler.iletisimBilgileri.evSahibiBilgisi.id' => 'evsahibi',
             'genelBilgiler.iletisimBilgileri.whatsapp_grup_adi' => 'whatsapp_grup',
             'genelBilgiler.iletisimBilgileri.yetkili_firma_adi' => 'yetkilifirma',
-            'genelBilgiler.yoneticiBilgileri.ilan_notlari' => 'not2',
+            'genelBilgiler.yoneticiBilgileri.ilan_notlari' => 'not',
             'genelBilgiler.detayliAciklama.icerik' => 'icerik',
             'fiyatlandirmaVeKurallar.para_birimi' => 'doviz',
             'fiyatlandirmaVeKurallar.odemeAyarlari.depozito.oran' => 'depozito',
@@ -437,10 +457,7 @@ final class HomesManagementDetailUpdateController extends Controller
         foreach ($payload as $key => $value) {
             if (
                 !is_string($key)
-                || (
-                    preg_match('/^iptal_politikasi(?:_[A-Za-z0-9]+)?$/', $key) !== 1
-                    && preg_match('/^(?:hasar|temizlik|elektrik)_[A-Za-z0-9]+$/', $key) !== 1
-                )
+                || preg_match('/^(?:hasar|temizlik|elektrik)_[A-Za-z0-9]+$/', $key) !== 1
             ) {
                 continue;
             }
@@ -502,6 +519,25 @@ final class HomesManagementDetailUpdateController extends Controller
             if ($coverImages !== null) {
                 $updates['resim'] = implode(',', array_slice($coverImages, 0, $this->coverLimit()));
             }
+        }
+
+        // Ev kodu (config homes_code; mod off degilse payload "evkodu").
+        foreach (HomesCode::updates($this->app, $payload) as $column => $value) {
+            $updates[$column] = $value;
+        }
+
+        // Konum notu: istekteki sitenin homes.konum_not{sonek} kolonu.
+        if ($this->hasPath($payload, 'konumnotu')) {
+            $updates['konum_not' . $this->configuredSiteSuffix($this->siteId($payload))] = $this->normalizeScalar($this->getPath($payload, 'konumnotu'));
+        }
+
+        // Site-ozel ek alanlar (config homes_extra_fields): payload "ek_{anahtar}" -> homes kolonu.
+        foreach (HomesExtraFields::updates(
+            $this->app,
+            $payload,
+            HomesExtraFields::siteSuffix($this->app, $this->siteId($payload))
+        ) as $column => $value) {
+            $updates[$column] = $value;
         }
 
         return $updates;
@@ -1379,9 +1415,35 @@ final class HomesManagementDetailUpdateController extends Controller
         return trim((string) $value);
     }
 
+    /**
+     * homes.doviz degeri. Panel ve site (Finance.Currency.CurrencyName ile join) 'tl' / 'dolar' / 'euro' / 'pound' bekler.
+     * Frontend para birimini Finance.Currency.CurrencyId olarak gonderir: sayi gelirse CurrencyName'e cevrilir
+     * (eskiden '1' yaziliyordu, sitenin detay sorgusu villayi bulamiyordu).
+     */
     private function currencyDbValue(string $value): string
     {
         $currency = strtolower(trim($value));
+
+        if ($currency !== '' && ctype_digit($currency)) {
+            try {
+                $stmt = $this->db->pdo()->prepare(
+                    "IF OBJECT_ID(N'Finance.Currency', N'U') IS NOT NULL
+                        SELECT TOP 1 CurrencyName FROM Finance.Currency WHERE CurrencyId = :id
+                     ELSE SELECT CAST(NULL AS nvarchar(50))"
+                );
+                $stmt->execute([':id' => (int) $currency]);
+                $name = strtolower(trim((string) $stmt->fetchColumn()));
+                if ($name !== '') {
+                    return $name;
+                }
+            } catch (\Throwable $e) {
+                // tablo/sorgu yoksa asagidaki sabit eslemeye dus
+            }
+            $byId = ['1' => 'tl', '2' => 'dolar', '3' => 'euro', '4' => 'pound'];
+            if (isset($byId[$currency])) {
+                return $byId[$currency];
+            }
+        }
 
         switch ($currency) {
             case 'try':
