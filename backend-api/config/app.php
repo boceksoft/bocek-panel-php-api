@@ -17,6 +17,30 @@ return [
     // evkodu bossa ad kullanilir. false (varsayilan): villa adi. Villa Kiralama > Config ekranindan degistirilir.
     'homes_title_use_code' => false,
 
+    // Ilan detayinda (yeni ilan / duzenleme) gosterilecek site-ozel ek homes alanlari. Her panelde olmayan alanlar
+    // oldugu icin varsayilan bos; Villa Kiralama > Config ekranindan secilir. Katalog: src/Support/HomesExtraFields.php
+    // takvimadi, orj_ad, ekstra, rez_takibi, rez_takip_yeri, rez_takip_yeri_adi, oda_sayisi, m2, kat_sayisi,
+    // isitma, klima, otopark, internet, sadece_bizde, kur, fiyat_notu (site sonekli), takvimNotu (site sonekli), harita,
+    // takvim_kurallari (rules -> rulesHomes).
+    // homes'ta kolonu olmayan alan secilse de gosterilmez/yazilmaz.
+    'homes_extra_fields' => [],
+
+    // Ev kodu (homes.evkodu). mode: off (ilan ekraninda alan yok, otomatik yok; varsayilan) | manual (alan var, elle)
+    // | auto (alan var; bos birakilirsa kayitta format'a gore verilir, dolu kod ezilmez). format belirtecleri:
+    // {id}, {id+N}, {bolge_harf} (emlak bolgesi basliginin ilk harfi), {bolge}, {tip_prefix} (tip.prefix).
+    // ovillam: ['mode' => 'auto', 'format' => '{bolge_harf}-{id+1000}'], villavillam: 'VR-{id}'. Bkz. src/Support/HomesCode.php
+    'homes_code' => ['mode' => 'off', 'format' => '{bolge_harf}-{id+1000}'],
+
+    // Yeni ilanda bos (0 fiyatli) aylik sezon satirlari (eski panel yeni_emlak_ekle gibi). enabled: ilan ekleme
+    // ekraninda "Bos sezon olustur" secenegi (yil + baslangic ayi) gorunur; nights: satirlarin min. gecesi (panel 7).
+    // Her site icin acilir, ayni ayla cakisan sezon varsa o ay atlanir. Bkz. src/Support/HomesEmptySeasons.php
+    'homes_empty_seasons' => ['enabled' => false, 'nights' => 7],
+
+    // true: villa fotograflari yeni CDN yapisiyla doner: {Cdn}/uploads/property/{boyut}/{villaId}/{dosya}
+    // (ilan detayi/listesi, yukleme cevabi, rezervasyonlar, mail resmi, Kiralama Takvimi). Sadece sitenin CDN resizer'i
+    // bu yapiyi destekliyorsa ac (bkz. natsisa/docs/devir/resizer). false (varsayilan): /uploads/small/{dosya}.
+    'homes_image_property_urls' => false,
+
     // true: hata detayları yanıta eklenir. Canlıda false olmalı.
     'debug' => true,
 
@@ -83,6 +107,10 @@ return [
     // Havale: {domain}/{sayfa url} (parametresiz) ve aynı parametrelerle havaleParametreli (ovillam: Havale Bildirim Formu).
     'reservation_payment_card_page_id' => 22,
     'reservation_payment_transfer_page_id' => 3,
+    // E-postalardaki "İptal Şartlarını okumak için buraya tıklayın" linkinin sayfası (sayfalar{dbtable}.id).
+    // Panel bağlantı sorgusu: (Select url from sayfalar{dbtable} where id=24) as iptalurl. 0 ya da bulunamazsa
+    // genel{dbtable}.iptalUrl kolonu denenir. Siteye göre app.local.php içinde [1 => 24, 2 => 30] gibi verilebilir.
+    'reservation_cancellation_page_id' => 24,
     // Onay e-postasındaki "Rezervasyonlarım" / "Misafir Bilgilerini Doldur" linkinin sayfası (sayfalar.id).
     'reservation_my_reservations_page_id' => 3,
 
@@ -287,6 +315,10 @@ return [
     'editable_local_settings' => [
         'homes_two_cover_images' => 'bool',
         'homes_title_use_code' => 'bool',
+        'homes_extra_fields' => 'array',
+        'homes_code' => 'array',
+        'homes_empty_seasons' => 'array',
+        'homes_image_property_urls' => 'bool',
         'guest_movements_home_id_column' => 'bool',
         'guest_movements_use_caretaker_owner_fallback' => 'bool',
         'links_search_page_url' => 'string',

@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Core\HttpException;
 use PDO;
+use App\Support\Uploads;
 
 /*
  * Rezervasyon detay kaynaÄŸÄ±.
@@ -681,7 +682,10 @@ final class ReservationdetailController extends Controller
             }
             if (is_array($row)) {
                 $images = array_values(array_filter(array_map('trim', explode(',', (string) ($row['resim'] ?? '')))));
-                $image = $images !== [] ? '/uploads/400x320/' . $images[0] : '';
+                // Panel /uploads/400x320/<resim>; yeni CDN yapisi /uploads/property/400x320/{villaId}/<resim>
+                $image = $images !== []
+                    ? (!empty($this->app['homes_image_property_urls']) ? '/uploads/property/400x320/' . $homeId . '/' : '/uploads/400x320/') . $images[0]
+                    : '';
                 $villa = [
                     'adi' => trim((string) ($row['adi'] ?? '')),
                     'bolge' => trim((string) ($row['bolge'] ?? ''), " /"),
@@ -705,8 +709,13 @@ final class ReservationdetailController extends Controller
             ? $this->mailMoney($reservation['on_odeme'] ?? '', $doviz)
             : $this->mailMoney($reservation['toplam_tutar'] ?? '', $doviz);
 
-        // İptal şartları linki (panel: qsql("domain") & "/" & qsql("iptalUrl")).
-        $cancellationPath = trim($g('iptalUrl'), '/');
+        // İptal şartları linki (panel: qsql("domain") & "/" & qsql("iptalUrl")). Panelde iptalUrl genel tablosunda kolon
+        // değil, bağlantı sorgusunda "(Select url from sayfalar{dbtable} where id=24) as iptalurl" alias'ı; bu yüzden
+        // önce reservation_cancellation_page_id ile sayfalar{suffix}'ten okunur, yoksa genel.iptalUrl kolonu denenir.
+        $cancellationPath = $this->pagePath($pdo, $suffix, $this->pageIdSetting('reservation_cancellation_page_id', $siteId, $suffix));
+        if ($cancellationPath === '') {
+            $cancellationPath = trim($g('iptalUrl'), '/');
+        }
         $cancellationLink = $linkDomain !== '' && $cancellationPath !== '' ? $linkDomain . '/' . $cancellationPath : '';
 
         $classic = $this->mailClassicPayment($pdo, $reservation, $doviz, $partial);
@@ -1930,7 +1939,8 @@ final class ReservationdetailController extends Controller
             return [];
         }
 
-        $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
+        // Villa fotograflari yeni CDN yapisinda (/uploads/property/small/{villaId}/)
+        $cdnBase = Uploads::homeImageBase((defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/', (int) ($villa['id'] ?? 0), $this->app);
         $images = array_values(array_filter(array_map('trim', explode(',', $resimStr))));
 
         return array_map(function ($image) use ($cdnBase) {

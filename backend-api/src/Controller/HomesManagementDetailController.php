@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\HomesExtraFields;
 use PDO;
 
 /*
@@ -97,6 +98,7 @@ final class HomesManagementDetailController extends Controller
             'genelBilgiler' => [
                 'temelBilgiler' => [
                     'villa_adi' => $this->firstValueFrom($rs, ['baslik']),
+                    'ev_kodu' => $this->firstValueFrom($rs, ['evkodu']),
                     'kisa_aciklama' => $this->firstValueFrom($rs, ['kisa_icerik']),
                     'emlak_tipi_baslik' => $this->firstValueFrom($rs, ['emlak_tipi_baslik']),
                     'arr' => $this->onlyBaslik($tipCat0Aktif),
@@ -137,7 +139,8 @@ final class HomesManagementDetailController extends Controller
                     'yetkili_firma_adi' => $this->firstValueFrom($rs, ['yetkilifirma']),
                 ],
                 'yoneticiBilgileri' => [
-                    'ilan_notlari' => $this->firstValueFrom($rs, ['not2', 'not']),
+                    // Panel homes.not kullaniyor; not2 sadece eski yeni-ekran kayitlari icin yedek.
+                    'ilan_notlari' => $this->firstValueFrom($rs, ['not', 'not2']),
                 ],
                 'belgeBilgileri' => $this->belgeBilgileri($pdo, $id),
                 'detayliAciklama' => [
@@ -188,9 +191,16 @@ final class HomesManagementDetailController extends Controller
                 'enlem' => $this->firstValueFrom($rs, ['enlem']),
                 'boylam' => $this->firstValueFrom($rs, ['boylam']),
                 'konumNotlari' => $this->konumNotlari($pdo, $rawRs),
+                // Istekteki sitenin konum notu (homes.konum_not + site soneki); yeni ekranin Konum Notu alani.
+                'konumNotu' => $this->firstValueFrom($rawRs, ['konum_not' . $this->configuredSiteSuffix($siteId)]),
                 'mesafeler' => $this->mesafeler($mesafelerValues),
                 'mesafeHesaplamaTipi' => $this->firstValueFrom($rs, ['mesafe_cetvelitipi']),
             ],
+            // Site-ozel ek alanlarin degerleri (config homes_extra_fields): [anahtar => deger].
+            'ekAlanlar' => (object) array_merge(
+                HomesExtraFields::values($this->app, $rawRs, HomesExtraFields::siteSuffix($this->app, $siteId)),
+                HomesExtraFields::relationValues($pdo, $this->app, $id)
+            ),
             'medyaBilgileri' => [
                 'resimler' => $this->resimler($images, $rs),
                 'videolar' => $this->filledValues($rs, ['video']),
@@ -1218,7 +1228,10 @@ final class HomesManagementDetailController extends Controller
      */
     private function resimler(array $rows, array $home): array
     {
-        $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
+        // Config homes_image_property_urls aciksa yeni CDN yapisi: /uploads/property/small/{villaId}/{dosya}. Resizer once
+        // uploads/product/{villaId}/ altina, yoksa eski duz uploads/ klasorune bakar; eski fotograflar da bu adresle gorunur.
+        $homeId = (int) ($home['id'] ?? 0);
+        $cdnBase = \App\Support\Uploads::homeImageBase((defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/', $homeId, $this->app);
         $kapakMap = $this->selectedStringMap($this->firstNonEmptyValue($home, ['resim']), ',');
         $images = [];
 

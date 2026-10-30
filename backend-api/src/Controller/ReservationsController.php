@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Core\HttpException;
 use PDO;
+use App\Support\Uploads;
 
 /*
  * Rezervasyon (kayıtlar) kaynağı + ciro özeti.
@@ -324,7 +325,8 @@ final class ReservationsController extends Controller
         $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
         foreach ($rows as &$row) {
             $images = array_values(array_filter(array_map('trim', explode(',', (string) $row['villa_resim']))));
-            $row['villa_resim'] = $images ? $cdnBase . $images[0] : '';
+            // Yeni CDN yapisi: /uploads/property/small/{villaId}/
+            $row['villa_resim'] = $images ? Uploads::homeImageBase($cdnBase, (int) ($row['home_id'] ?? 0), $this->app) . $images[0] : '';
         }
         unset($row);
 

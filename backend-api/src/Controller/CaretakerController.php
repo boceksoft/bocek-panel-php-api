@@ -97,8 +97,9 @@ final class CaretakerController extends Controller
         }
 
         $phone = $this->normalizePhone((string) $this->inputAny(['bakimcitel', 'phone', 'telefon'], ''));
-        $address = trim((string) $this->inputAny(['bakimciAdres', 'address', 'adres'], ''));
-        $email = trim((string) $this->inputAny(['bakimciEmail', 'email', 'eposta'], ''));
+        // Eski frontend bos adres/e-posta icin "0" gonderiyordu; bos sayilir.
+        $address = $this->emptyIfZero(trim((string) $this->inputAny(['bakimciAdres', 'address', 'adres'], '')));
+        $email = $this->emptyIfZero(trim((string) $this->inputAny(['bakimciEmail', 'email', 'eposta'], '')));
         $homesId = (int) $this->inputAny(['homesId', 'homes_id', 'homeId', 'home_id'], 0);
         $homesIdValue = $homesId > 0 ? $homesId : null;
 
@@ -187,13 +188,13 @@ final class CaretakerController extends Controller
         }
 
         if ($this->hasInputAny(['bakimciAdres', 'address', 'adres'])) {
-            $address = trim((string) $this->inputAny(['bakimciAdres', 'address', 'adres'], ''));
+            $address = $this->emptyIfZero(trim((string) $this->inputAny(['bakimciAdres', 'address', 'adres'], '')));
             $updates[] = 'bakimciAdres = :bakimciAdres';
             $params[':bakimciAdres'] = $address !== '' ? $address : null;
         }
 
         if ($this->hasInputAny(['bakimciEmail', 'email', 'eposta'])) {
-            $email = trim((string) $this->inputAny(['bakimciEmail', 'email', 'eposta'], ''));
+            $email = $this->emptyIfZero(trim((string) $this->inputAny(['bakimciEmail', 'email', 'eposta'], '')));
             $updates[] = 'bakimciEmail = :bakimciEmail';
             $params[':bakimciEmail'] = $email !== '' ? $email : null;
         }
@@ -320,6 +321,11 @@ final class CaretakerController extends Controller
     private function hasLetter(string $value): bool
     {
         return preg_match('/[A-Za-zÇĞİÖŞÜçğıöşü]/u', $value) === 1;
+    }
+
+    private function emptyIfZero(string $value): string
+    {
+        return $value === '0' ? '' : $value;
     }
 
     private function normalizePhone(string $phone): string

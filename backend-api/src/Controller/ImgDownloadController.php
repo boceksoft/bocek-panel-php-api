@@ -1,6 +1,8 @@
 <?php
 namespace App\Controller;
 
+use App\Support\UploadLimits;
+
 use App\Core\HttpException;
 use App\Support\Uploads;
 
@@ -61,7 +63,7 @@ final class ImgDownloadController extends Controller
                     }
                 }
                 
-                $targetFile = $uploadsDir . DIRECTORY_SEPARATOR . 'product' . DIRECTORY_SEPARATOR . $villaId . DIRECTORY_SEPARATOR . $fileName;
+                $targetFile = $uploadsDir . DIRECTORY_SEPARATOR . 'property' . DIRECTORY_SEPARATOR . $villaId . DIRECTORY_SEPARATOR . $fileName;
                 if (@file_exists($targetFile)) {
                     @unlink($targetFile);
                 }
@@ -146,7 +148,23 @@ final class ImgDownloadController extends Controller
         } 
 
         if (!isset($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK) {
-            throw new HttpException('GeÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§erli bir dosya yÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼klenmedi.', 'UPLOAD_FAILED', 400);
+            // PHP dosyayi sessizce dusurdugunde sebebi acik soyle (en sik: upload_max_filesize asildi).
+            $code = isset($_FILES['image']['error']) ? (int) $_FILES['image']['error'] : -1;
+            $limit = UploadLimits::maxBytes();
+            $limitText = $limit > 0 ? round($limit / 1048576, 1) . ' MB' : 'bilinmiyor';
+            $reasons = [
+                UPLOAD_ERR_INI_SIZE => 'Dosya sunucunun yukleme sinirini (upload_max_filesize: ' . $limitText . ') asiyor.',
+                UPLOAD_ERR_FORM_SIZE => 'Dosya form boyut sinirini asiyor.',
+                UPLOAD_ERR_PARTIAL => 'Dosya yarim yuklendi.',
+                UPLOAD_ERR_NO_FILE => 'Dosya gelmedi.',
+                UPLOAD_ERR_NO_TMP_DIR => 'Sunucuda gecici klasor (upload_tmp_dir) yok ya da yazilamiyor. upload_tmp_dir: "'
+                    . ((string) ini_get('upload_tmp_dir') !== '' ? (string) ini_get('upload_tmp_dir') : '(tanimsiz)')
+                    . '", sistem gecici klasoru: "' . sys_get_temp_dir() . '".',
+                UPLOAD_ERR_CANT_WRITE => 'Sunucu dosyayi diske yazamadi.',
+                UPLOAD_ERR_EXTENSION => 'Bir PHP eklentisi yuklemeyi durdurdu.',
+            ];
+            $reason = $reasons[$code] ?? ('Dosya gelmedi (post_max_size: ' . $limitText . ' olabilir).');
+            throw new HttpException('Gecerli bir dosya yuklenmedi: ' . $reason, 'UPLOAD_FAILED', 400);
         }
 
         // MIME ve Dosya Tipi KontrolÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼
@@ -232,7 +250,7 @@ final class ImgDownloadController extends Controller
 
         $targetFile = $villaDir . DIRECTORY_SEPARATOR . $filename;
 
-        if (move_uploaded_file($_FILES['image']['tmp_name'], $targetFile)) {
+        if (Uploads::saveUploadedFile((string) $_FILES['image']['tmp_name'], $targetFile)) {
             try {
                 if ($sira === null || !is_numeric($sira)) {
                     $sira = 99;
@@ -267,9 +285,11 @@ final class ImgDownloadController extends Controller
             }
 
             $uploadId = $this->db->pdo()->lastInsertId();
-            $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
+            // Config homes_image_property_urls aciksa yeni CDN yapisi: /uploads/property/small/{villaId}/{dosya}
+            $cdnBase = Uploads::homeImageBase((defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/', (int) $villaId, $this->app);
             $this->response->success([
                 'path' => $cdnBase . $filename,
+                'fileName' => $dbFileName,
                 'id' => (int)$uploadId,
                 'sira' => (int)$sira,
                 'message' => 'Fotograf basariyla yuklendi.'

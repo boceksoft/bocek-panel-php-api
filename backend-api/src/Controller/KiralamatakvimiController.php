@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Core\HttpException;
 use PDO;
+use App\Support\Uploads;
 
 /*
  * Villa <-> Kiralama Takvimi bağlantısı ve villa ev sahipleri. İşi panel yapar: bu controller
@@ -474,7 +475,9 @@ final class KiralamatakvimiController extends Controller
             'estateTitle' => (string) ($home['baslik'] ?? ''),
             'estateDescription' => (string) ($home['kisa_icerik'] ?? ''),
             'estateUrl' => $domain . '/' . ($home['url'] ?? ''),
-            'estateImageUrl' => $this->imageBase() . ($home['resim'] ?? ''),
+            // Ilk kapak, yeni CDN yapisinda (/uploads/property/small/{villaId}/)
+            'estateImageUrl' => Uploads::homeImageBase($this->imageBase(), (int) ($home['id'] ?? 0), $this->app)
+                . (explode(',', (string) ($home['resim'] ?? ''))[0] ?? ''),
             'guestPerson' => (int) ($home['kisi'] ?? 0),
             'bedroomCount' => (int) ($home['yatak_odasi'] ?? 0),
             'bedCount' => (int) ($home['yatak_sayisi'] ?? 0),

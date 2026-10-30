@@ -278,7 +278,7 @@ final class BulkEditController extends Controller
         return $common + [
             'evsahibi' => ['label' => 'Evsahibi', 'type' => 'select', 'columns' => ['evsahibi'], 'options' => 'owners'],
             'aktif' => ['label' => 'Aktif', 'type' => 'checkbox', 'columns' => ['aktif']],
-            'not' => ['label' => 'Not', 'type' => 'textarea', 'columns' => ['not2', 'not']],
+            'not' => ['label' => 'Not', 'type' => 'textarea', 'columns' => ['not', 'not2']],
             'bakimciad' => ['label' => 'Bakımcı Adı', 'type' => 'text', 'columns' => ['bakimciad']],
             'bakimcitel' => ['label' => 'Bakımcı Tel', 'type' => 'text', 'columns' => ['bakimcitel']],
             // Ilan detayindaki "WhatsApp Grup Adı" ile ayni kolon (HomesManagementDetail: whatsapp_grup, yoksa rez_takip_yeri_adi).
