@@ -616,6 +616,7 @@ final class HomesManagementPricesController extends Controller
                      'oran',
                      'sahte_oran',
                      'sahteOran',
+                     'discountType',
                  ] as $key) {
             if (array_key_exists($key, $payload)) {
                 $single[$key] = $payload[$key];
@@ -960,6 +961,11 @@ final class HomesManagementPricesController extends Controller
             $showEndDate = $this->normalizeDate($this->firstPayloadValue($row, ['showDate2', 'showdate2', 'etkinBitisTarihi', 'show_end_date']));
             $rate = $this->numericValue($row, ['oran', 'rate', 'discountRate']);
             $fakeRate = $this->numericValue($row, ['sahte_oran', 'sahteOran', 'fakeRate']);
+            // Indirim turu (vv paneli ile ayni): 1 Acenta, 2 Ev Sahibi, 3 Genel. Gonderilmezse 0 (guncellemede mevcut deger korunur).
+            $discountType = $this->numericValue($row, ['discountType', 'discount_type', 'indirimTuru']);
+            if (!in_array($discountType, [1, 2, 3], true)) {
+                $discountType = 0;
+            }
 
             if ($startDate === '' || $endDate === '' || $showStartDate === '' || $showEndDate === '') {
                 $skipped[] = [
@@ -982,7 +988,7 @@ final class HomesManagementPricesController extends Controller
                          oran = :oran,
                          sahte_oran = :sahte_oran,
                          site = :site,
-                         discountType = 3
+                         discountType = CASE WHEN :discountType > 0 THEN :discountType2 ELSE discountType END
                      WHERE id = :id AND emlak = :homeId"
                 );
                 $stmt->execute([
@@ -993,6 +999,8 @@ final class HomesManagementPricesController extends Controller
                     ':oran' => $rate,
                     ':sahte_oran' => $fakeRate,
                     ':site' => $siteId,
+                    ':discountType' => $discountType,
+                    ':discountType2' => $discountType,
                     ':id' => $discountId,
                     ':homeId' => $homeId,
                 ]);
@@ -1011,7 +1019,7 @@ final class HomesManagementPricesController extends Controller
 
             $stmt = $pdo->prepare(
                 "INSERT INTO indirimler (emlak, tarih1, tarih2, site, showDate1, showDate2, oran, sahte_oran, discountType)
-                 VALUES (:homeId, CONVERT(date, :tarih1, 104), CONVERT(date, :tarih2, 104), :site, CONVERT(date, :showDate1, 104), CONVERT(date, :showDate2, 104), :oran, :sahte_oran, 3)"
+                 VALUES (:homeId, CONVERT(date, :tarih1, 104), CONVERT(date, :tarih2, 104), :site, CONVERT(date, :showDate1, 104), CONVERT(date, :showDate2, 104), :oran, :sahte_oran, :discountType)"
             );
             $stmt->execute([
                 ':homeId' => $homeId,
@@ -1022,6 +1030,7 @@ final class HomesManagementPricesController extends Controller
                 ':showDate2' => $showEndDate,
                 ':oran' => $rate,
                 ':sahte_oran' => $fakeRate,
+                ':discountType' => $discountType > 0 ? $discountType : 3,
             ]);
             $updated++;
         }
