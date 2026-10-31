@@ -54,6 +54,11 @@ return [
     // 'GavelBelgeSureli': 0 suresiz, 1 sureli. Villa Kiralama > Config ekranindan degistirilir.
     'gavel_duration_column' => 'belgeSuresiTipi',
 
+    // Ozel listelerin (CustomList) sayfasinin acildigi sayfalar.cat degeri (eski panel CustomListAdd).
+    // Panel site 3 icin 436, digerleri icin 391 kullanir; farkli sitede app.local.php icinde override edilir.
+    'custom_list_page_category' => 391,
+    'custom_list_page_categories' => [3 => 436],
+
     // IIS hata sayfalarını yutmasın diye her yanıtı HTTP 200 döndür.
     // Standart HTTP kodlarına dönmek için false yap.
     'force_http_200' => true,

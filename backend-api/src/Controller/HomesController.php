@@ -29,6 +29,7 @@ final class HomesController extends Controller
      * @query bolge string Bölge kimlik(ler)i
      * @query ozellik string Özellik kimlik(ler)i
      * @query villaadi string Villa adı / gavel belge no araması
+     * @query ozelliste int Sadece bu ozel listeye (CustomListHomes.ListId) eklenmis villalar
      * @query order_by int Sıralama (0-6)
      * @query page int Sayfa
      * @query per_page int Sayfa başına kayıt
@@ -253,6 +254,13 @@ final class HomesController extends Controller
             $params[':villa_baslik'] = "%{$villaadi}%";
             $params[':villa_belge'] = "%{$villaadi}%";
             $sql .= ' AND (h.baslik LIKE :villa_baslik OR CONVERT(varchar(128), h.gavelBelgeNo) LIKE :villa_belge)';
+        }
+
+        // Ozel liste ekraninda "Listedekileri getir": sadece o listeye (CustomListHomes) eklenmis villalar.
+        $customListId = $this->pInt('ozelliste', 0);
+        if ($customListId > 0) {
+            $params[':ozelliste'] = $customListId;
+            $sql .= ' AND EXISTS (SELECT 1 FROM CustomListHomes clh WHERE clh.ListId = :ozelliste AND clh.HomeId = h.id)';
         }
 
         // ORDER BY + sayfalama
