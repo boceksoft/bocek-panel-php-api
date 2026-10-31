@@ -45,7 +45,9 @@ final class Request
      */
     public function path(): string
     {
-        $uri = $_SERVER['REQUEST_URI'] ?? '/';
+        // IIS URL Rewrite bazı sunucularda REQUEST_URI'ye yeniden yazılmış yolu (/backend-api/index.php)
+        // verir; orijinal istek yolu HTTP_X_ORIGINAL_URL'dedir.
+        $uri = $_SERVER['HTTP_X_ORIGINAL_URL'] ?? ($_SERVER['REQUEST_URI'] ?? '/');
         $path = parse_url($uri, PHP_URL_PATH) ?: '/';
         $path = '/' . trim($path, '/');
 
@@ -54,6 +56,11 @@ final class Request
             && ($path === $this->basePath || strpos($path, $this->basePath . '/') === 0)
         ) {
             $path = '/' . trim(substr($path, strlen($this->basePath)), '/');
+        }
+
+        // Front controller adı yolda kaldıysa (/index.php veya /index.php/tokens) soy.
+        if ($path === '/index.php' || strpos($path, '/index.php/') === 0) {
+            $path = '/' . trim(substr($path, strlen('/index.php')), '/');
         }
 
         return $path;
