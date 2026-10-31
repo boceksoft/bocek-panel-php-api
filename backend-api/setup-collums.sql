@@ -782,6 +782,90 @@ ALTER TABLE [dbo].[kullanici] ADD [tel] nvarchar(255) NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[kullanici]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici]', N'ad') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici] ADD [ad] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici]', N'soyad') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici] ADD [soyad] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici]', N'email') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici] ADD [email] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici]', N'yetki') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici] ADD [yetki] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici]', N'tc') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici] ADD [tc] nvarchar(100) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici]', N'vkTuru') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici] ADD [vkTuru] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici]', N'vkUnvan') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici] ADD [vkUnvan] nvarchar(250) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici]', N'vkN') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici] ADD [vkN] nvarchar(50) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kullanici]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kullanici]', N'adres') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kullanici] ADD [adres] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[hesaplar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[hesaplar]', N'kullanici') IS NULL
+BEGIN
+ALTER TABLE [dbo].[hesaplar] ADD [kullanici] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[hesaplar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[hesaplar]', N'hesap_adi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[hesaplar] ADD [hesap_adi] nvarchar(max) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[hesaplar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[hesaplar]', N'iban') IS NULL
+BEGIN
+ALTER TABLE [dbo].[hesaplar] ADD [iban] nvarchar(max) NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[kullanici_log_kaydi]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kullanici_log_kaydi]', N'kullanici_id') IS NULL
 BEGIN

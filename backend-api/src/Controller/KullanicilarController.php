@@ -102,7 +102,7 @@ final class KullanicilarController extends Controller
         $addressSql = $this->columnExists($pdo, 'dbo', 'kullanici', 'adres') ? 'kullanici.adres' : "N''";
 
         $stmt = $pdo->query(
-            "SELECT kullanici.id, ad, soyad, tel, tel2, email, tc, vkTuru, vkUnvan, vkN, {$addressSql} AS adres,
+            "SELECT kullanici.id, ad, soyad, tel, email, tc, vkTuru, vkUnvan, vkN, {$addressSql} AS adres,
                     bh.hesap_adi, bh.iban
              FROM kullanici
              OUTER APPLY (SELECT TOP 1 hesap_adi, iban FROM hesaplar WHERE hesaplar.kullanici = kullanici.id) AS bh
@@ -131,7 +131,6 @@ final class KullanicilarController extends Controller
                 'unvan' => trim((string) ($row['vkUnvan'] ?? '')),
                 'vkn' => trim((string) ($row['vkN'] ?? '')),
                 'adres' => trim((string) ($row['adres'] ?? '')),
-                'tel2' => $this->normalizePhone((string) ($row['tel2'] ?? '')),
                 // Panel ev sahibi listesindeki gibi ilk banka hesabi (hesaplar)
                 'hesap_adi' => trim((string) ($row['hesap_adi'] ?? '')),
                 'iban' => trim((string) ($row['iban'] ?? '')),
