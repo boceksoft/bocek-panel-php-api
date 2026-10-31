@@ -432,8 +432,9 @@ final class HomesManagementDetailUpdateController extends Controller
             }
 
             $value = $this->normalizeScalar($this->getPath($payload, $path));
-            if ($column === 'evsahibi' && $value === '') {
-                continue;
+            // Ev sahibi secilmediyse panel gibi Admin (0) yazilir; NULL kalinca panelde sorun cikiyordu.
+            if ($column === 'evsahibi' && ($value === '' || $value === null)) {
+                $value = '0';
             }
             $updates[$column] = $column === 'doviz' ? $this->currencyDbValue($value) : $value;
         }

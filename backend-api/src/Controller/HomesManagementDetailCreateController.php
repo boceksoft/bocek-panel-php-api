@@ -242,8 +242,9 @@ final class HomesManagementDetailCreateController extends Controller
             }
 
             $value = $this->normalizeScalar($this->getPath($payload, $path));
-            if ($column === 'evsahibi' && $value === '') {
-                continue;
+            // Ev sahibi secilmediyse panel gibi Admin (0) yazilir; NULL kalinca panelde sorun cikiyordu.
+            if ($column === 'evsahibi' && ($value === '' || $value === null)) {
+                $value = '0';
             }
             $updates[$column] = $column === 'doviz' ? $this->currencyDbValue($value) : $value;
         }
@@ -258,6 +259,11 @@ final class HomesManagementDetailCreateController extends Controller
             }
 
             $updates[$column] = $this->normalizeScalar($this->getPath($payload, $path));
+        }
+
+        // Yeni villada ev sahibi hic gonderilmediyse de Admin (0) (panel varsayilani; NULL panelde sorun cikariyor)
+        if (!array_key_exists('evsahibi', $updates)) {
+            $updates['evsahibi'] = '0';
         }
 
         if (array_key_exists('emlak_bolgesi', $updates) && !array_key_exists('n_emlak_bolgesi', $updates)) {
