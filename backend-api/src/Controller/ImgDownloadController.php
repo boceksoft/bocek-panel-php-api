@@ -5,6 +5,7 @@ use App\Support\UploadLimits;
 
 use App\Core\HttpException;
 use App\Support\Uploads;
+use PDO;
 
 /*
  * Ilan detaylarinda fotograf yÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼klemek iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§in endpoint.
@@ -304,6 +305,160 @@ final class ImgDownloadController extends Controller
         } else {
             throw new HttpException('Fotograf kaydedilemedi.', 'SAVE_FAILED', 500);
         }
+    }
+
+    /**
+     * Villa fotograflarini toplu yeniden adlandirir: { villaId, name, uploadIds[] } (galeri sirasiyla).
+     * Ilk fotograf "name", sonrakiler "name (1)", "name (2)"... -> name.jpg, name-1.jpg, name-2.jpg.
+     * Hem upload.FileName hem dosya degisir: dosya uploads/property/{villaId}/ ve uploads/ ana dizininde varsa ikisinde de
+     * (ana dizindeki ayni adli dosyayi baska bir upload kaydi kullaniyorsa ona dokunulmaz). Kapaksa homes.resim de guncellenir.
+     * Hedef ad baska kayitta/dosyada varsa sonuna -2, -3 eklenir; dosya tasinamazsa yapilanlar geri alinir.
+     *
+     * @Post("rename")
+     */
+    public function rename(): void
+    {
+        $villaId = filter_var($this->request->input('villaId'), FILTER_VALIDATE_INT);
+        if ($villaId === false || $villaId <= 0) {
+            throw new HttpException('villaId eksik veya gecersiz.', 'INVALID_VILLA_ID', 400);
+        }
+        $base = trim((string) $this->request->input('name', ''));
+        if ($base === '') {
+            throw new HttpException('Yeni isim gereklidir.', 'VALIDATION', 422);
+        }
+        $rawIds = $this->request->input('uploadIds');
+        if (!is_array($rawIds) || $rawIds === [] || count($rawIds) > 500) {
+            throw new HttpException('Isimlendirilecek fotograflar gereklidir (en fazla 500).', 'VALIDATION', 422);
+        }
+        $ids = array_values(array_unique(array_filter(array_map('intval', $rawIds), function ($id) { return $id > 0; })));
+
+        $pdo = $this->db->pdo();
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $pdo->prepare("SELECT uploadID, FileName FROM dbo.upload WHERE islm = 'emlak' AND islm_id = ? AND uploadID IN ($placeholders)");
+        $stmt->execute(array_merge([$villaId], $ids));
+        $current = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $current[(int) $row['uploadID']] = $this->imageName((string) $row['FileName']);
+        }
+        if (count($current) !== count($ids)) {
+            throw new HttpException('Fotograflardan bazilari bu villaya ait degil veya silinmis; sayfayi yenileyin.', 'NOT_FOUND', 404);
+        }
+
+        $uploadsDir = $this->uploadsDir();
+        $villaDir = $uploadsDir . DIRECTORY_SEPARATOR . 'property' . DIRECTORY_SEPARATOR . $villaId;
+        $ownNames = array_flip(array_values($current));
+        $slug = $this->slugFileName($base);
+
+        // Hedef adlar: bu fotograflarin kendi eski adlari bos sayilir; baska kayit/dosyada olan ad atlanir.
+        $taken = $pdo->prepare('SELECT COUNT(*) FROM dbo.upload WHERE FileName = ? AND uploadID NOT IN (' . $placeholders . ')');
+        $targets = [];
+        $used = [];
+        foreach ($ids as $index => $id) {
+            $wanted = $index === 0 ? $slug : $slug . '-' . $index;
+            for ($n = 1; ; $n++) {
+                if ($n > 999) throw new HttpException('Bu isimde cok fazla dosya var; farkli bir isim girin.', 'VALIDATION', 422);
+                $candidate = ($n === 1 ? $wanted : $wanted . '-' . $n) . '.jpg';
+                if (isset($used[$candidate])) continue;
+                $onDisk = !isset($ownNames[$candidate])
+                    && (@file_exists($villaDir . DIRECTORY_SEPARATOR . $candidate) || @file_exists($uploadsDir . DIRECTORY_SEPARATOR . $candidate));
+                if ($onDisk) continue;
+                $taken->execute(array_merge([$candidate], $ids));
+                if ((int) $taken->fetchColumn() > 0) continue;
+                break;
+            }
+            $used[$candidate] = true;
+            $targets[$id] = $candidate;
+        }
+
+        // Tasinacak dosyalar: villa klasoru + ana dizin (ana dizindekini baska kayit kullanmiyorsa).
+        $sharedRoot = $pdo->prepare('SELECT COUNT(*) FROM dbo.upload WHERE FileName = ? AND uploadID NOT IN (' . $placeholders . ')');
+        $moves = [];
+        foreach ($targets as $id => $target) {
+            $old = $current[$id];
+            if ($old === '' || $old === $target) continue;
+            if (@is_file($villaDir . DIRECTORY_SEPARATOR . $old)) {
+                $moves[] = [$villaDir . DIRECTORY_SEPARATOR . $old, $villaDir . DIRECTORY_SEPARATOR . $target];
+            }
+            if (@is_file($uploadsDir . DIRECTORY_SEPARATOR . $old)) {
+                $sharedRoot->execute(array_merge([$old], $ids));
+                if ((int) $sharedRoot->fetchColumn() === 0) {
+                    $moves[] = [$uploadsDir . DIRECTORY_SEPARATOR . $old, $uploadsDir . DIRECTORY_SEPARATOR . $target];
+                }
+            }
+        }
+
+        $pdo->beginTransaction();
+        $done = [];
+        try {
+            $update = $pdo->prepare("UPDATE dbo.upload SET FileName = :name WHERE uploadID = :id AND islm = 'emlak' AND islm_id = :villaId");
+            foreach ($targets as $id => $target) {
+                $update->execute(['name' => $target, 'id' => $id, 'villaId' => $villaId]);
+            }
+
+            // Kapaklar (homes.resim, virgullu dosya adlari) yeni adlarla yazilir.
+            $coverStmt = $pdo->prepare('SELECT resim FROM homes WITH (UPDLOCK) WHERE id = :id');
+            $coverStmt->execute(['id' => $villaId]);
+            $covers = array_values(array_filter(array_map('trim', explode(',', (string) $coverStmt->fetchColumn())), 'strlen'));
+            $renameMap = [];
+            foreach ($targets as $id => $target) $renameMap[$current[$id]] = $target;
+            $newCovers = array_map(function ($name) use ($renameMap) { return $renameMap[$name] ?? $name; }, $covers);
+            if ($newCovers !== $covers) {
+                $pdo->prepare('UPDATE homes SET resim = :resim WHERE id = :id')->execute(['resim' => implode(',', $newCovers), 'id' => $villaId]);
+            }
+
+            // Ayni klasorde a->b, b->c gibi zincirler birbirini ezmesin: once gecici adlara, sonra hedefe.
+            $temps = [];
+            foreach ($moves as $i => [$from, $to]) {
+                $temp = dirname($from) . DIRECTORY_SEPARATOR . '.rename-' . $villaId . '-' . $i . '-' . bin2hex(random_bytes(4)) . '.tmp';
+                if (!@rename($from, $temp)) throw new HttpException('Dosya yeniden adlandirilamadi: ' . basename($from), 'RENAME_FAILED', 500);
+                $done[] = [$temp, $from];
+                $temps[$i] = $temp;
+            }
+            foreach ($moves as $i => [$from, $to]) {
+                if (@file_exists($to) || !@rename($temps[$i], $to)) {
+                    throw new HttpException('Dosya yeniden adlandirilamadi: ' . basename($to), 'RENAME_FAILED', 500);
+                }
+                $done[] = [$to, $temps[$i]];
+            }
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            // Dosyalar ters sirayla eski adlarina doner, DB geri alinir.
+            foreach (array_reverse($done) as [$now, $was]) @rename($now, $was);
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
+        }
+
+        $cdnBase = Uploads::homeImageBase((defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/', (int) $villaId, $this->app);
+        $items = [];
+        foreach ($targets as $id => $target) {
+            $items[] = ['id' => $id, 'fileName' => $target, 'path' => $cdnBase . $target];
+        }
+        $this->response->success(['message' => count($targets) . ' fotograf yeniden adlandirildi.', 'items' => $items]);
+    }
+
+    // uploads klasoru: download() ile ayni kural (CDN klasoru -> resizerPHP/config.json "base").
+    private function uploadsDir(): string
+    {
+        $rootDir = dirname(__DIR__, 4);
+        $cdnFolder = 'cdn';
+        if (defined('Cdn')) {
+            $parsedHost = parse_url(Cdn, PHP_URL_HOST);
+            if ($parsedHost) {
+                $domainHost = defined('Domain') ? parse_url(Domain, PHP_URL_HOST) : '';
+                $cdnFolder = strpos($parsedHost, 'www.') === 0 || ($domainHost && $parsedHost === $domainHost) ? 'httpdocs' : $parsedHost;
+            }
+        }
+        $configPath = $rootDir . DIRECTORY_SEPARATOR . $cdnFolder . DIRECTORY_SEPARATOR . 'resizerPHP' . DIRECTORY_SEPARATOR . 'config.json';
+        $uploadsDir = $rootDir . DIRECTORY_SEPARATOR . 'httpdocs' . DIRECTORY_SEPARATOR . 'uploads';
+        $config = @file_exists($configPath) ? json_decode((string) @file_get_contents($configPath), true) : null;
+        if (is_array($config) && isset($config['base'])) {
+            $calculated = realpath(dirname($configPath) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, (string) $config['base']));
+            if ($calculated && is_dir($calculated)) $uploadsDir = $calculated;
+        }
+        if (!is_dir($uploadsDir)) {
+            throw new HttpException('Uploads klasoru bulunamadi: ' . $uploadsDir, 'UPLOADS_DIR_INVALID', 500);
+        }
+        return $uploadsDir;
     }
 
     /**
