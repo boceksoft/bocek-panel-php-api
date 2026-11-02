@@ -7,6 +7,7 @@ namespace App\Controller;
 
 use DateTime;
 use PDO;
+use App\Support\HomesExtraFields;
 use App\Support\Uploads;
 
 /*
@@ -30,6 +31,9 @@ final class HomesController extends Controller
      * @query ozellik string Özellik kimlik(ler)i
      * @query villaadi string Villa adı / gavel belge no araması
      * @query ozelliste int Sadece bu ozel listeye (CustomListHomes.ListId) eklenmis villalar
+     * @query sadecebizde int 1: sadece homes.sadece_bizde = 1 villalar (Config'de Sadece Bizde secili ise)
+     * @query pasifler int 1: aktif olmayan villalar da gelir (sadece Ozel Listeler villa ekrani)
+     * @query indirim int 1: secilen tarihlerde indirimi olan villalar (sitede gosterilen indirimler)
      * @query order_by int Sıralama (0-6)
      * @query page int Sayfa
      * @query per_page int Sayfa başına kayıt
@@ -163,9 +167,12 @@ final class HomesController extends Controller
         [$ksqlx, $ksql] = $this->kisasureliParts($hasDate, $kisasureli, $geceSql);
         $nettarihSql = $this->nettarihParcasi($hasDate, $netTarih, $minTL, $maxTL, $season, (int) $now->format('Y'), $siteId);
 
+        // pasifler=1: aktif olmayan villalar da gelir. Sadece Ozel Listeler villa ekrani gonderir; Teklif vb. etkilenmez.
+        $includeInactive = $this->p('pasifler') === '1';
+
         $sql = $this->buildSql(compact(
             'dbt', 'doviz', 'takvimSelect', 'hedefKur', 'ksqlx', 'ksql', 'nettarihSql',
-            'takvimCross', 'hasDate', 't1', 't2', 'dsql2', 'takvimWhere'
+            'takvimCross', 'hasDate', 't1', 't2', 'dsql2', 'takvimWhere', 'includeInactive'
         ));
 
         // Dinamik WHERE
@@ -263,6 +270,28 @@ final class HomesController extends Controller
             $sql .= ' AND EXISTS (SELECT 1 FROM CustomListHomes clh WHERE clh.ListId = :ozelliste AND clh.HomeId = h.id)';
         }
 
+        // sadecebizde=1: sadece homes.sadece_bizde = 1 villalar; Config'de alan secili degilse yok sayilir.
+        if ($this->p('sadecebizde') === '1' && HomesExtraFields::onlyUsEnabled($pdo, $this->app)) {
+            $sql .= ' AND ISNULL(h.sadece_bizde, 0) = 1';
+        }
+
+        // Ozel liste ekrani (indirim=1): secilen tarihlerde sitede su an gosterilen bir indirimi olan villalar.
+        // Tarih yoksa bitmemis herhangi bir indirim aranir. Eslesen indirim satirlara 'indirim' olarak eklenir.
+        $discountOnly = $this->p('indirim') === '1';
+        $discountParams = [':indirim_site' => $siteId];
+        $discountWhere = 'ind.site = :indirim_site AND ind.oran > 0 AND GETDATE() BETWEEN ind.showDate1 AND ind.showDate2';
+        if ($tarih1 && $tarih2) {
+            $discountParams[':indirim_t1'] = $this->dISO($tarih1);
+            $discountParams[':indirim_t2'] = $this->dISO($tarih2);
+            $discountWhere .= ' AND ind.tarih1 < :indirim_t2 AND ind.tarih2 >= :indirim_t1';
+        } else {
+            $discountWhere .= ' AND ind.tarih2 >= CAST(GETDATE() AS date)';
+        }
+        if ($discountOnly) {
+            $params += $discountParams;
+            $sql .= ' AND EXISTS (SELECT 1 FROM indirimler ind WHERE ind.emlak = h.id AND ' . $discountWhere . ')';
+        }
+
         // ORDER BY + sayfalama
         $isFilterSelected = (
             $hasDate || $this->pInt('kisi') > 0 || $this->p('tip') !== '' ||
@@ -311,6 +340,14 @@ final class HomesController extends Controller
             unset($row['resim']);
         }
         unset($row);
+
+        if ($discountOnly && $rows) {
+            $discounts = $this->matchingDiscounts($pdo, array_map('intval', array_column($rows, 'id')), $discountWhere, $discountParams);
+            foreach ($rows as &$row) {
+                $row['indirim'] = $discounts[(int) $row['id']] ?? null;
+            }
+            unset($row);
+        }
 
         $this->response->success([
             'items' => $rows,
@@ -372,6 +409,7 @@ SELECT
     ) AS INT) AS fiyat, 
     {$c['ksqlx']}   
     h.banyo, 
+    " . (empty($c['includeInactive']) ? '' : "h.aktif{$c['dbt']} AS aktif,") . "
     d1.baslik{$c['dbt']} + ' / ' + d2.baslik{$c['dbt']} AS bolgebaslik,
     mm.val AS mm,
     bosluklar.girisbosluk, bosluklar.cikisbosluk
@@ -412,7 +450,7 @@ INNER JOIN destinations d1 ON d1.id = d2.cat
 INNER JOIN destinations d0 ON d0.id = d1.cat
 LEFT  JOIN destinations d ON d.id = d0.cat
 LEFT  JOIN kanun7464 kanun ON kanun.homeId = h.id
-WHERE h.aktif{$c['dbt']} = 1
+WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . "
   AND d2.aktif = 1 AND d1.aktif = 1 AND t.aktif = 1
   AND fiyatlar_num.sqfiyat > 0
   AND rate_num.rate > 0
@@ -654,6 +692,38 @@ WHERE h.aktif{$c['dbt']} = 1
     private function d104(?DateTime $d): string
     {
         return $d ? $d->format('d.m.Y') : '';
+    }
+
+    /**
+     * Villa basina eslesen en yuksek oranli indirim: { oran, tarih1, tarih2 } (tarihler Y-m-d).
+     *
+     * @param array<int,int> $homeIds
+     * @param array<string,mixed> $params
+     * @return array<int,array{oran:float,tarih1:string,tarih2:string}>
+     */
+    private function matchingDiscounts(PDO $pdo, array $homeIds, string $where, array $params): array
+    {
+        $idList = implode(',', array_map('intval', $homeIds));
+        $stmt = $pdo->prepare('SELECT emlak, oran, CONVERT(varchar(10), tarih1, 23) AS tarih1, CONVERT(varchar(10), tarih2, 23) AS tarih2
+            FROM (
+                SELECT ind.emlak, ind.oran, ind.tarih1, ind.tarih2,
+                       ROW_NUMBER() OVER (PARTITION BY ind.emlak ORDER BY ind.oran DESC, ind.tarih1) AS rn
+                FROM indirimler ind
+                WHERE ind.emlak IN (' . $idList . ') AND ' . $where . '
+            ) x
+            WHERE rn = 1');
+        $stmt->execute($params);
+
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $result[(int) $row['emlak']] = [
+                'oran' => (float) $row['oran'],
+                'tarih1' => (string) $row['tarih1'],
+                'tarih2' => (string) $row['tarih2'],
+            ];
+        }
+
+        return $result;
     }
 
     private function dISO(?DateTime $d): string

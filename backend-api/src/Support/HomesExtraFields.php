@@ -73,6 +73,21 @@ final class HomesExtraFields
     }
 
     /**
+     * "Sadece Bizde" (homes.sadece_bizde bit) bu sitede kullaniliyor mu: Config'de secili ve homes'ta kolonu var.
+     * Villa aramasindaki "Sadece bizde" filtresi buna gore gosterilir/uygulanir.
+     *
+     * @param array<string,mixed> $app
+     */
+    public static function onlyUsEnabled(PDO $pdo, array $app): bool
+    {
+        if (!in_array('sadece_bizde', self::enabledKeys($app), true)) {
+            return false;
+        }
+
+        return $pdo->query("SELECT COL_LENGTH('dbo.homes', 'sadece_bizde')")->fetchColumn() !== null;
+    }
+
+    /**
      * Config'de secili ve katalogda olan anahtarlar (katalog sirasiyla).
      *
      * @param array<string,mixed> $app

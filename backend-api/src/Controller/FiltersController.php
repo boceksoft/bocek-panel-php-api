@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Support\HomesExtraFields;
+
 /*
  * Arama filtreleri kaynağı.
  *   GET /backend-api/filters
@@ -51,6 +53,8 @@ final class FiltersController extends Controller
             'types'    => $types,
             'features' => $features,
             'regions'  => $regions,
+            // true: villa aramasinda "Sadece bizde" filtresi gosterilir (Config'de secili + homes.sadece_bizde var).
+            'only_us'  => HomesExtraFields::onlyUsEnabled($pdo, $this->app),
             'static_filters' => [
                 'currencies' => [
                     ['id' => 'tl', 'label' => 'TL'],
