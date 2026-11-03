@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Core\HttpException;
 use PDO;
+use App\Support\ReservationDiscountModel;
 use App\Support\Uploads;
 
 /*
@@ -241,7 +242,7 @@ final class ReservationdetailController extends Controller
     private function discountInfo(PDO $pdo, array $reservation, array $villa = []): array
     {
         $local = is_array($this->app['reservation_discount'] ?? null) ? $this->app['reservation_discount'] : [];
-        $cfg = array_replace_recursive(self::DISCOUNT_DEFAULTS, $local);
+        $cfg = ReservationDiscountModel::config(array_replace_recursive(self::DISCOUNT_DEFAULTS, $local));
         $col = function (string $key) use ($cfg, $reservation): string {
             $name = (string) ($cfg[$key] ?? '');
 
@@ -256,14 +257,34 @@ final class ReservationdetailController extends Controller
 
         $total = $totalCol !== '' ? $this->feeNumber($reservation[$totalCol]) : 0.0;
         $old = $oldCol !== '' ? $this->feeNumber($reservation[$oldCol]) : 0.0;
-        $owner = $ownerCol !== '' ? $reservation[$ownerCol] : null;
+        // Indirim turu (ortak model): ayrik tutarlar (split) > discountType > indirimevsahibi.
+        $number = function ($value): float {
+            return $this->feeNumber($value);
+        };
+        $discountType = ReservationDiscountModel::typeFromRow($reservation, $cfg, $number);
+        $hasColumn = function (string $name) use ($reservation): bool {
+            foreach (array_keys($reservation) as $key) {
+                if ($name !== '' && strcasecmp((string) $key, $name) === 0) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+        $supportsGeneral = ReservationDiscountModel::supportsAmounts($cfg, $hasColumn);
         $promoCode = $promoCol !== '' ? trim((string) $reservation[$promoCol]) : '';
 
         $result = [
             'ozellikler' => [
                 'eskiFiyat' => $oldCol !== '',
                 'promosyon' => $promoCol !== '',
-                'karsilayan' => $ownerCol !== '',
+                'karsilayan' => $ownerCol !== '' || $supportsGeneral,
+                // "Genel" secenegi ve elle tutar: kayitlar'da tutar kolonlari (sitesahibi_indirimi / evsahibi_indirimi) varsa
+                'genel' => $supportsGeneral,
+                'tutarlar' => $supportsGeneral,
+                // Yeni indirimin baslangic bolusumu: villa indirim turu kapaliysa (homes_discount_type = false, ovillam)
+                // site gibi orantili (genel), degilse tamami firma.
+                'varsayilanKarsilayan' => $supportsGeneral && !($this->app['homes_discount_type'] ?? true) ? 'genel' : 'site',
             ],
             'toplamTutar' => $total,
             // eskifiyat boş/0 ise indirim yok sayılır (panel: boşsa toplam_tutar yazılır).
@@ -271,7 +292,8 @@ final class ReservationdetailController extends Controller
             'indirimTutari' => $old > $total ? round($old - $total, 2) : 0.0,
             'promosyonKodu' => $promoCode,
             'promosyon' => null,
-            'indirimiKarsilayan' => ($owner === true || $owner === 1 || $owner === '1') ? 'ev_sahibi' : 'site',
+            'indirimiKarsilayan' => ReservationDiscountModel::key($discountType),
+            'indirimTuru' => $discountType, // 1 site, 2 ev sahibi, 3 genel (tutarlardan)
             'kazancOrani' => 0.0,
             // rezervasyon: kayitlar'daki oran; villa: rezervasyonda yok/0, villanın (site sonekli) oranı; yok: hiçbiri.
             'kazancOraniKaynak' => 'yok',
@@ -322,6 +344,19 @@ final class ReservationdetailController extends Controller
                 $result['onOdemeOraniKaynak'] = 'villa';
             }
         }
+
+        // Indirimi olmayan rezervasyonda secim varsayilandan baslar (sonradan indirim eklenirse o bolusumle dolar).
+        if ((float) $result['indirimTutari'] <= 0) {
+            $result['indirimiKarsilayan'] = $result['ozellikler']['varsayilanKarsilayan'];
+        }
+
+        // Indirimin taraflara dagilimi (raporlarla ayni: kayitlar_odeme.indirim_site / indirim_evsahibi).
+        $split = ReservationDiscountModel::splitAmounts($reservation, $cfg, $number);
+        $shares = $split !== null && ($split['site'] + $split['owner']) > 0
+            ? $split
+            : ReservationDiscountModel::shares((float) $result['indirimTutari'], (float) $result['kazancOrani'], $discountType);
+        $result['indirimSite'] = $shares['site'];
+        $result['indirimEvsahibi'] = $shares['owner'];
 
         $table = (string) ($cfg['promo_table'] ?? '');
         $pc = is_array($cfg['promo_columns'] ?? null) ? $cfg['promo_columns'] : [];
@@ -643,6 +678,8 @@ final class ReservationdetailController extends Controller
         $approvedText = $this->mailText($pdo, 3, $suffix, $siteName, $urlBase);
         // İptal (ovillam paneli bngmail/default.txt dalı: ms_fn("16")).
         $cancelledText = $this->mailText($pdo, 16, $suffix, $siteName, $urlBase);
+        // Yeni talep (sitenin talep maili: MailSablon id=1). Natsisa "Yeni Talep" bildiriminde mail_alt_metni olur.
+        $newRequestText = $this->mailText($pdo, 1, $suffix, $siteName, $urlBase);
 
         // Rezervasyonlarım linki (panel siparis_3: domain/rezervasyonlarimUrl?authKey=idHash(id_email)).
         // Sayfa yolu ödeme linkleri gibi sayfalar{suffix} tablosundan (ayar: reservation_my_reservations_page_id,
@@ -741,6 +778,7 @@ final class ReservationdetailController extends Controller
             'odemeBekliyorMetni' => $paymentPendingText,
             'onaylandiMetni' => $approvedText,
             'iptalMetni' => $cancelledText,
+            'yeniTalepMetni' => $newRequestText,
             'rezervasyonlarimLinki' => $myReservationsLink,
             'villa' => $villa,
             'odemeTuru' => $transfer ? 'havale' : 'kart',

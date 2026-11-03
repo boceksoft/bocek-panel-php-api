@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\ReservationDiscountModel;
 use PDO;
 
 /*
@@ -230,7 +231,7 @@ final class ReservationUpdateController extends Controller
             $labels['doviz'] = 'Para birimi';
         }
 
-        $discount = array_replace(self::DISCOUNT_DEFAULTS, is_array($this->app['reservation_discount'] ?? null) ? $this->app['reservation_discount'] : []);
+        $discount = ReservationDiscountModel::config(array_replace(self::DISCOUNT_DEFAULTS, is_array($this->app['reservation_discount'] ?? null) ? $this->app['reservation_discount'] : []));
         $extras = array_replace_recursive(self::EXTRAS_DEFAULTS, is_array($this->app['reservation_extras'] ?? null) ? $this->app['reservation_extras'] : []);
         $siteTwo = (int) ($reservation['site'] ?? 0) === 2;
         $included = $siteTwo ? 'Included Price' : 'Fiyata Dahil';
@@ -343,14 +344,73 @@ final class ReservationUpdateController extends Controller
             }
             $labels[$kayitlar['onodemeorani']['name']] = 'Ön ödeme oranı';
         }
-        $ownerCol = $this->column($kayitlar, (string) $discount['owner_column']);
-        if (array_key_exists('indirimiKarsilayan', $body) && $ownerCol !== '') {
-            $owner = (string) $body['indirimiKarsilayan'];
-            if ($owner !== 'site' && $owner !== 'ev_sahibi') {
-                throw new HttpException('İndirimi karşılayan site ya da ev_sahibi olmalı.', 'VALIDATION', 422);
+        // İndirimi kim karşılar (ortak model, Support\ReservationDiscountModel): site | ev_sahibi | genel.
+        // flag modelde indirimevsahibi + discountType; split modelde ayrık tutarlar + hakediş de yazılır.
+        // Split modelde tutarlar indirim / fiyat / ön ödeme / komisyon değişince yeniden hesaplanır.
+        $discountTouched = false;
+        foreach (['indirimiKarsilayan', 'indirimSite', 'listeFiyati', 'toplamTutar', 'onOdeme', 'kazancOrani'] as $key) {
+            if (array_key_exists($key, $body)) {
+                $discountTouched = true;
+                break;
             }
-            $set[$ownerCol] = $owner === 'ev_sahibi' ? 1 : 0;
-            $labels[$ownerCol] = 'İndirimi karşılayan';
+        }
+        $discountType = null;
+        if (array_key_exists('indirimiKarsilayan', $body)) {
+            $discountType = ReservationDiscountModel::typeFromKey($body['indirimiKarsilayan']);
+            if ($discountType === null) {
+                throw new HttpException('İndirimi karşılayan site, ev_sahibi ya da genel olmalı.', 'VALIDATION', 422);
+            }
+        }
+        // Elle firma payi (indirimSite): verilirse secim yerine o yazilir, villa sahibi payi = indirim - firma payi.
+        $siteAmount = null;
+        if (array_key_exists('indirimSite', $body) && $body['indirimSite'] !== null && $body['indirimSite'] !== '') {
+            if (!is_numeric($body['indirimSite']) || (float) $body['indirimSite'] < 0) {
+                throw new HttpException('Firma indirimi geçersiz.', 'VALIDATION', 422);
+            }
+            $siteAmount = (float) $body['indirimSite'];
+        }
+        $hasColumn = function (string $name) use ($kayitlar): bool {
+            return $name !== '' && isset($kayitlar[strtolower($name)]);
+        };
+        $amountColumns = ReservationDiscountModel::supportsAmounts($discount, $hasColumn);
+        $writesDiscount = $discountType !== null || $siteAmount !== null || ($amountColumns && $discountTouched);
+        if ($writesDiscount) {
+            $number = function ($value): float {
+                return (float) ($this->parseMoney($value) ?? 0);
+            };
+            // Secim yoksa kayitli dagilim korunur: tutarlar tutarliysa oran olarak, yoksa bayraktan.
+            $storedAmounts = ReservationDiscountModel::splitAmounts($reservation, $discount, $number);
+            if ($discountType === null) {
+                $discountType = ReservationDiscountModel::typeFromRow($reservation, $discount, $number);
+            }
+            $oldPriceKey = (string) $discount['old_price_column'];
+            $listPrice = (int) ($finalMoney[$oldPriceKey] ?? 0);
+            $finalTotal = (int) ($total ?? 0);
+            if ($listPrice <= 0) {
+                $listPrice = $finalTotal;
+            }
+            $rate = array_key_exists('kazancOrani', $body) && is_numeric($body['kazancOrani'])
+                ? (float) $body['kazancOrani']
+                : ($commissionCol !== '' ? (float) ($this->parseMoney($reservation[$commissionCol] ?? null) ?? 0) : 0.0);
+            $discountLabels = [
+                strtolower((string) ($discount['owner_column'] ?? '')) => 'İndirimi karşılayan',
+            ];
+            $splitLabels = [
+                'site' => 'Firma indirimi', 'owner' => 'Villa sahibi indirimi',
+                'firm_payout' => 'Firma hakedişi', 'owner_payable' => 'Ev sahibine ödenecek',
+            ];
+            foreach ((array) ($discount['split_columns'] ?? []) as $key => $name) {
+                $discountLabels[strtolower((string) $name)] = $splitLabels[$key] ?? (string) $name;
+            }
+            if ($siteAmount === null && !array_key_exists('indirimiKarsilayan', $body) && $storedAmounts !== null) {
+                $storedTotal = $storedAmounts['site'] + $storedAmounts['owner'];
+                $siteAmount = $storedTotal > 0 ? max(0, $listPrice - $finalTotal) * $storedAmounts['site'] / $storedTotal : 0.0;
+            }
+            $writes = ReservationDiscountModel::writes($discount, $kayitlar, $discountType, $listPrice, $finalTotal, (int) ($down ?? 0), $rate, $siteAmount);
+            foreach ($writes as $column => $value) {
+                $set[$column] = $value;
+                $labels[$column] = $discountLabels[strtolower($column)] ?? $column;
+            }
         }
         $promoCol = $this->column($kayitlar, (string) $discount['promo_column']);
         if (array_key_exists('promosyonKodu', $body) && $promoCol !== '') {

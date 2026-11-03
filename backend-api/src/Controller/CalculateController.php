@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\HomesDiscountTypes;
 use DateTime;
 use PDO;
 
@@ -629,6 +630,14 @@ WHERE h.id = {$entityId}";
         $shortStay = (int) $home['sonDakikaVar'] === 1
             ? false
             : $this->isShortStay($pdo, $start, $end, $entityId, $night, $minNight, $calendarHome);
+        // Fiyat fonksiyonu gecelik fiyati 7'ye bolerek toplar; tutarlar kusuratli gelir (orn. 89.999,99 + 10.000,00).
+        // Siteler gibi (garantivillam-api: CAST(... AS decimal(10,0))) tam sayiya yuvarlanir; eskiden kesiliyordu
+        // ve liste fiyati 99.999 cikiyordu.
+        foreach (['fyt', 'indirimTutari', 'SahteIndirimTutari'] as $amountKey) {
+            if (isset($home[$amountKey]) && is_numeric($home[$amountKey])) {
+                $home[$amountKey] = round((float) $home[$amountKey]);
+            }
+        }
         $price = (int) $home['fyt'];
         $oldPrice = 0;
         $promotionDiscountPrice = 0;
@@ -645,6 +654,27 @@ WHERE h.id = {$entityId}";
                 if ($promotionCode === 'MobilApp.1000') {
                     $depozitodanDus = $promotionDiscountPrice;
                     $json['MobileOzel'] = true;
+                }
+            }
+        }
+
+        // Villa indirim turu (config homes_discount_types). base = commission (garantivillam "Acenta Indirimi"): oran
+        // komisyondan verilir; indirim = indirimsiz fiyat x komisyon% x oran%, on odemeden duser (garantivillam-api
+        // Product::Calculate ile ayni). payer: rezervasyon ekraninda indirimin baslangic bolusumu.
+        $commissionForDiscount = (float) str_replace(',', '.', trim((string) ($home['kazancorani'] ?? '')));
+        $deductDiscountFromDeposit = 0;
+        if ((float) $home['indirimTutari'] > 0) {
+            $applied = HomesDiscountTypes::appliedDiscount($pdo, $entityId, (int) $priceSite, $start, $end, $this->app);
+            if ($applied !== null) {
+                $option = HomesDiscountTypes::option($applied['type'], $this->app);
+                $json['result']['discount_type'] = $applied['type'];
+                $json['result']['discount_payer'] = $option['payer'];
+                if ($option['base'] === 'commission') {
+                    $fullPrice = $price + (int) $home['indirimTutari'];
+                    $commissionDiscount = (int) round($fullPrice * $commissionForDiscount / 100 * $applied['rate'] / 100);
+                    $price = $fullPrice - $commissionDiscount;
+                    $home['indirimTutari'] = $commissionDiscount;
+                    $deductDiscountFromDeposit = $commissionDiscount;
                 }
             }
         }
@@ -666,7 +696,7 @@ WHERE h.id = {$entityId}";
 
         $depositRate = !empty($home['depozito']) ? (float) $home['depozito'] : 0.0;
         $deposit = $depositRate > 0
-            ? (($price + $depozitodanDus) / 100 * $depositRate) - $depozitodanDus
+            ? (($price + $depozitodanDus + $deductDiscountFromDeposit) / 100 * $depositRate) - $depozitodanDus - $deductDiscountFromDeposit
             : -$depozitodanDus;
         if ($deposit < 0) {
             $deposit = 0;
