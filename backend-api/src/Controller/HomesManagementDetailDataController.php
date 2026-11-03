@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Support\HomesCode;
+use App\Support\HomesDiscountTypes;
 use App\Support\HomesEmptySeasons;
 use App\Support\HomesExtraFields;
 use App\Support\UploadLimits;
@@ -57,6 +58,10 @@ final class HomesManagementDetailDataController extends Controller
         $selectableData['temizlik_etiketi'] = $cleaningLabel !== '' ? $cleaningLabel : 'Temizlik Ücreti';
         // Sunucunun tek dosya yukleme siniri (bayt); frontend fotograflari bunun altina kucultur.
         $selectableData['yukleme_siniri'] = UploadLimits::maxBytes();
+        // Villa indirim turleri (config homes_discount_types): enabled, default, options [{value, label, payer, base}].
+        $discountTypes = HomesDiscountTypes::definition($this->app);
+        $selectableData['indirim_turu'] = $discountTypes['enabled'];
+        $selectableData['indirim_turleri'] = $discountTypes;
 
         $this->response->success([
             'fields' => $this->fields(),
@@ -94,6 +99,8 @@ final class HomesManagementDetailDataController extends Controller
             'bos_sezon' => $selectableData['bos_sezon'],
             'temizlik_etiketi' => $selectableData['temizlik_etiketi'],
             'yukleme_siniri' => $selectableData['yukleme_siniri'],
+            'indirim_turu' => $selectableData['indirim_turu'],
+            'indirim_turleri' => $selectableData['indirim_turleri'],
         ]);
     }
 
