@@ -349,6 +349,15 @@ final class HomesController extends Controller
             unset($row);
         }
 
+        // kiralama_takvimi: villa Kiralama Takvimi'ne bagli mi (KiralamaTakvimi.CalendarHomes); Teklif Olustur'da logo gosterilir.
+        if ($rows) {
+            $calendarHomes = $this->calendarHomeIds($pdo, array_map('intval', array_column($rows, 'id')));
+            foreach ($rows as &$row) {
+                $row['kiralama_takvimi'] = isset($calendarHomes[(int) $row['id']]);
+            }
+            unset($row);
+        }
+
         $this->response->success([
             'items' => $rows,
             'meta' => [
@@ -692,6 +701,23 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
     private function d104(?DateTime $d): string
     {
         return $d ? $d->format('d.m.Y') : '';
+    }
+
+    /**
+     * Kiralama Takvimi'ne bagli villalar (id => true). Tablo olmayan kurulumda bos.
+     *
+     * @param array<int,int> $homeIds
+     * @return array<int,bool>
+     */
+    private function calendarHomeIds(PDO $pdo, array $homeIds): array
+    {
+        if ($homeIds === [] || $pdo->query("SELECT OBJECT_ID('KiralamaTakvimi.CalendarHomes', 'U')")->fetchColumn() === null) {
+            return [];
+        }
+        $idList = implode(',', array_map('intval', $homeIds));
+        $ids = $pdo->query('SELECT DISTINCT homesId FROM KiralamaTakvimi.CalendarHomes WHERE homesId IN (' . $idList . ')')->fetchAll(PDO::FETCH_COLUMN);
+
+        return array_fill_keys(array_map('intval', $ids), true);
     }
 
     /**

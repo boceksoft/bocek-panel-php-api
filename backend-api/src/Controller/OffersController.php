@@ -11,6 +11,7 @@ use PDO;
  * Teklifler kaynağı.
  *   GET /backend-api/offers?site=1&page=1&per_page=50   -> liste
  *   GET /backend-api/offers/detail?id=123               -> tek teklif detayı
+ *   POST /backend-api/offers/delete?site=1  { ids[] }     -> teklifleri linkleriyle (redirects) birlikte siler
  * (Eski get-offers.php + get-offers-detail.php taşınmış hâli.)
  */
 final class OffersController extends Controller
@@ -186,6 +187,50 @@ final class OffersController extends Controller
             'site'          => $offer['site'],
             'link'          => $offer['link'],
             'parametreler'  => $offer['parametreler'],
+        ]);
+    }
+
+    /**
+     * Teklifleri kalici siler: { ids[] } (?site=). Teklife olusturulan linkler (redirects.teklifId) de silinir;
+     * musteriye gonderilmis teklif linkleri artik acilmaz. Sadece o sitenin teklifleri silinir.
+     *
+     * @Post("delete")
+     */
+    public function delete(): void
+    {
+        $raw = $this->request->input('ids');
+        if (!is_array($raw) || $raw === [] || count($raw) > 1000) {
+            throw new HttpException('Silinecek teklifler gereklidir (en fazla 1000).', 'VALIDATION', 422);
+        }
+        $ids = array_values(array_unique(array_filter(array_map('intval', $raw), function ($id) { return $id > 0; })));
+        if ($ids === []) throw new HttpException('Gecerli teklif secilmedi.', 'VALIDATION', 422);
+
+        $pdo = $this->db->pdo();
+        $siteId = $this->siteId();
+        $in = implode(',', array_fill(0, count($ids), '?'));
+
+        $pdo->beginTransaction();
+        try {
+            $stmt = $pdo->prepare("SELECT id FROM dbo.teklifler WITH (UPDLOCK, HOLDLOCK) WHERE site = ? AND id IN ($in)");
+            $stmt->execute(array_merge([$siteId], $ids));
+            $found = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+            if ($found === []) throw new HttpException('Teklif bulunamadi.', 'NOT_FOUND', 404);
+
+            $foundIn = implode(',', array_fill(0, count($found), '?'));
+            $links = $pdo->prepare("DELETE FROM dbo.redirects WHERE teklifId IN ($foundIn)");
+            $links->execute($found);
+            $removedLinks = $links->rowCount();
+            $pdo->prepare("DELETE FROM dbo.teklifler WHERE site = ? AND id IN ($foundIn)")->execute(array_merge([$siteId], $found));
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
+        }
+
+        $this->response->success([
+            'message' => count($found) . ' teklif silindi' . ($removedLinks > 0 ? ' (' . $removedLinks . ' teklif linki ile birlikte)' : ''),
+            'deletedIds' => $found,
+            'removedLinks' => $removedLinks,
         ]);
     }
 

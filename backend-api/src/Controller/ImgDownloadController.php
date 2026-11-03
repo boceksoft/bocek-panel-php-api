@@ -436,6 +436,66 @@ final class ImgDownloadController extends Controller
         $this->response->success(['message' => count($targets) . ' fotograf yeniden adlandirildi.', 'items' => $items]);
     }
 
+    /**
+     * Villanin fotograflari galeri sirasiyla: { villaId } -> [{ id, fileName, url (kucuk onizleme) }].
+     * Baska villadan foto kopyalarken secim listesi icin.
+     *
+     * @Get("list")
+     */
+    public function listImages(): void
+    {
+        $villaId = (int) $this->request->query('villaId', 0);
+        if ($villaId <= 0) throw new HttpException('villaId eksik.', 'VALIDATION', 422);
+
+        $stmt = $this->db->pdo()->prepare("SELECT uploadID, FileName FROM dbo.upload WHERE islm = 'emlak' AND islm_id = :id ORDER BY sira, uploadID");
+        $stmt->execute(['id' => $villaId]);
+        $cdnBase = Uploads::homeImageBase((defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/', $villaId, $this->app);
+        $items = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $name = trim((string) ($row['FileName'] ?? ''));
+            if ($name === '') continue;
+            $items[] = ['id' => (int) $row['uploadID'], 'fileName' => $name, 'url' => $cdnBase . $name];
+        }
+        $this->response->success(['items' => $items]);
+    }
+
+    /**
+     * Tek fotografin orijinal dosyasi base64 olarak: { villaId, uploadId } -> { fileName, mime, data }.
+     * Dosya once uploads/property/{villaId}/, yoksa uploads/ ana dizininde aranir. Tarayici CDN'den CORS'a takilmasin diye.
+     *
+     * @Get("file")
+     */
+    public function file(): void
+    {
+        $villaId = (int) $this->request->query('villaId', 0);
+        $uploadId = (int) $this->request->query('uploadId', 0);
+        if ($villaId <= 0 || $uploadId <= 0) throw new HttpException('villaId ve uploadId gerekli.', 'VALIDATION', 422);
+
+        $stmt = $this->db->pdo()->prepare("SELECT FileName FROM dbo.upload WHERE uploadID = :id AND islm = 'emlak' AND islm_id = :villaId");
+        $stmt->execute(['id' => $uploadId, 'villaId' => $villaId]);
+        $name = basename(str_replace('\\', '/', trim((string) $stmt->fetchColumn())));
+        if ($name === '') throw new HttpException('Fotograf bulunamadi.', 'NOT_FOUND', 404);
+
+        $dir = Uploads::dir();
+        $path = null;
+        foreach ([$dir . DIRECTORY_SEPARATOR . 'property' . DIRECTORY_SEPARATOR . $villaId . DIRECTORY_SEPARATOR . $name, $dir . DIRECTORY_SEPARATOR . $name] as $candidate) {
+            if (is_file($candidate)) {
+                $path = $candidate;
+                break;
+            }
+        }
+        if ($path === null) throw new HttpException('Fotograf dosyasi bulunamadi: ' . $name, 'FILE_NOT_FOUND', 404);
+        if ((int) @filesize($path) > 20 * 1024 * 1024) throw new HttpException('Fotograf dosyasi cok buyuk: ' . $name, 'FILE_TOO_LARGE', 413);
+
+        $data = @file_get_contents($path);
+        if ($data === false) throw new HttpException('Fotograf dosyasi okunamadi: ' . $name, 'FILE_NOT_FOUND', 404);
+        $this->response->success([
+            'fileName' => $name,
+            'mime' => Uploads::imageMime($path) ?? 'image/jpeg',
+            'data' => base64_encode($data),
+        ]);
+    }
+
     // uploads klasoru: download() ile ayni kural (CDN klasoru -> resizerPHP/config.json "base").
     private function uploadsDir(): string
     {
