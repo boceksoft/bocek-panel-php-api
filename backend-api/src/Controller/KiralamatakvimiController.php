@@ -20,7 +20,8 @@ use App\Support\Uploads;
 final class KiralamatakvimiController extends Controller
 {
     /**
-     * Villanın bilgisini ve mevcut Kiralama Takvimi bağlantısını döner.
+     * Villanın bilgisini ve mevcut Kiralama Takvimi bağlantısını döner. Bağlıysa connection.estateType
+     * Kiralama Takvimi API'sinden (estate/item) okunur: "Standard" | "Special"; okunamazsa null.
      *
      * @Get
      * @query homesId int required Villa id'si
@@ -29,11 +30,37 @@ final class KiralamatakvimiController extends Controller
     {
         $homesId = $this->homesId((int) $this->request->query('homesId', 0));
         $pdo = $this->db->pdo();
+        $villa = $this->villaInfo($this->home($pdo, $homesId));
 
-        $this->response->success([
-            'villa' => $this->villaInfo($this->home($pdo, $homesId)),
-            'connection' => $this->connection($pdo, $homesId),
-        ]);
+        $connection = $this->connection($pdo, $homesId);
+        if ($connection !== null) {
+            $connection['estateType'] = $this->estateType($pdo, $connection['estateId']);
+        }
+
+        $this->response->success(['villa' => $villa, 'connection' => $connection]);
+    }
+
+    /**
+     * Takvimin Kiralama Takvimi'ndeki türü. Tür yalnızca gösterim içindir; ayar eksikse ya da API
+     * yanıt vermezse villa bilgisi yine döner, tür null olur.
+     *
+     * @return string|null
+     */
+    private function estateType(PDO $pdo, int $estateId)
+    {
+        try {
+            $estate = $this->ktApi($this->ktCredentials($pdo), 'GET', 'estate/item', ['estateId' => $estateId]);
+        } catch (HttpException $e) {
+            return null;
+        }
+
+        // KT enum'ları metin ("Special") döndürür; sayı gelirse 1 Özel'dir.
+        $type = $estate['EstateType'] ?? $estate['estateType'] ?? null;
+        if ($type === null) {
+            return null;
+        }
+
+        return ($type === 1 || $type === '1' || strcasecmp((string) $type, 'Special') === 0) ? 'Special' : 'Standard';
     }
 
     /**
@@ -465,30 +492,37 @@ final class KiralamatakvimiController extends Controller
     }
 
     /**
-     * Kiralama Takvimi API'sine istek atar. Hata (200 dışı) KT'nin mesajıyla HttpException olarak fırlatılır.
+     * Kiralama Takvimi API'sine istek atar ve JSON yanıtı dizi olarak döner. Hata (200 dışı) KT'nin
+     * mesajıyla HttpException olarak fırlatılır.
      *
      * @param array{apiKey: string, establishmentId: string} $credentials
      * @param array<string,mixed> $query
+     * @return array<string,mixed>
      */
-    private function ktApi(array $credentials, string $method, string $path, array $query = []): void
+    private function ktApi(array $credentials, string $method, string $path, array $query = []): array
     {
         $base = rtrim(trim((string) ($this->app['kiralamatakvimi_api_url'] ?? '')) ?: 'https://backend.kiralamatakvimi.com/api', '/');
         $url = $base . '/' . $path . ($query ? '?' . http_build_query($query) : '');
 
-        $curl = curl_init($url);
-        curl_setopt_array($curl, [
+        $options = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CUSTOMREQUEST => $method,
-            CURLOPT_POSTFIELDS => '{}',
             CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 30,
+            // Okuma sayfa açılışında yapılır; uzun beklenmez.
+            CURLOPT_TIMEOUT => $method === 'GET' ? 10 : 30,
             CURLOPT_HTTPHEADER => [
                 'Accept: application/json',
                 'Content-Type: application/json',
                 'X-API-Key: ' . $credentials['apiKey'],
                 'EstablishmentId: ' . $credentials['establishmentId'],
             ],
-        ]);
+        ];
+        if ($method !== 'GET') {
+            $options[CURLOPT_POSTFIELDS] = '{}';
+        }
+
+        $curl = curl_init($url);
+        curl_setopt_array($curl, $options);
         $raw = curl_exec($curl);
         $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
         curl_close($curl);
@@ -504,6 +538,10 @@ final class KiralamatakvimiController extends Controller
             }
             throw new HttpException($message, 'PANEL_ERROR', 400);
         }
+
+        $decoded = json_decode((string) $raw, true);
+
+        return is_array($decoded) ? $decoded : [];
     }
 
     private function flag(string $name): bool
