@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\HomesDiscountTypes;
 use PDO;
 
 /*
@@ -961,11 +962,13 @@ final class HomesManagementPricesController extends Controller
             $showEndDate = $this->normalizeDate($this->firstPayloadValue($row, ['showDate2', 'showdate2', 'etkinBitisTarihi', 'show_end_date']));
             $rate = $this->numericValue($row, ['oran', 'rate', 'discountRate']);
             $fakeRate = $this->numericValue($row, ['sahte_oran', 'sahteOran', 'fakeRate']);
-            // Indirim turu (vv paneli ile ayni): 1 Acenta, 2 Ev Sahibi, 3 Genel. Gonderilmezse 0 (guncellemede mevcut deger korunur).
-            $discountType = $this->numericValue($row, ['discountType', 'discount_type', 'indirimTuru']);
-            if (!in_array($discountType, [1, 2, 3], true)) {
-                $discountType = 0;
-            }
+            // Indirim turu: degerler siteye gore (config homes_discount_types; vv 1 Acenta / 2 Ev Sahibi / 3 Genel,
+            // garantivillam 1 Genel / 2 Acenta). Listede yoksa 0: eklemede varsayilan, guncellemede mevcut deger korunur.
+            // Secim kapaliysa (ovillam) hep varsayilan.
+            $discountType = HomesDiscountTypes::forSave(
+                $this->firstPayloadValue($row, ['discountType', 'discount_type', 'indirimTuru']),
+                $this->app
+            ) ?? 0;
 
             if ($startDate === '' || $endDate === '' || $showStartDate === '' || $showEndDate === '') {
                 $skipped[] = [
@@ -1030,7 +1033,7 @@ final class HomesManagementPricesController extends Controller
                 ':showDate2' => $showEndDate,
                 ':oran' => $rate,
                 ':sahte_oran' => $fakeRate,
-                ':discountType' => $discountType > 0 ? $discountType : 3,
+                ':discountType' => $discountType > 0 ? $discountType : HomesDiscountTypes::config($this->app)['default'],
             ]);
             $updated++;
         }

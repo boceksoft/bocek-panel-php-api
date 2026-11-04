@@ -50,19 +50,29 @@ final class KiralamatakvimiController extends Controller
      * @body ownerId int Yeni takvim: atanacak Kiralama Takvimi ev sahibi (isteğe bağlı)
      * @body priceTransferFromKiralamaTakvimi bool Katılırken: Kiralama Takvimi fiyatlarını çek
      * @body manuelKapatmalariSil bool Katılırken: manuel kapatmaları sil
+     * @body isSpecial bool Yeni takvim: özel ilan (ev sahibi atanmaz; oluşunca türü Kiralama Takvimi API'sinden Özel yapılır)
      */
     public function connect(): void
     {
         $homesId = $this->homesId((int) $this->request->input('homesId', 0));
         $calendarCode = trim((string) $this->request->input('calendarCode', ''));
         $isJoin = $calendarCode !== '';
-        $ownerId = (int) $this->request->input('ownerId', 0);
+        $isSpecial = $this->flag('isSpecial');
+        // Özel ilanın ev sahibi olmaz
+        $ownerId = $isSpecial ? 0 : (int) $this->request->input('ownerId', 0);
+
+        if ($isSpecial && $isJoin) {
+            throw new HttpException('Özel ilana takvim koduyla katılınamaz.', 'VALIDATION', 422);
+        }
 
         $pdo = $this->db->pdo();
         $this->home($pdo, $homesId);
         if ($this->connection($pdo, $homesId) !== null) {
             throw new HttpException('Villa zaten Kiralama Takvimi\'ne bağlı.', 'ALREADY_CONNECTED', 409);
         }
+
+        // Ayar eksikse takvim Standart oluşmasın diye anahtar panelden önce okunur.
+        $ktCredentials = $isSpecial ? $this->ktCredentials($pdo) : null;
 
         // Estate::Create gövdeyi JSON okur ve bayrakları "true" / "1" metni olarak karşılaştırır.
         $created = $this->panel('Estate/Create', [
@@ -92,7 +102,26 @@ final class KiralamatakvimiController extends Controller
             }
         }
 
-        $this->response->success(['connection' => $connection, 'ownerError' => $ownerError]);
+        // Panel takvimi Standart oluşturur; tür ayrı istekle Özel yapılır. Başarısız olsa da takvim bağlanmıştır.
+        $specialError = null;
+        if ($ktCredentials !== null) {
+            try {
+                $this->ktApi($ktCredentials, 'PUT', 'estate/updatespecialtype', [
+                    'estateId' => $connection['estateId'],
+                    'estateType' => 1,
+                ]);
+            } catch (HttpException $e) {
+                $specialError = $e->getMessage();
+            }
+        }
+
+        $this->response->success([
+            'connection' => $connection,
+            'ownerError' => $ownerError,
+            'specialError' => $specialError,
+            // Tür gerçekten Özel yapıldıysa true; çağıran taraf eski sürüm bir sitenin isSpecial'ı yok saydığını buradan anlar.
+            'isSpecial' => $ktCredentials !== null && $specialError === null,
+        ]);
     }
 
     /**
@@ -400,6 +429,81 @@ final class KiralamatakvimiController extends Controller
         }
 
         return $fallback;
+    }
+
+    /**
+     * Kiralama Takvimi API'si (backend.kiralamatakvimi.com) kimliği; HomesManagementCalendarController::ktApi ile aynı kural:
+     * önce app.local.php, sonra genel tablosu (apiKey / EstablishmentId), en son panelin api/config.php'si.
+     * Panel takvimi bu kurumla oluşturduğu için türü de aynı kurum değiştirebilir.
+     *
+     * @return array{apiKey: string, establishmentId: string}
+     */
+    private function ktCredentials(PDO $pdo): array
+    {
+        $genel = $pdo->query('SELECT TOP 1 * FROM genel')->fetch(PDO::FETCH_ASSOC) ?: [];
+        $genel = array_change_key_case($genel, CASE_LOWER);
+        $panel = (array) ($this->app['_panel_config'] ?? []);
+
+        $apiKey = trim((string) ($this->app['kiralamatakvimi_api_key'] ?? ''));
+        if ($apiKey === '') {
+            $apiKey = trim((string) ($genel['apikey'] ?? ($panel['apiKey'] ?? '')));
+        }
+        $establishmentId = trim((string) ($this->app['kiralamatakvimi_establishment_id'] ?? ''));
+        if ($establishmentId === '') {
+            $establishmentId = trim((string) ($genel['establishmentid'] ?? ($panel['EstablishmentId'] ?? '')));
+        }
+        if ($apiKey === '' || $establishmentId === '') {
+            throw new HttpException(
+                'Kiralama Takvimi API ayarları eksik: ' . ($apiKey === '' ? 'genel.apiKey boş' : 'EstablishmentId bulunamadı')
+                . ' (config/app.local.php: kiralamatakvimi_api_key / kiralamatakvimi_establishment_id).',
+                'PANEL_ERROR',
+                400
+            );
+        }
+
+        return ['apiKey' => $apiKey, 'establishmentId' => $establishmentId];
+    }
+
+    /**
+     * Kiralama Takvimi API'sine istek atar. Hata (200 dışı) KT'nin mesajıyla HttpException olarak fırlatılır.
+     *
+     * @param array{apiKey: string, establishmentId: string} $credentials
+     * @param array<string,mixed> $query
+     */
+    private function ktApi(array $credentials, string $method, string $path, array $query = []): void
+    {
+        $base = rtrim(trim((string) ($this->app['kiralamatakvimi_api_url'] ?? '')) ?: 'https://backend.kiralamatakvimi.com/api', '/');
+        $url = $base . '/' . $path . ($query ? '?' . http_build_query($query) : '');
+
+        $curl = curl_init($url);
+        curl_setopt_array($curl, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => $method,
+            CURLOPT_POSTFIELDS => '{}',
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'Content-Type: application/json',
+                'X-API-Key: ' . $credentials['apiKey'],
+                'EstablishmentId: ' . $credentials['establishmentId'],
+            ],
+        ]);
+        $raw = curl_exec($curl);
+        $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        curl_close($curl);
+
+        if ($raw === false || $status === 0) {
+            throw new HttpException('Kiralama Takvimi API\'sine ulaşılamadı.', 'PANEL_UNREACHABLE', 502);
+        }
+        if ($status < 200 || $status >= 300) {
+            $decoded = json_decode((string) $raw, true);
+            $message = is_array($decoded) ? $this->panelError(['error' => $decoded], '') : '';
+            if ($message === '') {
+                $message = $status === 401 ? 'Kiralama Takvimi API anahtarı geçersiz.' : 'Kiralama Takvimi isteği başarısız (HTTP ' . $status . ').';
+            }
+            throw new HttpException($message, 'PANEL_ERROR', 400);
+        }
     }
 
     private function flag(string $name): bool

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\ReservationDiscountModel;
 use PDO;
 
 /*
@@ -120,10 +121,11 @@ final class ReservationsCreateController extends Controller
             }
         }
 
-        $discount = array_replace(
+        $discount = ReservationDiscountModel::config(array_replace(
             self::DISCOUNT_DEFAULTS,
             is_array($this->app['reservation_discount'] ?? null) ? $this->app['reservation_discount'] : []
-        );
+        ));
+        $supportsGeneral = ReservationDiscountModel::supportsAmounts($discount, $has);
 
         $sites = [];
         foreach ($this->sites($pdo) as $site) {
@@ -146,7 +148,10 @@ final class ReservationsCreateController extends Controller
                 'ozellikler' => [
                     'eskiFiyat' => $has((string) $discount['old_price_column']),
                     'promosyon' => $has((string) $discount['promo_column']),
-                    'karsilayan' => $has((string) $discount['owner_column']),
+                    'karsilayan' => $has((string) $discount['owner_column']) || $supportsGeneral,
+                    'genel' => $supportsGeneral,
+                    'tutarlar' => $supportsGeneral,
+                    'varsayilanKarsilayan' => $supportsGeneral && !($this->app['homes_discount_type'] ?? true) ? 'genel' : 'site',
                 ],
             ],
         ]);

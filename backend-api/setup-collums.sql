@@ -4276,13 +4276,31 @@ BEGIN
 END;
 GO
 
+-- Rezervasyon indirimini kim karsiladi (ortak model, natsisa docs/devir/ortak-model.md): iki tutar.
+-- ovillam'da zaten var (panel + site yazar). Diger sitelerde Natsisa yazar; panel bilmez, tutarAktar tutarlari ancak
+-- toplamlari gercek indirime esitse kullanir (panelden fiyat degisirse indirimevsahibi bayragina doner).
+-- Varsayilan yok: mevcut kayitlar NULL kalir, hesap degismez.
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'sitesahibi_indirimi') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[kayitlar] ADD [sitesahibi_indirimi] money NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'evsahibi_indirimi') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[kayitlar] ADD [evsahibi_indirimi] money NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
     AND OBJECT_ID(N'[dbo].[kayitlar_odeme]', N'U') IS NOT NULL
 BEGIN
     IF OBJECT_ID(N'[dbo].[tutarAktar]', N'TR') IS NOT NULL
         DROP TRIGGER [dbo].[tutarAktar];
 
-    EXEC(N'
+    DECLARE @tsql nvarchar(max) = N'
     CREATE TRIGGER [dbo].[tutarAktar] 
     ON [dbo].[kayitlar]
     AFTER INSERT,UPDATE AS
@@ -4307,6 +4325,12 @@ BEGIN
         DECLARE @kazancorani int;
         DECLARE @indirim money;
         DECLARE @evsahibiKalan money;
+        /* Ortak model: indirim kim karsiladi. Oncelik: ayrik tutarlar (toplami indirime esitse) > indirimevsahibi */
+        DECLARE @splitSite nvarchar(50);    /* sitesahibi_indirimi (kolon yoksa NULL) */
+        DECLARE @splitOwner nvarchar(50);   /* evsahibi_indirimi */
+        DECLARE @splitHakedis nvarchar(50); /* evsahibi_hakedis = firma hakedisi (ovillam) */
+        DECLARE @indirimSite money;
+        DECLARE @indirimEvsahibi money;
 
         select top 1 
             @satisbedeli                    = dbo.fnTemizle((case when isnull(nullif(ltrim(rtrim(eskifiyat)),''''),''0'')=''0'' then toplam_tutar else eskifiyat end)),
@@ -4322,7 +4346,10 @@ BEGIN
             @kur                            = (case when isnull(doviz,''tl'')=''tl'' then 1 else isnull(kur,1) end),
             @kayitid                        = id,
             @kazancorani                    = isnull(TRY_CONVERT(int, kazancorani),0),
-            @kayitlarKar                    = dbo.fnTemizle(kar)
+            @kayitlarKar                    = dbo.fnTemizle(kar),
+            @splitSite                      = {{SPLIT_SITE}},
+            @splitOwner                     = {{SPLIT_OWNER}},
+            @splitHakedis                   = {{SPLIT_HAKEDIS}}
         from inserted i;
 
         if @kayitid is not null 
@@ -4361,6 +4388,17 @@ BEGIN
             SET @elektrik                       = isnull(replace(@elektrik,'','',''.''),0);
             SET @isitma                         = isnull(replace(@isitma,'','',''.''),0);
 
+            /* ayrik indirim alanlari: diger tutarlarla ayni temizleme */
+            select @splitSite                   = replace(@splitSite,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@splitSite,''.'');
+            select @splitOwner                  = replace(@splitOwner,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@splitOwner,''.'');
+            select @splitHakedis                = replace(@splitHakedis,(case when NOT MIN(LEN(value))>2 then '''' else ''.'' end),'''') from string_split(@splitHakedis,''.'');
+            select @splitSite                   = replace(@splitSite,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@splitSite,'','');
+            select @splitOwner                  = replace(@splitOwner,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@splitOwner,'','');
+            select @splitHakedis                = replace(@splitHakedis,(case when MIN(LEN(value))>2 then '''' else '','' end),'''') from string_split(@splitHakedis,'','');
+            DECLARE @NEWsplitSite money         = isnull(TRY_CONVERT(money, replace(@splitSite,'','',''.'')),0);
+            DECLARE @NEWsplitOwner money        = isnull(TRY_CONVERT(money, replace(@splitOwner,'','',''.'')),0);
+            DECLARE @NEWsplitHakedis money      = isnull(TRY_CONVERT(money, replace(@splitHakedis,'','',''.'')),0);
+
             DECLARE @NEWtemizlik money          = (case when isnumeric(@temizlik)=1 then cast(@temizlik as money) else 0 end);
             DECLARE @NEWelektrik money          = (case when isnumeric(@elektrik)=1 then cast(@elektrik as money) else 0 end);
             DECLARE @NEWisitma money            = (case when isnumeric(@isitma)=1 then cast(@isitma as money) else 0 end);
@@ -4369,8 +4407,26 @@ BEGIN
             SET @indirim                        = (case when @indirim=-1 or @indirim=1 then 0 else @indirim end);
 
             SET @ekstraUcretler                 = @NEWtemizlik+@NEWelektrik+@NEWisitma;
-            SET @kazancTutari                   = (case when not isnull(@kayitlarKar,'''')='''' then isnull(TRY_CONVERT(money,@kayitlarKar),0) else @NEWsatisbedeli/100*@kazancorani-(case when @indirime_evsahibi = 0 then @indirim else 0 end) end);
-            SET @evsahibiKazanc                 = @NEWsatisbedeli-@kazancTutari;
+            /* indirimi kim karsiladi (ortak model): ayrik tutarlar, toplamlari gercek indirime esitse (yuvarlama payi 2).
+               Esit degilse (orn. panelden fiyat degisti, tutarlar eskide kaldi) eski bayrak mantigi. */
+            if (@NEWsplitSite+@NEWsplitOwner) > 0 and abs((@NEWsplitSite+@NEWsplitOwner)-@indirim) <= 2
+            begin
+                SET @indirimSite                = @NEWsplitSite;
+                SET @indirimEvsahibi            = @NEWsplitOwner;
+            end
+            else
+            begin
+                SET @indirimSite                = (case when @indirime_evsahibi=1 then 0 else @indirim end);
+                SET @indirimEvsahibi            = (case when @indirime_evsahibi=1 then @indirim else 0 end);
+            end;
+
+            SET @kazancTutari                   = (case
+                                                    when not isnull(@kayitlarKar,'''')='''' then isnull(TRY_CONVERT(money,@kayitlarKar),0)
+                                                    when @NEWsplitHakedis > 0 then @NEWsplitHakedis
+                                                    else @NEWsatisbedeli/100*@kazancorani-@indirimSite
+                                                  end);
+            /* ev sahibine kalan = musterinin odedigi - firma kari (eskiden satis - kar: indirim kadar fazlaydi) */
+            SET @evsahibiKazanc                 = @NEWtoplamtutar-@kazancTutari;
             SET @evsahibiKalan                  = @NEWonodeme-@kazancTutari;
 
             DECLARE @kayitlar_odeme_count int=0;
@@ -4379,15 +4435,15 @@ BEGIN
             if @kayitlar_odeme_count=0
             begin
                 insert into kayitlar_odeme(kayitid,satis_bedeli,indirim_site,indirim_evsahibi,toplam_tutar,on_odeme,kalan,ekstra_ucretler,kazanc_tutari,evsahibi_kazanc_tutari,evsahibi_kalan,doviz,kur)
-                values (@kayitid,@NEWsatisbedeli,(case when @indirime_evsahibi=1 then 0 else @indirim end),(case when @indirime_evsahibi=1 then @indirim else 0 end),@NEWtoplamtutar,@NEWonodeme,@NEWkalan,@ekstraUcretler,@kazancTutari,@evsahibiKazanc,@evsahibiKalan,@doviz,@kur);
+                values (@kayitid,@NEWsatisbedeli,@indirimSite,@indirimEvsahibi,@NEWtoplamtutar,@NEWonodeme,@NEWkalan,@ekstraUcretler,@kazancTutari,@evsahibiKazanc,@evsahibiKalan,@doviz,@kur);
             end
             else
             begin
                 update kayitlar_odeme
                 set
                     satis_bedeli                    = @NEWsatisbedeli,
-                    indirim_site                    = (case when @indirime_evsahibi=1 then 0 else @indirim end),
-                    indirim_evsahibi                = (case when @indirime_evsahibi=1 then @indirim else 0 end),
+                    indirim_site                    = @indirimSite,
+                    indirim_evsahibi                = @indirimEvsahibi,
                     toplam_tutar                    = @NEWtoplamtutar ,
                     on_odeme                        = @NEWonodeme,
                     kalan                           = @NEWkalan,
@@ -4404,140 +4460,142 @@ BEGIN
         end;
 
     END;
-    ');
+    ';
+
+    /* Kolon varligina gore yer tutucular: olmayan kolon NULL olur, trigger her sitede kurulur. */
+    SET @tsql = REPLACE(@tsql, N'{{SPLIT_SITE}}', CASE WHEN COL_LENGTH(N'[dbo].[kayitlar]', N'sitesahibi_indirimi') IS NOT NULL
+        THEN N'dbo.fnTemizle(CONVERT(nvarchar(50), sitesahibi_indirimi))' ELSE N'NULL' END);
+    SET @tsql = REPLACE(@tsql, N'{{SPLIT_OWNER}}', CASE WHEN COL_LENGTH(N'[dbo].[kayitlar]', N'evsahibi_indirimi') IS NOT NULL
+        THEN N'dbo.fnTemizle(CONVERT(nvarchar(50), evsahibi_indirimi))' ELSE N'NULL' END);
+    SET @tsql = REPLACE(@tsql, N'{{SPLIT_HAKEDIS}}', CASE WHEN COL_LENGTH(N'[dbo].[kayitlar]', N'evsahibi_hakedis') IS NOT NULL
+        THEN N'dbo.fnTemizle(CONVERT(nvarchar(50), evsahibi_hakedis))' ELSE N'NULL' END);
+
+    EXEC(@tsql);
 END;
 GO
 
 -- =====================================================================================
--- DIKKAT / WARNING: MANUEL CALISTIRILMALIDIR / RUN MANUALLY!
--- Bu blok tum mevcut rezervasyonlari kayitlar_odeme tablosuna aktarir (backfill cursor).
--- Setup endpointi uzerinden calistirildiginda timeout olusup HTTP 500 donmemesi icin yoruma alinmistir.
--- Kayitlari aktarmak icin asagidaki blogu SSMS uzerinde manuel calistiriniz.
--- Run this block manually in SSMS; otherwise API setup returns HTTP 500 due to timeout.
+-- kayitlar_odeme TOPLU YENIDEN HESAPLAMA (eski kayitlar icin): setup-kayitlar-odeme-yeniden-hesapla.sql
+-- SSMS'te elle calistirilir; once @uygula = 0 ile onizleme, yedek, sonra @uygula = 1.
+-- (Eskiden burada yorumlu cursor blogu vardi; trigger'in yeni mantigiyla o dosyaya tasindi.)
 -- =====================================================================================
--- IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
---     AND OBJECT_ID(N'[dbo].[kayitlar_odeme]', N'U') IS NOT NULL
--- BEGIN
---     DECLARE @cur_id int;
---     DECLARE @cur_satisbedeli nvarchar(50);
---     DECLARE @cur_indirime_evsahibi bit;
---     DECLARE @cur_toplamtutar nvarchar(50);
---     DECLARE @cur_onodeme nvarchar(50);
---     DECLARE @cur_kalan nvarchar(50);
---     DECLARE @cur_temizlik nvarchar(50);
---     DECLARE @cur_elektrik nvarchar(50);
---     DECLARE @cur_kayitlarKar nvarchar(50);
---     DECLARE @cur_odeme_turu int;
---     DECLARE @cur_doviz nvarchar(10);
---     DECLARE @cur_kur money;
---     DECLARE @cur_kazancorani int;
--- 
---     DECLARE @b_satis money;
---     DECLARE @b_toplam money;
---     DECLARE @b_onodeme money;
---     DECLARE @b_kalan money;
---     DECLARE @b_temizlik money;
---     DECLARE @b_elektrik money;
---     DECLARE @b_indirim money;
---     DECLARE @b_ekstra money;
---     DECLARE @b_kazanc money;
---     DECLARE @b_evsahibiKazanc money;
---     DECLARE @b_evsahibiKalan money;
--- 
---     DECLARE cur_kayitlar CURSOR LOCAL FAST_FORWARD FOR
---         SELECT 
---             k.id,
---             dbo.fnTemizle(case when isnull(nullif(ltrim(rtrim(k.eskifiyat)),''),'0')='0' then k.toplam_tutar else k.eskifiyat end),
---             isnull(k.indirimevsahibi,0),
---             dbo.fnTemizle(k.toplam_tutar),
---             dbo.fnTemizle(k.on_odeme),
---             dbo.fnTemizle(k.kalan),
---             dbo.fnTemizle(k.temizlik),
---             dbo.fnTemizle(k.elektrik),
---             k.tur,
---             isnull(k.doviz,'tl'),
---             (case when isnull(k.doviz,'tl')='tl' then 1 else isnull(k.kur,1) end),
---             isnull(TRY_CONVERT(int, k.kazancorani), 0),
---             dbo.fnTemizle(k.kar)
---         FROM dbo.kayitlar k;
--- 
---     OPEN cur_kayitlar;
---     FETCH NEXT FROM cur_kayitlar INTO 
---         @cur_id, @cur_satisbedeli, @cur_indirime_evsahibi, @cur_toplamtutar, 
---         @cur_onodeme, @cur_kalan, @cur_temizlik, @cur_elektrik,
---         @cur_odeme_turu, @cur_doviz, @cur_kur, @cur_kazancorani, @cur_kayitlarKar;
--- 
---     WHILE @@FETCH_STATUS = 0
---     BEGIN
---         IF @cur_odeme_turu = 2
---         BEGIN
---             SET @cur_onodeme = @cur_toplamtutar;
---             SET @cur_kalan = '0';
---         END
--- 
---         SELECT @cur_satisbedeli = replace(@cur_satisbedeli,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_satisbedeli,'0'),'.');
---         SELECT @cur_toplamtutar = replace(@cur_toplamtutar,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_toplamtutar,'0'),'.');
---         SELECT @cur_onodeme = replace(@cur_onodeme,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_onodeme,'0'),'.');
---         SELECT @cur_kalan = replace(@cur_kalan,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_kalan,'0'),'.');
---         SELECT @cur_temizlik = replace(@cur_temizlik,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_temizlik,'0'),'.');
---         SELECT @cur_elektrik = replace(@cur_elektrik,(case when NOT MIN(LEN(value))>2 then '' else '.' end),'') from string_split(isnull(@cur_elektrik,'0'),'.');
--- 
---         SELECT @cur_satisbedeli = replace(@cur_satisbedeli,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_satisbedeli,'0'),',');
---         SELECT @cur_toplamtutar = replace(@cur_toplamtutar,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_toplamtutar,'0'),',');
---         SELECT @cur_onodeme = replace(@cur_onodeme,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_onodeme,'0'),',');
---         SELECT @cur_kalan = replace(@cur_kalan,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_kalan,'0'),',');
---         SELECT @cur_temizlik = replace(@cur_temizlik,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_temizlik,'0'),',');
---         SELECT @cur_elektrik = replace(@cur_elektrik,(case when MIN(LEN(value))>2 then '' else ',' end),'') from string_split(isnull(@cur_elektrik,'0'),',');
--- 
---         SET @b_satis = ISNULL(TRY_CONVERT(money, replace(@cur_satisbedeli,',','.')), 0);
---         SET @b_toplam = ISNULL(TRY_CONVERT(money, replace(@cur_toplamtutar,',','.')), 0);
---         SET @b_onodeme = ISNULL(TRY_CONVERT(money, replace(@cur_onodeme,',','.')), 0);
---         SET @b_kalan = ISNULL(TRY_CONVERT(money, replace(@cur_kalan,',','.')), 0);
---         SET @b_temizlik = (case when isnumeric(replace(@cur_temizlik,',','.'))=1 then ISNULL(TRY_CONVERT(money, replace(@cur_temizlik,',','.')), 0) else 0 end);
---         SET @b_elektrik = (case when isnumeric(replace(@cur_elektrik,',','.'))=1 then ISNULL(TRY_CONVERT(money, replace(@cur_elektrik,',','.')), 0) else 0 end);
--- 
---         SET @b_indirim = @b_satis - @b_toplam;
---         SET @b_indirim = (case when @b_indirim = -1 or @b_indirim = 1 then 0 else @b_indirim end);
--- 
---         SET @b_ekstra = @b_temizlik + @b_elektrik;
---         SET @b_kazanc = (case when not isnull(@cur_kayitlarKar,'')='' then TRY_CONVERT(money,@cur_kayitlarKar) else @b_satis/100*@cur_kazancorani-(case when @cur_indirime_evsahibi = 0 then @b_indirim else 0 end) end);
---         SET @b_kazanc = isnull(@b_kazanc, 0);
---         SET @b_evsahibiKazanc = @b_satis - @b_kazanc;
---         SET @b_evsahibiKalan = @b_onodeme - @b_kazanc;
--- 
---         IF NOT EXISTS (SELECT 1 FROM dbo.kayitlar_odeme WHERE kayitid = @cur_id)
---         BEGIN
---             INSERT INTO dbo.kayitlar_odeme(kayitid, satis_bedeli, indirim_site, indirim_evsahibi, toplam_tutar, on_odeme, kalan, ekstra_ucretler, kazanc_tutari, evsahibi_kazanc_tutari, evsahibi_kalan, doviz, kur, createdDate)
---             VALUES (@cur_id, @b_satis, (case when @cur_indirime_evsahibi=1 then 0 else @b_indirim end), (case when @cur_indirime_evsahibi=1 then @b_indirim else 0 end), @b_toplam, @b_onodeme, @b_kalan, @b_ekstra, @b_kazanc, @b_evsahibiKazanc, @b_evsahibiKalan, @cur_doviz, @cur_kur, getdate());
---         END
---         ELSE
---         BEGIN
---             UPDATE dbo.kayitlar_odeme
---             SET satis_bedeli = @b_satis,
---                 indirim_site = (case when @cur_indirime_evsahibi=1 then 0 else @b_indirim end),
---                 indirim_evsahibi = (case when @cur_indirime_evsahibi=1 then @b_indirim else 0 end),
---                 toplam_tutar = @b_toplam,
---                 on_odeme = @b_onodeme,
---                 kalan = @b_kalan,
---                 ekstra_ucretler = @b_ekstra,
---                 kazanc_tutari = @b_kazanc,
---                 evsahibi_kazanc_tutari = @b_evsahibiKazanc,
---                 evsahibi_kalan = @b_evsahibiKalan,
---                 doviz = @cur_doviz,
---                 kur = @cur_kur,
---                 modifedDate = getdate()
---             WHERE kayitid = @cur_id;
---         END
--- 
---         FETCH NEXT FROM cur_kayitlar INTO 
---             @cur_id, @cur_satisbedeli, @cur_indirime_evsahibi, @cur_toplamtutar, 
---             @cur_onodeme, @cur_kalan, @cur_temizlik, @cur_elektrik,
---             @cur_odeme_turu, @cur_doviz, @cur_kur, @cur_kazancorani, @cur_kayitlarKar;
---     END
--- 
---     CLOSE cur_kayitlar;
---     DEALLOCATE cur_kayitlar;
--- END;
--- GO
 
 
+
+
+/* =====================================================================
+   sezonlar_history + trg_sezonlar_audit_to_history
+   - Sadece dbo.sezonlar ve dbo.sezonlar_history ikisi de varsa calisir.
+   - sezonlar'da olup history'de olmayan kolonlar history'ye eklenir
+     (ayni tip, NULL). Mevcut kolonlara ve dataya dokunulmaz.
+   - Trigger, iki tabloda da olan kolonlarla (sezonlar sirasiyla) acik
+     kolon listesiyle yeniden olusturulur. Sitede isitmaHizmetDisi gibi
+     bir kolon yoksa listeye girmez, hata vermez.
+   - Yeni kolon eklendiginde setup'i tekrar calistirmak yeterli.
+===================================================================== */
+IF OBJECT_ID(N'[dbo].[sezonlar]', N'U') IS NOT NULL
+    AND OBJECT_ID(N'[dbo].[sezonlar_history]', N'U') IS NOT NULL
+BEGIN
+    DECLARE @HistoryAddSql NVARCHAR(MAX);
+
+SELECT @HistoryAddSql =
+       (
+           SELECT N'ALTER TABLE [dbo].[sezonlar_history] ADD ' + QUOTENAME(c.name) + N' '
+                      + CASE
+                            WHEN t.name IN (N'nvarchar', N'nchar')
+                                THEN t.name + N'(' + CASE WHEN c.max_length = -1 THEN N'max' ELSE CAST(c.max_length / 2 AS NVARCHAR(10)) END + N')'
+                            WHEN t.name IN (N'varchar', N'char', N'varbinary', N'binary')
+                                THEN t.name + N'(' + CASE WHEN c.max_length = -1 THEN N'max' ELSE CAST(c.max_length AS NVARCHAR(10)) END + N')'
+                            WHEN t.name IN (N'decimal', N'numeric')
+                                THEN t.name + N'(' + CAST(c.precision AS NVARCHAR(10)) + N',' + CAST(c.scale AS NVARCHAR(10)) + N')'
+                            WHEN t.name IN (N'datetime2', N'time', N'datetimeoffset')
+                                THEN t.name + N'(' + CAST(c.scale AS NVARCHAR(10)) + N')'
+                            ELSE t.name
+                      END
+                      + N' NULL;' + NCHAR(10)
+FROM sys.columns c
+    INNER JOIN sys.types t ON t.user_type_id = c.system_type_id
+WHERE c.object_id = OBJECT_ID(N'[dbo].[sezonlar]')
+  AND c.is_computed = 0
+  AND t.name <> N'timestamp'
+  AND c.name NOT IN (N'history_id', N'action', N'actionGuid', N'actionDate')
+  AND COL_LENGTH(N'[dbo].[sezonlar_history]', c.name) IS NULL
+ORDER BY c.column_id
+    FOR XML PATH(''), TYPE
+    ).value('.', 'NVARCHAR(MAX)');
+
+IF @HistoryAddSql IS NOT NULL AND LEN(@HistoryAddSql) > 0
+        EXEC sys.sp_executesql @HistoryAddSql;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[trg_sezonlar_audit_to_history]', N'TR') IS NOT NULL
+    AND OBJECT_ID(N'[dbo].[sezonlar_history]', N'U') IS NOT NULL
+BEGIN
+DROP TRIGGER [dbo].[trg_sezonlar_audit_to_history];
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[sezonlar]', N'U') IS NOT NULL
+    AND OBJECT_ID(N'[dbo].[sezonlar_history]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[sezonlar]', N'id') IS NOT NULL
+BEGIN
+    DECLARE @Cols NVARCHAR(MAX);
+
+SELECT @Cols = STUFF(
+        (
+            SELECT N', ' + QUOTENAME(c.name)
+            FROM sys.columns c
+            WHERE c.object_id = OBJECT_ID(N'[dbo].[sezonlar]')
+              AND c.is_computed = 0
+              AND c.name NOT IN (N'history_id', N'action', N'actionGuid', N'actionDate')
+              AND COL_LENGTH(N'[dbo].[sezonlar_history]', c.name) IS NOT NULL
+            ORDER BY c.column_id
+            FOR XML PATH(''), TYPE
+    ).value('.', 'NVARCHAR(MAX)'), 1, 2, N'');
+
+DECLARE @TriggerSql NVARCHAR(MAX) = N'
+CREATE TRIGGER [dbo].[trg_sezonlar_audit_to_history]
+    ON [dbo].[sezonlar]
+    AFTER UPDATE, DELETE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @Guid NVARCHAR(36) = CONVERT(NVARCHAR(36), NEWID());
+    DECLARE @Now  DATETIME2(3) = SYSUTCDATETIME();
+
+    /* 1) GERCEK DELETE: deleted var, inserted yok */
+    INSERT INTO [dbo].[sezonlar_history] ({COLS}, [action], [actionGuid], [actionDate])
+    SELECT {COLS}, N''DELETE'', @Guid, @Now
+    FROM deleted d
+    WHERE NOT EXISTS (SELECT 1 FROM inserted i WHERE i.[id] = d.[id]);
+
+    /* 2) UPDATE-OLD: sadece gercekten degisen satirlarin eski hali */
+    ;WITH changed_old AS
+    (
+        SELECT {COLS} FROM deleted
+        EXCEPT
+        SELECT {COLS} FROM inserted
+    )
+    INSERT INTO [dbo].[sezonlar_history] ({COLS}, [action], [actionGuid], [actionDate])
+    SELECT {COLS}, N''UPDATE-OLD'', @Guid, @Now
+    FROM changed_old co
+    WHERE EXISTS (SELECT 1 FROM inserted i WHERE i.[id] = co.[id]);
+
+    /* 3) UPDATE-NEW: sadece gercekten degisen satirlarin yeni hali */
+    ;WITH changed_new AS
+    (
+        SELECT {COLS} FROM inserted
+        EXCEPT
+        SELECT {COLS} FROM deleted
+    )
+    INSERT INTO [dbo].[sezonlar_history] ({COLS}, [action], [actionGuid], [actionDate])
+    SELECT {COLS}, N''UPDATE-NEW'', @Guid, @Now
+    FROM changed_new cn;
+END;';
+
+    SET @TriggerSql = REPLACE(@TriggerSql, N'{COLS}', @Cols);
+EXEC sys.sp_executesql @TriggerSql;
+END;
+GO

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\HomesDiscountTypes;
 use App\Support\HomesExtraFields;
 use PDO;
 
@@ -929,8 +930,8 @@ final class HomesManagementDetailController extends Controller
                 'showdate2' => $this->firstNonEmptyValue($row, ['showdate2_formatted', 'showdate2']),
                 'oran' => $this->firstNonEmptyValue($row, ['oran']),
                 'sahte_oran' => $this->firstNonEmptyValue($row, ['sahte_oran']),
-                // 1 Acenta, 2 Ev Sahibi, 3 Genel; NULL/bos kayitlar Genel sayilir.
-                'discountType' => in_array((int) ($row['discountType'] ?? 0), [1, 2, 3], true) ? (int) $row['discountType'] : 3,
+                // Siteye gore tur (config homes_discount_types); listede olmayan / NULL kayitlar varsayilan sayilir.
+                'discountType' => HomesDiscountTypes::normalize($row['discountType'] ?? null, $this->app),
             ];
         }
 

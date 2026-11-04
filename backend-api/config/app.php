@@ -41,6 +41,26 @@ return [
     // bu yapiyi destekliyorsa ac (bkz. natsisa/docs/devir/resizer). false (varsayilan): /uploads/small/{dosya}.
     'homes_image_property_urls' => false,
 
+    // Villa indirimlerinde "Indirim Turu" secimi (indirimler.discountType: 1 Acenta, 2 Ev Sahibi, 3 Genel).
+    // false: ilan ekraninda secim gizlenir, her indirim Genel (3) yazilir. ovillam: false (site her indirimi Genel boler,
+    // rezervasyonda firma / villa sahibi tutarlari elle duzeltilir).
+    'homes_discount_type' => true,
+
+    // Villa indirim turleri (indirimler.discountType); degerlerin anlami siteye gore degisir. Bkz. src/Support/HomesDiscountTypes.php
+    //   options: value, label, payer (rezervasyonda kim karsilar: site | ev_sahibi | genel), base (price | commission).
+    //   garantivillam: ['default' => 1, 'options' => [
+    //       ['value' => 1, 'label' => 'Genel İndirim', 'payer' => 'site'],
+    //       ['value' => 2, 'label' => 'Acenta İndirimi', 'payer' => 'site', 'base' => 'commission']]]
+    'homes_discount_types' => [
+        'enabled' => true,
+        'default' => 3,
+        'options' => [
+            ['value' => 1, 'label' => 'Acenta İndirimi', 'payer' => 'site', 'base' => 'price'],
+            ['value' => 2, 'label' => 'Ev Sahibi İndirimi', 'payer' => 'ev_sahibi', 'base' => 'price'],
+            ['value' => 3, 'label' => 'Genel İndirim', 'payer' => 'genel', 'base' => 'price'],
+        ],
+    ],
+
     // true: hata detayları yanıta eklenir. Canlıda false olmalı.
     'debug' => true,
 
@@ -210,6 +230,14 @@ return [
         'total_column' => 'toplam_tutar',           // indirimli fiyat
         'promo_column' => 'promotionCode',
         'owner_column' => 'indirimevsahibi',        // 1: indirimi ev sahibi karşılar, 0: site sahibi
+        // Ortak model (docs/devir/ortak-model.md, Support\ReservationDiscountModel): indirimi kim karşıladı = iki tutar
+        // (firma / villa sahibi). Kolon yoksa sadece owner_column bayrağı yazılır. Hakediş kolonları varsa (ovillam) onlar da.
+        'split_columns' => [
+            'site' => 'sitesahibi_indirimi',        // firmanın karşıladığı indirim (setup tüm sitelere ekler)
+            'owner' => 'evsahibi_indirimi',         // villa sahibinin karşıladığı indirim
+            'firm_payout' => 'evsahibi_hakedis',    // firma hakedişi = liste × komisyon% − firma indirimi
+            'owner_payable' => 'evsahibi_odenecek', // ev sahibine ödenecek = ön ödeme − firma hakedişi
+        ],
         'commission_column' => 'kazancorani',
         'villa_commission_column' => 'kazancorani', // rezervasyonda oran yoksa villanın (homes, site sonekli) oranı
         'villa_down_payment_column' => 'depozito',  // villanın ön ödeme oranı (homes; site_field_suffixes.depozito)
@@ -324,6 +352,8 @@ return [
         'homes_code' => 'array',
         'homes_empty_seasons' => 'array',
         'homes_image_property_urls' => 'bool',
+        'homes_discount_type' => 'bool',
+        'homes_discount_types' => 'array',
         'guest_movements_home_id_column' => 'bool',
         'guest_movements_use_caretaker_owner_fallback' => 'bool',
         'links_search_page_url' => 'string',
