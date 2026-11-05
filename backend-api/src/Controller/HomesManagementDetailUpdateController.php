@@ -83,6 +83,8 @@ final class HomesManagementDetailUpdateController extends Controller
             throw new HttpException('Emlak detay bilgileri guncellenemedi.', 'DB_UPDATE_FAILED', 500, $e);
         }
 
+        \App\Support\HomesCompletion::refresh($pdo, $id);
+
         $this->response->success([
             'id' => $id,
             // Otomatik verilen ev kodu (verilmediyse null).

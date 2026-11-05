@@ -31,6 +31,7 @@ final class HomesManagementController extends Controller
      * @query year int Season year
      * @query missing_year int If 1, returns homes without season in year
      * @query document string Comma separated document filters
+     * @query tamamlanma int 1: %100 tamamlanmis, 0: %100 olmayan villalar
      * @query sort int 1/2 order, 3/4 id
      * @query site int Site id
      */
@@ -162,6 +163,17 @@ final class HomesManagementController extends Controller
             $params[':yearEnd'] = $year . '-12-31';
         }
 
+        // Tamamlanma: 1 = %100 olanlar, 0 = %100 olmayanlar (henuz hesaplanmamis villa da tamamlanmamis sayilir).
+        $completion = $this->p('tamamlanma');
+        $hasCompletionColumn = \App\Support\HomesCompletion::columnExists($pdo);
+        $completionColumn = 'h.[' . \App\Support\HomesCompletion::COLUMN . ']';
+        if ($completion === '1' || $completion === '0') {
+            if (!$hasCompletionColumn) {
+                throw new \App\Core\HttpException('Tamamlanma filtresi icin once setup calistirilmali.', 'SETUP_REQUIRED', 409);
+            }
+            $where[] = $completion === '1' ? "{$completionColumn} = 100" : "ISNULL({$completionColumn}, 0) < 100";
+        }
+
         $document = $this->p('document') !== '' ? $this->p('document') : $this->p('gavelBelge');
         // Sure tipi ayardaki kolondan okunur (gavel_duration_column); 1 suresiz, 2 sureli
         $durationSql = $this->gavelDurationSql('gavel');
@@ -267,7 +279,8 @@ SELECT
     calendar.auto_price_update AS rental_calendar_price_sync,
     season.exists_value AS has_season,
     price.min_price AS min_price,
-    ISNULL(h.doviz, '') AS currency 
+    ISNULL(h.doviz, '') AS currency,
+    " . ($hasCompletionColumn ? $completionColumn : 'CAST(NULL AS int)') . " AS completion_percent
 FROM homes h
 INNER JOIN destinations d ON d.id = h.emlak_bolgesi
 LEFT JOIN kanun7464 gavel ON gavel.homeId = h.id
@@ -287,7 +300,7 @@ OUTER APPLY (
         SELECT 1 FROM sonDakika sd
         WHERE sd.islem_id = h.id
           AND sd.site = {$siteId}
-          AND CONVERT(date, sd.tarih2, 103) >= CONVERT(date, GETDATE(), 103)
+          AND COALESCE(TRY_CONVERT(date, sd.tarih2, 103), TRY_CONVERT(date, sd.tarih2, 23)) >= CONVERT(date, GETDATE(), 103)
     ) THEN 1 ELSE 0 END AS exists_value
 ) AS lastMinute
 OUTER APPLY (
@@ -296,8 +309,8 @@ OUTER APPLY (
         WHERE sz.islem = 'emlak'
           AND sz.islem_id = h.id
           AND sz.site = {$siteId}
-          AND CONVERT(date, sz.tarih1, 103) <= CONVERT(date, :yearEnd, 23)
-          AND CONVERT(date, sz.tarih2, 103) >= CONVERT(date, :yearStart, 23)
+          AND COALESCE(TRY_CONVERT(date, sz.tarih1, 103), TRY_CONVERT(date, sz.tarih1, 23)) <= CONVERT(date, :yearEnd, 23)
+          AND COALESCE(TRY_CONVERT(date, sz.tarih2, 103), TRY_CONVERT(date, sz.tarih2, 23)) >= CONVERT(date, :yearStart, 23)
     )" : '0 = 1') . " THEN 1 ELSE 0 END AS exists_value
 ) AS season
 WHERE {$whereSql}
@@ -353,6 +366,8 @@ WHERE {$whereSql}
                 // En dusuk sezon fiyati (villanin kendi para biriminde); sezon yoksa null.
                 'min_price' => $row['min_price'] !== null ? (int) round((float) $row['min_price']) : null,
                 'currency' => (string) $row['currency'],
+                // Tamamlanma yuzdesi (homes.tamamlanma_yuzdesi); setup calismadiysa veya hesaplanmadiysa null.
+                'completion_percent' => $row['completion_percent'] !== null ? (int) $row['completion_percent'] : null,
             ];
         }
         unset($row);

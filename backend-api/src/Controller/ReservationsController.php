@@ -24,6 +24,7 @@ final class ReservationsController extends Controller
      * @query durum int Rezervasyon durumu (çoklu olabilir)
      * durum=7: Ayar aciksa, logda 3 -> 4 gecisi bulunan halen iptal rezervasyonlar.
      * @query musteri string Müşteri adı/kelime araması
+     * @query girisTarih1 string Giriş başlangıcı (gg.aa.yyyy). Hiç gönderilmezse bugün, boş gönderilirse filtre yok.
      * @query hizliArama int 1 ise sadece arama sonucu döner (üst bar araması): no, müşteri, villa, tarih, durum.
      * @query sadeceToplam int 1 ise ayni filtrelerle sadece {total} doner (menu rozetleri).
      */
@@ -63,8 +64,9 @@ final class ReservationsController extends Controller
         $combinedDurumRaw = trim($durumRaw . ',' . $rezDurumuRaw, ',');
         $hasDurum6        = strpos(',' . str_replace(' ', '', $combinedDurumRaw) . ',', ',6,') !== false;
 
+        // girisTarih1 hiç gelmezse varsayılan bugün; boş gelirse (girisTarih1=) panel gibi tarih filtresi yok.
         $girisTarih1P = $this->p('girisTarih1');
-        if (!$hasDurum6 && $girisTarih1P === '') {
+        if (!$hasDurum6 && $girisTarih1P === '' && $this->requestValues('girisTarih1') === []) {
             $girisTarih1P = date('d.m.Y');
         }
         $girisTarih1 = $this->parseTrDate($girisTarih1P);

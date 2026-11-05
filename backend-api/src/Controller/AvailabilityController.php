@@ -140,13 +140,17 @@ final class AvailabilityController extends Controller
                     WHERE NOT EXISTS (SELECT 1 FROM DoluGunler dg3 WHERE dg3.Date = DATEADD(DAY, 1, dg1.Date))) AS doluCikislar ";
         }
 
+        // sezonlar / sonDakika tarihleri iki bicimde olabilir (gg.aa.yyyy, yyyy-aa-gg).
+        $anyTarih1 = \App\Support\SqlDate::any('tarih1');
+        $anyTarih2 = \App\Support\SqlDate::any('tarih2');
+
         $verisql = $doluTarihlerSqlWith . "
             SELECT * FROM
                 (SELECT
-                    ISNULL(STRING_AGG(TRY_CONVERT(date,tarih1,103),','),'') AS sondakikaGirisler,
-                    ISNULL(STRING_AGG(TRY_CONVERT(date,tarih2,103),','),'') AS sondakikaCikislar,
-                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2(TRY_CONVERT(date,tarih1,103),TRY_CONVERT(date,tarih2,103)),','),'') AS sondakikaGunler
-                    FROM sonDakika WHERE TRY_CONVERT(date,tarih2,103) > TRY_CONVERT(date,GETDATE(),103) AND site = " . $siteVal . " AND islem_id = " . $entityId . ") AS sonDakika,
+                    ISNULL(STRING_AGG({$anyTarih1},','),'') AS sondakikaGirisler,
+                    ISNULL(STRING_AGG({$anyTarih2},','),'') AS sondakikaCikislar,
+                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2({$anyTarih1},{$anyTarih2}),','),'') AS sondakikaGunler
+                    FROM sonDakika WHERE {$anyTarih2} > TRY_CONVERT(date,GETDATE(),103) AND site = " . $siteVal . " AND islem_id = " . $entityId . ") AS sonDakika,
                 (" . $doluTarihlerSql . ") AS dolu,
                 (SELECT
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS dolu_fakeGirisler,
@@ -184,17 +188,17 @@ final class AvailabilityController extends Controller
                         FROM ruleshomes rh INNER JOIN rules r ON r.id = " . $ruleshomesRulesIdSql . " WHERE r.isactive = 1 AND " . $ruleshomesHomesIdSql . " = " . $entityId . " FOR JSON PATH),'') AS kurallar ) AS kurallar,
                 (SELECT 
                     ISNULL(STRING_AGG(
-                        CAST(CONCAT(YEAR(TRY_CONVERT(date,tarih1,103)),'-',FORMAT(TRY_CONVERT(date,tarih1,103),'MM'),'-',FORMAT(TRY_CONVERT(date,tarih1,103),'dd'),',',
-                        dbo.Natsisa_Fn_aratarihler2(TRY_CONVERT(date,tarih1,103),TRY_CONVERT(date,tarih2,103)),
-                        ',',YEAR(TRY_CONVERT(date,tarih2,103)),'-',FORMAT(TRY_CONVERT(date,tarih2,103),'MM'),'-',FORMAT(TRY_CONVERT(date,tarih2,103),'dd')) AS NVARCHAR(MAX)),','),'') AS fiyatlarTarihler,
-                    ISNULL(STRING_AGG(CAST(REPLICATE(CONVERT(NVARCHAR,(CAST((ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7) AS decimal(10,0))))+',',DATEDIFF(day,TRY_CONVERT(date,tarih1,103),TRY_CONVERT(date,tarih2,103)))+CONVERT(NVARCHAR,(CAST(ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7 AS decimal(10,0)))) AS NVARCHAR(MAX)),','),'') AS fiyatlar
+                        CAST(CONCAT(YEAR({$anyTarih1}),'-',FORMAT({$anyTarih1},'MM'),'-',FORMAT({$anyTarih1},'dd'),',',
+                        dbo.Natsisa_Fn_aratarihler2({$anyTarih1},{$anyTarih2}),
+                        ',',YEAR({$anyTarih2}),'-',FORMAT({$anyTarih2},'MM'),'-',FORMAT({$anyTarih2},'dd')) AS NVARCHAR(MAX)),','),'') AS fiyatlarTarihler,
+                    ISNULL(STRING_AGG(CAST(REPLICATE(CONVERT(NVARCHAR,(CAST((ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7) AS decimal(10,0))))+',',DATEDIFF(day,{$anyTarih1},{$anyTarih2}))+CONVERT(NVARCHAR,(CAST(ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7 AS decimal(10,0)))) AS NVARCHAR(MAX)),','),'') AS fiyatlar
                     FROM sezonlar
                     LEFT JOIN kanun7464 ka ON ka.homeId=" . (int) $home['id'] . "
                     LEFT JOIN Finance.Currency FromC ON FromC.CurrencyName='" . $home['doviz'] . "'
                     LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
                     LEFT JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
                         AND RD.FromCurrencyId = FromC.CurrencyId AND RD.RateId = :RateId
-                WHERE site = " . $siteVal . " AND islem_id = " . $entityId . " AND islem = 'emlak' AND TRY_CONVERT(date,tarih2,103) >= " . $fromSql . ") AS fiyatlar";
+                WHERE site = " . $siteVal . " AND islem_id = " . $entityId . " AND islem = 'emlak' AND {$anyTarih2} >= " . $fromSql . ") AS fiyatlar";
 
         $bindRateId = defined('RATE_ID')
             ? constant('RATE_ID') 

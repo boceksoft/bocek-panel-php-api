@@ -592,17 +592,21 @@ final class HomesManagementDetailController extends Controller
             $calendarHome = [];
         }
 
+        // sezonlar tarihleri iki bicimde olabilir (gg.aa.yyyy, yyyy-aa-gg).
+        $anyTarih1 = \App\Support\SqlDate::any('tarih1');
+        $anyTarih2 = \App\Support\SqlDate::any('tarih2');
+
         $years = $this->fetchAll(
             $pdo,
-            "SELECT YEAR(TRY_CONVERT(date, tarih2, 103)) AS yeardate
+            "SELECT YEAR({$anyTarih2}) AS yeardate
              FROM sezonlar
              WHERE LEN(tarih2) >= 10
-               AND TRY_CONVERT(date, tarih2, 103) IS NOT NULL
+               AND {$anyTarih2} IS NOT NULL
                AND site = :site
                AND islem = 'emlak'
                AND islem_id = :homeId
-             GROUP BY YEAR(TRY_CONVERT(date, tarih2, 103))
-             ORDER BY YEAR(TRY_CONVERT(date, tarih2, 103)) DESC",
+             GROUP BY YEAR({$anyTarih2})
+             ORDER BY YEAR({$anyTarih2}) DESC",
             [
                 ':site' => $siteId,
                 ':homeId' => $homeId,
@@ -625,12 +629,12 @@ final class HomesManagementDetailController extends Controller
         $rows = $this->fetchAll(
             $pdo,
             "SELECT *,
-                    YEAR(TRY_CONVERT(date, tarih2, 103)) AS yeardate
+                    YEAR({$anyTarih2}) AS yeardate
              FROM sezonlar
              WHERE site = :site
                AND islem = 'emlak'
                AND islem_id = :homeId
-             ORDER BY TRY_CONVERT(date, tarih1, 104) ASC",
+             ORDER BY {$anyTarih1} ASC",
             [
                 ':site' => $siteId,
                 ':homeId' => $homeId,

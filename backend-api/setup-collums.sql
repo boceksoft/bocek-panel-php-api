@@ -5,6 +5,13 @@ ALTER TABLE [dbo].[homes] ADD [gavelBelgeNo] nvarchar(128) NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'tamamlanma_yuzdesi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[homes] ADD [tamamlanma_yuzdesi] int NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[genel]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[genel]', N'dil') IS NULL
 BEGIN

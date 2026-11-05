@@ -535,8 +535,15 @@ final class CalculateController extends Controller
         $uzanti = $this->fieldSuffix($site);
         $depozitoSuffix = $this->fieldSuffix($site, 'depozito');
         $priceSite = $this->priceSiteId($site);
+        // sezonlar / sonDakika tarihleri iki bicimde olabilir (gg.aa.yyyy, yyyy-aa-gg).
+        $anyTarih1 = \App\Support\SqlDate::any('tarih1');
+        $anyTarih2 = \App\Support\SqlDate::any('tarih2');
+        // Fiyat fonksiyonu yyyy-aa-gg tarihte hata verir; boyle kaydi olan villanin tutarlari PHP'de hesaplanir.
+        $priceTableSql = \App\Support\HomesPriceTable::hasNonStandardDates($pdo, $entityId, (int) $priceSite)
+            ? \App\Support\HomesPriceTable::inlineSql($pdo, $start, $end, $entityId, (int) $priceSite)
+            : "SELECT * FROM dbo.Natsisa_Fn_yenifiyathesapla_tablo('{$start}', '{$end}', {$entityId}, {$priceSite})";
 
-        $sql = " 
+        $sql = "
 SELECT
     FiyatTablosu.ToplamTutar * COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS fyt,
     FiyatTablosu.IndirimTutari * COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS indirimTutari,
@@ -547,8 +554,8 @@ SELECT
         FROM sonDakika
         WHERE site = {$priceSite}
           AND islem_id = {$entityId}
-          AND CONVERT(date, tarih1, 104) <= CONVERT(date, '{$start}', 23)
-          AND CONVERT(date, tarih2, 104) >= CONVERT(date, '{$end}', 23)
+          AND {$anyTarih1} <= CONVERT(date, '{$start}', 23)
+          AND {$anyTarih2} >= CONVERT(date, '{$end}', 23)
     ) THEN 1 ELSE 0 END AS sonDakikaVar,
     ( 
         SELECT TOP 1 ISNULL(gece, 0)
@@ -556,7 +563,7 @@ SELECT
         WHERE site = {$priceSite}
           AND islem_id = {$entityId}
           AND islem = 'emlak'
-          AND '{$start}' BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)
+          AND '{$start}' BETWEEN {$anyTarih1} AND {$anyTarih2}
         ORDER BY id DESC
     ) AS mingece,
     ISNULL((
@@ -565,7 +572,7 @@ SELECT
         WHERE site = {$priceSite}
           AND islem_id = {$entityId}
           AND islem = 'emlak'
-          AND '{$start}' BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)
+          AND '{$start}' BETWEEN {$anyTarih1} AND {$anyTarih2}
         ORDER BY id DESC
     ), 0) AS temizlikGece,
     ISNULL((
@@ -574,7 +581,7 @@ SELECT
         WHERE site = {$priceSite}
           AND islem_id = {$entityId}
           AND islem = 'emlak'
-          AND '{$start}' BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)
+          AND '{$start}' BETWEEN {$anyTarih1} AND {$anyTarih2}
         ORDER BY id DESC
     ), 0) * COALESCE(RD2.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS temizlikFiyat,
     CASE WHEN h.kur{$uzanti} > 0 THEN h.kur{$uzanti} ELSE 0 END AS kur,
@@ -593,7 +600,7 @@ SELECT
 FROM homes h
 LEFT JOIN Finance.Currency FromC ON FromC.CurrencyName = h.doviz{$uzanti}
 CROSS APPLY (
-    SELECT * FROM dbo.Natsisa_Fn_yenifiyathesapla_tablo('{$start}', '{$end}', {$entityId}, {$priceSite})
+    {$priceTableSql}
 ) AS FiyatTablosu
 LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
 LEFT JOIN Finance.Currency BaseCurrency ON BaseCurrency.CurrencyId = 1
@@ -819,7 +826,7 @@ WHERE h.id = {$entityId}";
                          WHERE site = {$site}
                            AND islem_id = {$entityId}
                            AND islem = 'emlak'
-                           AND :day2 BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)"
+                           AND :day2 BETWEEN " . \App\Support\SqlDate::any('tarih1') . ' AND ' . \App\Support\SqlDate::any('tarih2')
                     );
                     $stmt->execute([
                         'day' => $day,

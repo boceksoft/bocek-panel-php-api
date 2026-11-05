@@ -52,9 +52,17 @@ final class SetupController extends Controller
             throw new HttpException('Kolon setup calistirilamadi.', 'SETUP_FAILED', 500, $e);
         }
 
+        // Villalarin tamamlanma yuzdesi (homes.tamamlanma_yuzdesi) yeniden hesaplanir; hata kolon setup'ini bozmaz.
+        try {
+            $homesCompletion = ['updated' => \App\Support\HomesCompletion::refreshAll($this->db->pdo())];
+        } catch (\Throwable $e) {
+            $homesCompletion = ['updated' => 0, 'error' => $e->getMessage()];
+        }
+
         $this->response->success([
             'setup' => 'collums',
             'database' => $this->databaseName(),
+            'homes_completion' => $homesCompletion,
             'verified_tables' => array_merge(
                 $this->extraPaymentTableStatus(),
                 $this->reservationGuestTableStatus(),

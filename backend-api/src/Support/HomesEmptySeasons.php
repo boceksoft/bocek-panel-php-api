@@ -120,8 +120,8 @@ final class HomesEmptySeasons
     {
         $sql = "SELECT COUNT(*) FROM sezonlar
                 WHERE islem_id = :homeId AND islem = 'emlak'
-                  AND TRY_CONVERT(date, tarih1, 104) <= CONVERT(date, :endDate, 104)
-                  AND TRY_CONVERT(date, tarih2, 104) >= CONVERT(date, :startDate, 104)";
+                  AND " . SqlDate::any('tarih1') . " <= CONVERT(date, :endDate, 104)
+                  AND " . SqlDate::any('tarih2') . " >= CONVERT(date, :startDate, 104)";
         $params = [':homeId' => $homeId, ':startDate' => $start, ':endDate' => $end];
         if ($hasSite) {
             $sql .= ' AND ISNULL(site, 1) = :site';

@@ -374,17 +374,17 @@ SELECT
           FROM sonDakika sd
          WHERE sd.site = {$priceSite}
            AND sd.islem_id = k.evid
-           AND TRY_CONVERT(date, sd.tarih1, 104) <= CAST(k.rez_tarihi AS date)
-           AND TRY_CONVERT(date, sd.tarih2, 104) >= CAST(k.gelecek_tarih AS date)
+           AND " . \App\Support\SqlDate::any('sd.tarih1') . " <= CAST(k.rez_tarihi AS date)
+           AND " . \App\Support\SqlDate::any('sd.tarih2') . " >= CAST(k.gelecek_tarih AS date)
     ) THEN 1 ELSE 0 END AS son_dakika
-{$from}
+{$from}  
 OUTER APPLY (
     SELECT TOP 1 ISNULL(s.gece, 0) AS gece
       FROM sezonlar s
      WHERE s.site = {$priceSite}
        AND s.islem_id = k.evid
        AND s.islem = 'emlak'
-       AND CAST(k.rez_tarihi AS date) BETWEEN TRY_CONVERT(date, s.tarih1, 104) AND TRY_CONVERT(date, s.tarih2, 104)
+       AND CAST(k.rez_tarihi AS date) BETWEEN " . \App\Support\SqlDate::any('s.tarih1') . " AND " . \App\Support\SqlDate::any('s.tarih2') . "
      ORDER BY s.id DESC
 ) AS sz
 WHERE k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}

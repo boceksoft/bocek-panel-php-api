@@ -66,6 +66,8 @@ final class HomesManagementPricesController extends Controller
             throw new HttpException('Sezon bilgileri kaydedilemedi.', 'DB_UPDATE_FAILED', 500, $e);
         }
 
+        \App\Support\HomesCompletion::refresh($pdo, $id);
+
         $seasonColumns = $this->sezonlarColumns($pdo);
         $this->response->success([
             'id' => $id,
@@ -107,6 +109,10 @@ final class HomesManagementPricesController extends Controller
 
         $pdo = $this->db->pdo();
 
+        $owner = $pdo->prepare("SELECT islem_id FROM sezonlar WHERE id = :seasonId AND islem = 'emlak'");
+        $owner->execute([':seasonId' => $seasonId]);
+        $homeId = (int) $owner->fetchColumn();
+
         $stmt = $pdo->prepare('DELETE FROM sezonlar WHERE id = :seasonId');
         $stmt->execute([
             ':seasonId' => $seasonId,
@@ -115,6 +121,8 @@ final class HomesManagementPricesController extends Controller
         if ($stmt->rowCount() <= 0) {
             throw new HttpException('Secilen sezon bulunamadi.', 'NOT_FOUND', 404);
         }
+
+        \App\Support\HomesCompletion::refresh($pdo, $homeId);
 
         $this->response->success([
             'id' => $seasonId,
@@ -1205,6 +1213,9 @@ final class HomesManagementPricesController extends Controller
      */
     private function prepareSeasonsForExtraPaymentRange(PDO $pdo, int $homeId, string $startDate, string $endDate): array
     {
+        // sezonlar tarihleri iki bicimde olabilir (gg.aa.yyyy, yyyy-aa-gg).
+        $anyTarih1 = \App\Support\SqlDate::any('tarih1');
+        $anyTarih2 = \App\Support\SqlDate::any('tarih2');
         $stmt = $pdo->prepare(
             "SELECT id,
                     tarih1,
@@ -1212,9 +1223,9 @@ final class HomesManagementPricesController extends Controller
              FROM sezonlar
              WHERE islem_id = :homeId
                AND islem = 'emlak'
-               AND CONVERT(date, tarih1, 104) <= CONVERT(date, :endDate, 104)
-               AND CONVERT(date, tarih2, 104) >= CONVERT(date, :startDate, 104)
-             ORDER BY CONVERT(date, tarih1, 104) ASC, id ASC"
+               AND {$anyTarih1} <= CONVERT(date, :endDate, 104)
+               AND {$anyTarih2} >= CONVERT(date, :startDate, 104)
+             ORDER BY {$anyTarih1} ASC, id ASC"
         );
         $stmt->execute([
             ':homeId' => $homeId,

@@ -398,11 +398,11 @@ SELECT
     h.ribbon2{$c['dbt']} AS ribbon2,
     h.yuzme_havuzu, h.kisi, h.oda_sayisi,
     CASE WHEN EXISTS (
-        SELECT 1
+        SELECT 1 
         FROM sezonlar sz_isitma
         WHERE sz_isitma.islem_id = h.id
           AND sz_isitma.islem = 'emlak'
-          AND CONVERT(date, sz_isitma.tarih1, 104) > CONVERT(date, GETDATE(), 104)
+          AND " . \App\Support\SqlDate::any('sz_isitma.tarih1') . " > CONVERT(date, GETDATE(), 104)
           AND ISNULL(sz_isitma.isitmaFiyat, 0) > 0
     ) THEN 'var' ELSE 'yok' END AS havuzisitma,
     '{$c['doviz']}' AS doviz,
@@ -431,7 +431,7 @@ CROSS APPLY (
     SELECT ISNULL(TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), (
         SELECT TOP 1 gece FROM sezonlar
         WHERE site = 1 AND islem = 'emlak' AND islem_id = h.id
-          " . ($c['hasDate'] ? "AND LEN(CONVERT(date, '{$c['t1']}', 104)) >= 8 AND CONVERT(date, '{$c['t1']}', 104) BETWEEN CONVERT(date, tarih1, 104) AND CONVERT(date, tarih2, 104)" : '') . "
+          " . ($c['hasDate'] ? "AND LEN(CONVERT(date, '{$c['t1']}', 104)) >= 8 AND CONVERT(date, '{$c['t1']}', 104) BETWEEN " . \App\Support\SqlDate::any('tarih1') . ' AND ' . \App\Support\SqlDate::any('tarih2') : '') . "
     )), '')), 0) AS val
 ) AS mm
 CROSS APPLY (
@@ -488,8 +488,8 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
                 ISNULL((SELECT DATEDIFF(day, CONVERT(date, '{$t2}', 104), MIN(CONVERT(date, dd.tarih, 104))) FROM dolu dd WHERE dd.emlak = h.id AND dd.durum = 3 AND CONVERT(date, dd.tarih, 104) >= CONVERT(date, '{$t2}', 104)), ISNULL(TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), gece), '')), 0)) AS cikisara
                 FROM sezonlar
                 WHERE site = 1 AND islem = 'emlak' AND islem_id = h.id AND LEN(tarih2) = 10
-                  AND CONVERT(date, '{$t1}', 104) >= CONVERT(date, sezonlar.tarih1, 104)
-                  AND CONVERT(date, '{$t1}', 104) <= CONVERT(date, sezonlar.tarih2, 104)
+                  AND CONVERT(date, '{$t1}', 104) >= " . \App\Support\SqlDate::any('sezonlar.tarih1') . "
+                  AND CONVERT(date, '{$t1}', 104) <= " . \App\Support\SqlDate::any('sezonlar.tarih2') . "
             ) AS sezon ";
             $where = " AND (sezon.girisara >= sezon.gece OR sezon.girisara = 0)
                        AND (sezon.cikisara >= sezon.gece OR sezon.cikisara = 0)
@@ -499,8 +499,8 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
                 SELECT TOP 1 ISNULL(TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), gece), '')), 0) AS gece
                 FROM sezonlar
                 WHERE site = 1 AND islem = 'emlak' AND islem_id = h.id AND LEN(tarih2) = 10
-                  AND CONVERT(date, '{$t1}', 104) >= CONVERT(date, sezonlar.tarih1, 104)
-                  AND CONVERT(date, '{$t1}', 104) <= CONVERT(date, sezonlar.tarih2, 104)
+                  AND CONVERT(date, '{$t1}', 104) >= " . \App\Support\SqlDate::any('sezonlar.tarih1') . "
+                  AND CONVERT(date, '{$t1}', 104) <= " . \App\Support\SqlDate::any('sezonlar.tarih2') . "
             ) AS sezon ";
             $select = " sezon.gece, (CASE WHEN DATEDIFF(day, CONVERT(date, '{$t1}', 104), CONVERT(date, '{$t2}', 104)) >= sezon.gece THEN 0 ELSE 1 END) AS gecemax, sezon.gece AS sezongece, ";
         }

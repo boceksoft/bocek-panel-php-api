@@ -155,9 +155,9 @@ OUTER APPLY (
         }
 
         $seasonDateFilter = $hasDate
-            ? 'AND CONVERT(date, sezonlar.tarih1, 103) < CONVERT(date, :dateTo, 23)
-               AND CONVERT(date, sezonlar.tarih2, 103) > CONVERT(date, :dateFrom, 23)'
-            : 'AND CONVERT(date, sezonlar.tarih2, 103) >= CONVERT(date, GETDATE(), 103)';
+            ? 'AND ' . \App\Support\SqlDate::any('sezonlar.tarih1') . ' < CONVERT(date, :dateTo, 23)
+               AND ' . \App\Support\SqlDate::any('sezonlar.tarih2') . ' > CONVERT(date, :dateFrom, 23)'
+            : 'AND ' . \App\Support\SqlDate::any('sezonlar.tarih2') . ' >= CONVERT(date, GETDATE(), 103)';
 
         $whereSql = implode(' AND ', $where);
         $sql = " 
