@@ -287,9 +287,8 @@ final class CategoriesController extends Controller
             throw new \App\Core\HttpException('Dosya boyutu 10MB limitini asiyor.', 'FILE_TOO_LARGE', 400);
         }
 
-        $finfo = finfo_open(FILEINFO_MIME_TYPE);
-        $mime = finfo_file($finfo, $_FILES['image']['tmp_name']);
-        finfo_close($finfo);
+        // fileinfo eklentisi kapali sunucularda getimagesize'a duser.
+        $mime = Uploads::imageMime((string) $_FILES['image']['tmp_name']);
         $extensions = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
         if (!isset($extensions[$mime])) {
             throw new \App\Core\HttpException('Sadece JPEG, PNG ve WEBP formatlari desteklenmektedir.', 'INVALID_FILE_TYPE', 400);

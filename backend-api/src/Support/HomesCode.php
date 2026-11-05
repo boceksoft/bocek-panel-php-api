@@ -15,6 +15,16 @@ use PDO;
  *            {tip_prefix} (tip.prefix). Ornekler: ovillam '{bolge_harf}-{id+1000}', villavillam 'VR-{id}'.
  * Otomatik kod sadece evkodu bossa yazilir; doldurulmus kod ezilmez. Gerekli bilgi (orn. bolge) yoksa kod
  * uretilmez, sonraki kayitta tekrar denenir.
+ *
+ *   target evkodu : kod homes.evkodu'na yazilir (varsayilan; ovillam, vv).
+ *          baslik : kod sitenin basligi olur (garantivillam paneli): her kayitta baslik{sonek} = kod ve
+ *                   title / description / icerik icindeki {-evkodu-} koda cevrilir; yeni ilanda url{sonek} = kod
+ *                   (panel duzenlemede url'e dokunmaz). Ilan ekranindaki "Villa Basligi" homes.villaadi'ye yazilir
+ *                   ve oradan okunur. Bu hedefte mod her zaman auto; evkodu'na yazilmaz (panel her kayitta bosaltir).
+ *                   garantivillam: ['mode' => 'auto', 'target' => 'baslik', 'format' => '{tip_prefix}-{id+10000}'].
+ *   url    : (sadece target evkodu) true ise yeni ilanda url{sonek} = kod ve title / description / icerik icindeki
+ *            {-evkodu-} koda cevrilir; baslik'a dokunulmaz (KVK paneli scripts.asp yeni_emlak_ekle).
+ *            KVK: ['mode' => 'auto', 'format' => 'KVK-{id+10000}', 'url' => true].
  */
 final class HomesCode
 {
@@ -22,7 +32,7 @@ final class HomesCode
 
     /**
      * @param array<string,mixed> $app
-     * @return array{mode:string,format:string}
+     * @return array{mode:string,format:string,target:string,url:bool}
      */
     public static function config(array $app): array
     {
@@ -32,9 +42,32 @@ final class HomesCode
         if (!in_array($mode, ['off', 'manual', 'auto'], true)) {
             $mode = 'off';
         }
+        $target = strtolower(trim((string) ($raw['target'] ?? 'evkodu')));
+        if ($target !== 'baslik') {
+            $target = 'evkodu';
+        }
+        // Basliga yazilan kod her zaman otomatik (panel gibi); off secildiyse hic calismaz.
+        if ($target === 'baslik' && $mode === 'manual') {
+            $mode = 'auto';
+        }
         $format = trim((string) ($raw['format'] ?? ''));
 
-        return ['mode' => $mode, 'format' => $format !== '' ? $format : self::DEFAULT_FORMAT];
+        // url: yeni ilanda adres = kod (target baslik zaten yapar).
+        $url = $target === 'evkodu' && !empty($raw['url']);
+
+        return ['mode' => $mode, 'format' => $format !== '' ? $format : self::DEFAULT_FORMAT, 'target' => $target, 'url' => $url];
+    }
+
+    /**
+     * Kod basliga mi yaziliyor (target baslik, mod acik)?
+     *
+     * @param array<string,mixed> $app
+     */
+    public static function writesTitle(array $app): bool
+    {
+        $config = self::config($app);
+
+        return $config['mode'] !== 'off' && $config['target'] === 'baslik';
     }
 
     /**
@@ -46,13 +79,16 @@ final class HomesCode
     public static function definition(PDO $pdo, array $app): array
     {
         $config = self::config($app);
-        if ($config['mode'] === 'off' || !self::hasColumn($pdo)) {
+        $available = $config['target'] === 'baslik' ? self::hasHomesColumn($pdo, 'baslik') : self::hasColumn($pdo);
+        if ($config['mode'] === 'off' || !$available) {
             return ['mode' => 'off'];
         }
 
         return [
             'mode' => $config['mode'],
             'format' => $config['format'],
+            'target' => $config['target'],
+            'url' => $config['url'],
             'sonrakiId' => self::nextIdEstimate($pdo),
         ];
     }
@@ -66,11 +102,43 @@ final class HomesCode
      */
     public static function updates(array $app, array $payload): array
     {
-        if (self::config($app)['mode'] === 'off' || !array_key_exists('evkodu', $payload) || is_array($payload['evkodu'])) {
+        $config = self::config($app);
+        if ($config['mode'] === 'off' || $config['target'] === 'baslik'
+            || !array_key_exists('evkodu', $payload) || is_array($payload['evkodu'])
+        ) {
             return [];
         }
 
         return ['evkodu' => trim((string) $payload['evkodu'])];
+    }
+
+    /**
+     * Target baslik: ilan ekranindaki villa adi (payload villaadi -> baslik) homes.villaadi'ye de yazilir;
+     * baslik kayittan sonra applyAuto ile koda cevrilir (kod uretilemezse villa adi kalir).
+     *
+     * @param array<string,mixed> $app
+     * @param array<string,mixed> $updates homes kolon => deger
+     * @return array<string,mixed>
+     */
+    public static function adjustUpdates(PDO $pdo, array $app, array $updates): array
+    {
+        if (!self::writesTitle($app) || !array_key_exists('baslik', $updates) || !self::hasHomesColumn($pdo, 'villaadi')) {
+            return $updates;
+        }
+        $updates['villaadi'] = $updates['baslik'];
+
+        return $updates;
+    }
+
+    /**
+     * Ilan detayinda gosterilecek villa adi kolonlari (oncelik sirasiyla).
+     *
+     * @param array<string,mixed> $app
+     * @return array<int,string>
+     */
+    public static function nameColumns(array $app): array
+    {
+        return self::writesTitle($app) ? ['villaadi', 'baslik'] : ['baslik'];
     }
 
     /**
@@ -83,6 +151,35 @@ final class HomesCode
     public static function applyAuto(PDO $pdo, array $app, int $homeId, array $payload, bool $isCreate): ?string
     {
         $config = self::config($app);
+        if ($homeId > 0 && $config['mode'] === 'auto' && $config['target'] === 'baslik') {
+            return self::applyTitle($pdo, $app, $config['format'], $homeId, $isCreate);
+        }
+        $code = self::applyEvkodu($pdo, $config, $homeId, $payload, $isCreate);
+
+        // url secenegi: yeni ilanda adres = kod, {-evkodu-} = kod (otomatik uretilen ya da elle girilen kod).
+        if ($homeId > 0 && $isCreate && $config['url'] && $config['mode'] !== 'off' && self::hasColumn($pdo)) {
+            $current = $code;
+            if ($current === null) {
+                $stmt = $pdo->prepare('SELECT evkodu FROM homes WHERE id = :id');
+                $stmt->execute([':id' => $homeId]);
+                $current = trim((string) $stmt->fetchColumn());
+            }
+            if ($current !== '') {
+                self::applyCodeColumns($pdo, $app, $current, $homeId, false, true);
+            }
+        }
+
+        return $code;
+    }
+
+    /**
+     * Otomatik modda bos evkodu'nu format'a gore doldurur. Uretilen kodu, uretilmediyse null doner.
+     *
+     * @param array{mode:string,format:string,target:string,url:bool} $config
+     * @param array<string,mixed> $payload
+     */
+    private static function applyEvkodu(PDO $pdo, array $config, int $homeId, array $payload, bool $isCreate): ?string
+    {
         if ($homeId <= 0 || $config['mode'] !== 'auto' || !self::hasColumn($pdo)) {
             return null;
         }
@@ -108,6 +205,89 @@ final class HomesCode
         $stmt->execute([':code' => $code, ':id' => $homeId]);
 
         return $stmt->rowCount() > 0 ? $code : null;
+    }
+
+    /**
+     * Target baslik (garantivillam paneli scripts.asp yeni_emlak_ekle / emlak_duzenle):
+     *   baslik = kod, title / description / icerik icindeki {-evkodu-} = kod, yeni ilanda url = kod.
+     * Her site soneki icin (site_column_suffixes), kolon varsa. Kod uretilemezse (orn. tip.prefix bos) dokunmaz.
+     *
+     * @param array<string,mixed> $app
+     */
+    private static function applyTitle(PDO $pdo, array $app, string $format, int $homeId, bool $isCreate): ?string
+    {
+        $code = self::generate($pdo, $format, $homeId);
+        if ($code === null) {
+            return null;
+        }
+
+        return self::applyCodeColumns($pdo, $app, $code, $homeId, true, $isCreate) ? $code : null;
+    }
+
+    /**
+     * Kodu homes kolonlarina yazar, her site soneki icin (site_column_suffixes), kolon varsa:
+     *   $setTitle: baslik{sonek} = kod;  $setUrl: url{sonek} = kod;  her zaman title / description / icerik {-evkodu-} = kod.
+     *
+     * @param array<string,mixed> $app
+     */
+    private static function applyCodeColumns(PDO $pdo, array $app, string $code, int $homeId, bool $setTitle, bool $setUrl): bool
+    {
+        $suffixes = $app['site_column_suffixes'] ?? [];
+        $suffixes = is_array($suffixes) && $suffixes !== [] ? array_values(array_unique(array_map('strval', $suffixes))) : [''];
+        if (!in_array('', $suffixes, true)) {
+            array_unshift($suffixes, '');
+        }
+
+        $sets = [];
+        foreach ($suffixes as $suffix) {
+            if (!preg_match('/^[A-Za-z0-9_]*$/', $suffix)) {
+                continue;
+            }
+            if ($setTitle && self::hasHomesColumn($pdo, 'baslik' . $suffix)) {
+                $sets[] = '[baslik' . $suffix . '] = :code';
+            }
+            if ($setUrl && self::hasHomesColumn($pdo, 'url' . $suffix)) {
+                $sets[] = '[url' . $suffix . '] = :code';
+            }
+            foreach (['title', 'description', 'icerik'] as $column) {
+                if (self::hasHomesColumn($pdo, $column . $suffix)) {
+                    // ntext kolonlarda da calissin diye nvarchar(max)'a cevrilir.
+                    $sets[] = '[' . $column . $suffix . "] = REPLACE(CAST([" . $column . $suffix . "] AS nvarchar(max)), '{-evkodu-}', :code)";
+                }
+            }
+        }
+        if ($sets === []) {
+            return false;
+        }
+
+        $sql = 'UPDATE homes SET ' . implode(', ', $sets) . ' WHERE id = :id';
+        $sql = self::numberPlaceholders($sql, ':code');
+        $stmt = $pdo->prepare($sql['sql']);
+        foreach ($sql['names'] as $name) {
+            $stmt->bindValue($name, $code);
+        }
+        $stmt->bindValue(':id', $homeId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return true;
+    }
+
+    /**
+     * PDO sqlsrv ayni isimli parametreyi birden fazla kullanmaya izin vermez: :code -> :code0, :code1 ...
+     *
+     * @return array{sql:string,names:array<int,string>}
+     */
+    private static function numberPlaceholders(string $sql, string $name): array
+    {
+        $names = [];
+        $sql = preg_replace_callback('/' . preg_quote($name, '/') . '\b/', static function () use ($name, &$names): string {
+            $numbered = $name . count($names);
+            $names[] = $numbered;
+
+            return $numbered;
+        }, $sql);
+
+        return ['sql' => (string) $sql, 'names' => $names];
     }
 
     /**
@@ -204,6 +384,26 @@ final class HomesCode
         } catch (\Throwable $e) {
             return 0;
         }
+    }
+
+    private static function hasHomesColumn(PDO $pdo, string $column): bool
+    {
+        static $columns = null;
+        if ($columns === null) {
+            $columns = [];
+            try {
+                $rows = $pdo->query(
+                    "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('homes')"
+                )->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($rows as $name) {
+                    $columns[strtolower((string) $name)] = true;
+                }
+            } catch (\Throwable $e) {
+                $columns = [];
+            }
+        }
+
+        return isset($columns[strtolower($column)]);
     }
 
     private static function hasColumn(PDO $pdo): bool

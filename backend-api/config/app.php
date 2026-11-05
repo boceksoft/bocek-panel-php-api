@@ -29,6 +29,9 @@ return [
     // | auto (alan var; bos birakilirsa kayitta format'a gore verilir, dolu kod ezilmez). format belirtecleri:
     // {id}, {id+N}, {bolge_harf} (emlak bolgesi basliginin ilk harfi), {bolge}, {tip_prefix} (tip.prefix).
     // ovillam: ['mode' => 'auto', 'format' => '{bolge_harf}-{id+1000}'], villavillam: 'VR-{id}'. Bkz. src/Support/HomesCode.php
+    // target: evkodu (varsayilan) | baslik (kod sitenin basligi olur: baslik = kod, {-evkodu-} koda cevrilir, yeni ilanda
+    // url = kod; villa adi homes.villaadi'de). garantivillam: ['mode' => 'auto', 'target' => 'baslik', 'format' => '{tip_prefix}-{id+10000}']
+    // url: true (sadece target evkodu): yeni ilanda url = kod, {-evkodu-} = kod, baslik'a dokunulmaz. KVK: ['mode' => 'auto', 'format' => 'KVK-{id+10000}', 'url' => true]
     'homes_code' => ['mode' => 'off', 'format' => '{bolge_harf}-{id+1000}'],
 
     // Yeni ilanda bos (0 fiyatli) aylik sezon satirlari (eski panel yeni_emlak_ekle gibi). enabled: ilan ekleme
@@ -47,9 +50,14 @@ return [
     'homes_discount_type' => true,
 
     // Villa indirim turleri (indirimler.discountType); degerlerin anlami siteye gore degisir. Bkz. src/Support/HomesDiscountTypes.php
-    //   options: value, label, payer (rezervasyonda kim karsilar: site | ev_sahibi | genel), base (price | commission).
+    //   options: value, label, payer (rezervasyonda kim karsilar: site | ev_sahibi | genel),
+    //            base (price | commission: fiyat x KO x oran | owner_share: fiyat x (100 - KO) x oran).
+    //   kiralikvillakalkanda: ['default' => 1, 'options' => [
+    //       ['value' => 1, 'label' => 'Genel İndirim', 'payer' => 'genel'],
+    //       ['value' => 2, 'label' => 'Acenta İndirimi', 'payer' => 'site'],
+    //       ['value' => 3, 'label' => 'Ev Sahibi İndirimi', 'payer' => 'ev_sahibi', 'base' => 'owner_share']]]
     //   garantivillam: ['default' => 1, 'options' => [
-    //       ['value' => 1, 'label' => 'Genel İndirim', 'payer' => 'site'],
+    //       ['value' => 1, 'label' => 'Genel İndirim', 'payer' => 'genel'],
     //       ['value' => 2, 'label' => 'Acenta İndirimi', 'payer' => 'site', 'base' => 'commission']]]
     'homes_discount_types' => [
         'enabled' => true,

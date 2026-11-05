@@ -670,18 +670,23 @@ WHERE h.id = {$entityId}";
         // Product::Calculate ile ayni). payer: rezervasyon ekraninda indirimin baslangic bolusumu.
         $commissionForDiscount = (float) str_replace(',', '.', trim((string) ($home['kazancorani'] ?? '')));
         $deductDiscountFromDeposit = 0;
+        $depositBaseAdd = 0; // on odeme indirimsiz fiyat uzerinden (indirim on odemeden ya da kalandan duser)
         if ((float) $home['indirimTutari'] > 0) {
             $applied = HomesDiscountTypes::appliedDiscount($pdo, $entityId, (int) $priceSite, $start, $end, $this->app);
             if ($applied !== null) {
                 $option = HomesDiscountTypes::option($applied['type'], $this->app);
                 $json['result']['discount_type'] = $applied['type'];
                 $json['result']['discount_payer'] = $option['payer'];
-                if ($option['base'] === 'commission') {
+                if ($option['base'] === 'commission' || $option['base'] === 'owner_share') {
+                    // commission: firmanin payinin orani, on odemeden duser (garantivillam Acenta).
+                    // owner_share: ev sahibinin payinin (fiyat - komisyon) orani, kalandan duser (kiralikvillakalkanda Ev Sahibi).
                     $fullPrice = $price + (int) $home['indirimTutari'];
-                    $commissionDiscount = (int) round($fullPrice * $commissionForDiscount / 100 * $applied['rate'] / 100);
-                    $price = $fullPrice - $commissionDiscount;
-                    $home['indirimTutari'] = $commissionDiscount;
-                    $deductDiscountFromDeposit = $commissionDiscount;
+                    $share = $option['base'] === 'commission' ? $commissionForDiscount : max(0.0, 100 - $commissionForDiscount);
+                    $shareDiscount = (int) round($fullPrice * $share / 100 * $applied['rate'] / 100);
+                    $price = $fullPrice - $shareDiscount;
+                    $home['indirimTutari'] = $shareDiscount;
+                    $depositBaseAdd = $shareDiscount;
+                    $deductDiscountFromDeposit = $option['base'] === 'commission' ? $shareDiscount : 0;
                 }
             }
         }
@@ -703,11 +708,14 @@ WHERE h.id = {$entityId}";
 
         $depositRate = !empty($home['depozito']) ? (float) $home['depozito'] : 0.0;
         $deposit = $depositRate > 0
-            ? (($price + $depozitodanDus + $deductDiscountFromDeposit) / 100 * $depositRate) - $depozitodanDus - $deductDiscountFromDeposit
+            ? (($price + $depozitodanDus + $depositBaseAdd) / 100 * $depositRate) - $depozitodanDus - $deductDiscountFromDeposit
             : -$depozitodanDus;
         if ($deposit < 0) {
             $deposit = 0;
         }
+        // On odeme tam sayiya kesilir (sitelerin (int) davranisi), kalan = fiyat - on odeme: ikisinin toplami her zaman
+        // fiyat (eskiden ikisi ayri ayri kesildigi icin toplam 1-2 birim eksik kaliyordu).
+        $deposit = (int) $deposit;
         $remainingWithoutFees = $price - $deposit;
         $remaining = $remainingWithoutFees;
 

@@ -13,8 +13,11 @@ use PDO;
  *   default : tur gonderilmezse / bos (NULL) kayitlarda kullanilan deger.
  *   options : [{value, label, payer, base}]
  *             payer: rezervasyonda indirimi kim karsilar (baslangic bolusumu): site | ev_sahibi | genel (komisyon oraninda)
- *             base : price (varsayilan; indirim = fiyat x oran) | commission (indirim = fiyat x komisyon% x oran;
- *                    garantivillam "Acenta Indirimi": oran komisyondan verilir, musteriye fiyat x KO x oran yansir)
+ *             base : price (varsayilan; indirim = fiyat x oran)
+ *                    | commission (indirim = fiyat x komisyon% x oran; firmanin payindan, on odemeden duser;
+ *                      garantivillam "Acenta Indirimi")
+ *                    | owner_share (indirim = fiyat x (100 - komisyon%) x oran; ev sahibinin payindan, kalandan duser;
+ *                      kiralikvillakalkanda "Ev Sahibi Indirimi")
  * Varsayilan (villavillam paneli): 1 Acenta (site), 2 Ev Sahibi, 3 Genel; default 3.
  * garantivillam (paneli calendar.asp / doldur.asp, site Product.php): 1 Genel (site), 2 Acenta (site, commission); default 1.
  */
@@ -43,7 +46,7 @@ final class HomesDiscountTypes
                 'value' => (int) $option['value'],
                 'label' => trim((string) ($option['label'] ?? '')) !== '' ? (string) $option['label'] : (string) $option['value'],
                 'payer' => in_array($payer, ['site', 'ev_sahibi', 'genel'], true) ? $payer : 'site',
-                'base' => ($option['base'] ?? 'price') === 'commission' ? 'commission' : 'price',
+                'base' => in_array($option['base'] ?? 'price', ['commission', 'owner_share'], true) ? $option['base'] : 'price',
             ];
         }
         if ($options === []) {
