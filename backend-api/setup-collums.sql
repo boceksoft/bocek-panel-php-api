@@ -670,6 +670,14 @@ ALTER TABLE [dbo].[kayitlar] ADD [oznot] nvarchar(MAX) NULL;
 END;
 GO
 
+-- Kasa raporu: ev sahibine odendi mi (vv / ovillam panel odemeraporsayfasi). garantivillam panelinde yoktu (05.11).
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'odendi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [odendi] bit NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kayitlar]', N'arandi') IS NULL
 BEGIN
@@ -3066,6 +3074,14 @@ IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kayitlar]', N'oznot') IS NULL
 BEGIN
 ALTER TABLE [dbo].[kayitlar] ADD [oznot] nvarchar(MAX) NULL;
+END;
+GO
+
+-- Kasa raporu: ev sahibine odendi mi (vv / ovillam panel odemeraporsayfasi). garantivillam panelinde yoktu (05.11).
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'odendi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [odendi] bit NULL;
 END;
 GO
 

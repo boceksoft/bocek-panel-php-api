@@ -20,7 +20,7 @@ final class ImgDownloadController extends Controller
         $villaId = $this->request->input('villaId');
         $isDelete = $this->request->input('isDelete');
         $uploadId = $this->request->input('uploadId');
-        
+
         if ($isDelete == 'true' || $isDelete === true || $isDelete === '1' || $isDelete === 1) {
             if (!$uploadId) {
                 throw new HttpException('uploadId eksik.', 'MISSING_UPLOAD_ID', 400);
@@ -90,7 +90,6 @@ final class ImgDownloadController extends Controller
         if (!$villaId || !is_numeric($villaId)) {
             throw new HttpException('villaId eksik veya geÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ersiz.', 'INVALID_VILLA_ID', 400);
         }
-
         // Villa var mi?
         $stmtVilla = $this->db->pdo()->prepare('SELECT COUNT(*) FROM homes WHERE id = :id');
         $stmtVilla->execute(['id' => $villaId]);
@@ -171,9 +170,8 @@ final class ImgDownloadController extends Controller
         // MIME ve Dosya Tipi KontrolÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼
         // Villa fotograflari sadece JPEG (sitede PNG/WEBP kullanilmiyor).
         $allowedMimes = ['image/jpeg'];
-        $finfo = finfo_open(FILEINFO_MIME_TYPE);
-        $mime = finfo_file($finfo, $_FILES['image']['tmp_name']);
-        finfo_close($finfo);
+        // fileinfo eklentisi kapali sunucularda getimagesize'a duser.
+        $mime = Uploads::imageMime((string) $_FILES['image']['tmp_name']);
 
         if (!in_array($mime, $allowedMimes)) {
             throw new HttpException('Sadece JPG / JPEG fotograf yuklenebilir.', 'INVALID_FILE_TYPE', 400);

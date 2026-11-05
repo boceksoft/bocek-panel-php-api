@@ -147,6 +147,7 @@ VALUES
     (N'dbo', N'kayitlar', N'MigrationStatus'),
     (N'dbo', N'kayitlar', N'musteri'),
     (N'dbo', N'kayitlar', N'odeme'),
+    (N'dbo', N'kayitlar', N'odendi'),
     (N'dbo', N'kayitlar', N'on_odeme'),
     (N'dbo', N'kayitlar', N'oznot'),
     (N'dbo', N'kayitlar', N'promotionCode'),

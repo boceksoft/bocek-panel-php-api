@@ -526,6 +526,8 @@ final class HomesManagementDetailUpdateController extends Controller
         foreach (HomesCode::updates($this->app, $payload) as $column => $value) {
             $updates[$column] = $value;
         }
+        // homes_code target baslik: villa adi homes.villaadi'ye de yazilir (baslik kayittan sonra koda cevrilir).
+        $updates = HomesCode::adjustUpdates($this->db->pdo(), $this->app, $updates);
 
         // Konum notu: istekteki sitenin homes.konum_not{sonek} kolonu.
         if ($this->hasPath($payload, 'konumnotu')) {

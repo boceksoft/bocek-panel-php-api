@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\HomesCode;
 use App\Support\HomesDiscountTypes;
 use App\Support\HomesExtraFields;
 use PDO;
@@ -98,7 +99,8 @@ final class HomesManagementDetailController extends Controller
         $this->response->success([
             'genelBilgiler' => [
                 'temelBilgiler' => [
-                    'villa_adi' => $this->firstValueFrom($rs, ['baslik']),
+                    // homes_code target baslik: baslik ev kodudur, villa adi homes.villaadi'de.
+                    'villa_adi' => $this->firstValueFrom($rs, HomesCode::nameColumns($this->app)),
                     'ev_kodu' => $this->firstValueFrom($rs, ['evkodu']),
                     'kisa_aciklama' => $this->firstValueFrom($rs, ['kisa_icerik']),
                     'emlak_tipi_baslik' => $this->firstValueFrom($rs, ['emlak_tipi_baslik']),

@@ -3864,6 +3864,37 @@ WHERE k.odeme = {$paymentType}
         }
     }
 
+    /**
+     * dbo.{table} tablosunda kolon var mi (siteden siteye kolonlar farkli; orn. garantivillam'da kayitlar.odendi yok).
+     */
+    private function hasColumn(PDO $pdo, string $table, string $column): bool
+    {
+        static $cache = [];
+        $key = strtolower($table);
+        if (!isset($cache[$key])) {
+            $cache[$key] = [];
+            try {
+                $stmt = $pdo->prepare('SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(:table)');
+                $stmt->execute([':table' => 'dbo.' . $table]);
+                foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $name) {
+                    $cache[$key][strtolower((string) $name)] = true;
+                }
+            } catch (\Throwable $e) {
+                $cache[$key] = [];
+            }
+        }
+
+        return isset($cache[$key][strtolower($column)]);
+    }
+
+    /**
+     * kayitlar kolonu varsa "k.kolon", yoksa NULL (SELECT / WHERE icin).
+     */
+    private function kayitlarColumnSql(PDO $pdo, string $column): string
+    {
+        return $this->hasColumn($pdo, 'kayitlar', $column) ? 'k.' . $column : 'NULL';
+    }
+
     private function hasTable(PDO $pdo, string $table): bool
     {
         try {
@@ -4139,10 +4170,11 @@ WHERE k.odeme = {$paymentType}
         }
 
         if ($paidStatus !== null) {
+            $odendiSql = $this->kayitlarColumnSql($pdo, 'odendi');
             if ($paidStatus === 1) {
-                $where[] = 'ISNULL(k.odendi, 0) = 1';
+                $where[] = "ISNULL({$odendiSql}, 0) = 1";
             } else {
-                $where[] = 'ISNULL(k.odendi, 0) = 0';
+                $where[] = "ISNULL({$odendiSql}, 0) = 0";
             }
         }
 
@@ -4196,7 +4228,13 @@ WHERE k.odeme = {$paymentType}
 
         // VirtualPos join
         $hasVirtualPos = $this->hasVirtualPosTable($pdo);
-        $posJoin = $hasVirtualPos ? 'LEFT JOIN [Finance].[VirtualPos] vp ON vp.Id = TRY_CONVERT(int, k.banka)' : '';
+        // Siteye gore olmayabilen kayitlar kolonlari (yoksa NULL): garantivillam'da odendi yok.
+        $kc = [];
+        foreach (['banka', 'odendi', 'oznot', 'eskifiyat', 'kar', 'kazancorani', 'indirimevsahibi', 'tur'] as $col) {
+            $kc[$col] = $this->kayitlarColumnSql($pdo, $col);
+        }
+        $posJoin = $hasVirtualPos && $kc['banka'] !== 'NULL' ? 'LEFT JOIN [Finance].[VirtualPos] vp ON vp.Id = TRY_CONVERT(int, k.banka)' : '';
+        $hasVirtualPos = $posJoin !== '';
         $posSelect = $hasVirtualPos ? 'vp.Name AS pos_banka_name' : 'NULL AS pos_banka_name';
 
         // kayitlar_odeme join
@@ -4247,23 +4285,23 @@ WHERE k.odeme = {$paymentType}
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.rez_tarihi, 104), TRY_CONVERT(date, k.rez_tarihi, 103), TRY_CONVERT(date, k.rez_tarihi, 120), TRY_CONVERT(date, k.rez_tarihi)), 23) AS giris_tarihi_iso,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 104) AS cikis_tarihi,
                 CONVERT(varchar(10), COALESCE(TRY_CONVERT(date, k.gelecek_tarih, 104), TRY_CONVERT(date, k.gelecek_tarih, 103), TRY_CONVERT(date, k.gelecek_tarih, 120), TRY_CONVERT(date, k.gelecek_tarih)), 23) AS cikis_tarihi_iso,
-                k.banka AS kayit_banka,
+                {$kc['banka']} AS kayit_banka,
                 {$posSelect},
                 {$siteSelect},
                 k.odeme,
-                k.odendi AS kayit_odendi,
-                k.oznot,
+                {$kc['odendi']} AS kayit_odendi,
+                {$kc['oznot']} AS oznot,
                 k.doviz AS k_doviz,
                 k.kur AS k_kur,
                 k.toplam_tutar AS k_toplam_tutar,
                 k.on_odeme AS k_on_odeme,
                 k.kalan AS k_kalan,
                 k.tutar AS k_tutar,
-                k.eskifiyat AS k_eskifiyat,
-                k.kar AS k_kar,
-                k.kazancorani AS k_kazancorani,
-                k.indirimevsahibi AS k_indirimevsahibi,
-                k.tur AS k_tur,
+                {$kc['eskifiyat']} AS k_eskifiyat,
+                {$kc['kar']} AS k_kar,
+                {$kc['kazancorani']} AS k_kazancorani,
+                {$kc['indirimevsahibi']} AS k_indirimevsahibi,
+                {$kc['tur']} AS k_tur,
                 {$safeStatusSelect},
                 {$koSelect}
             FROM dbo.kayitlar k
@@ -4605,7 +4643,10 @@ WHERE k.odeme = {$paymentType}
             throw new HttpException('Geçerli bir rezervasyon ID (id) belirtilmelidir.', 'VALIDATION_ERROR', 422);
         }
 
-        $stmt = $pdo->prepare('SELECT id, evid, site, musteri, toplam_tutar, kazancorani, oznot, odendi FROM dbo.kayitlar WHERE id = :id');
+        $hasOdendi = $this->hasColumn($pdo, 'kayitlar', 'odendi');
+        $hasOznot = $this->hasColumn($pdo, 'kayitlar', 'oznot');
+        $stmt = $pdo->prepare('SELECT id, evid, site, musteri, toplam_tutar, '
+            . $this->kayitlarColumnSql($pdo, 'kazancorani') . ' AS kazancorani FROM dbo.kayitlar k WHERE k.id = :id');
         $stmt->execute([':id' => $id]);
         $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$reservation) {
@@ -4637,6 +4678,13 @@ WHERE k.odeme = {$paymentType}
                 $newNote = trim((string) $val);
                 break;
             }
+        }
+
+        if ($hasPaidStatus && !$hasOdendi) {
+            throw new HttpException('Bu sitede ödendi bilgisi tutulmuyor (kayitlar.odendi kolonu yok).', 'NOT_SUPPORTED', 422);
+        }
+        if ($hasNote && !$hasOznot) {
+            throw new HttpException('Bu sitede rezervasyon notu tutulmuyor (kayitlar.oznot kolonu yok).', 'NOT_SUPPORTED', 422);
         }
 
         if (!$hasPaidStatus && !$hasNote) {
@@ -4698,7 +4746,8 @@ WHERE k.odeme = {$paymentType}
         }
 
         // Güncel durumu çek
-        $fetchStmt = $pdo->prepare('SELECT id, odendi, oznot FROM dbo.kayitlar WHERE id = :id');
+        $fetchStmt = $pdo->prepare('SELECT k.id, ' . $this->kayitlarColumnSql($pdo, 'odendi') . ' AS odendi, '
+            . $this->kayitlarColumnSql($pdo, 'oznot') . ' AS oznot FROM dbo.kayitlar k WHERE k.id = :id');
         $fetchStmt->execute([':id' => $id]);
         $row = $fetchStmt->fetch(PDO::FETCH_ASSOC);
 

@@ -10,7 +10,6 @@ use App\Middleware\AuthToken;
 use App\Middleware\IpWhitelist;
 
 ob_start();
-
 /*
  * Tek giriş noktası (front controller). Tüm /backend-api/* istekleri buraya düşer.
  * Akış: bootstrap -> CORS -> middleware (IP, Auth) -> router -> yanıt.
