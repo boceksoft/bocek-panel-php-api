@@ -358,6 +358,161 @@ final class KiralamatakvimiController extends Controller
     }
 
     /**
+     * Özel ilanın WhatsApp durumu: bağlı grup (yoksa null) ve grup listesini çekmek için seçilebilecek
+     * numaralar (onaylı ve API key'i tanımlı olanlar; isMaster varsayılan seçimdir).
+     *
+     * @Get("whatsapp")
+     * @query homesId int required Villa id'si
+     */
+    public function whatsapp(): void
+    {
+        $pdo = $this->db->pdo();
+        $estateId = $this->specialEstateId($pdo, (int) $this->request->query('homesId', 0));
+        $credentials = $this->ktCredentials($pdo);
+
+        $group = $this->ktApi($credentials, 'GET', 'estate/whatsapp', ['estateId' => $estateId]);
+        $groupId = (int) ($group['WhatsappGroupId'] ?? $group['whatsappGroupId'] ?? 0);
+
+        $numbers = [];
+        foreach ($this->ktApi($credentials, 'GET', 'establishment/numbers') as $number) {
+            if (!is_array($number)) {
+                continue;
+            }
+            $status = $number['Status'] ?? $number['status'] ?? null;
+            $approved = $status === 1 || $status === '1' || strcasecmp((string) $status, 'Approved') === 0;
+            if (!$approved || empty($number['HasApiKey'] ?? $number['hasApiKey'] ?? false)) {
+                continue;
+            }
+            $numbers[] = [
+                'whatsappContactId' => (int) ($number['WhatsappContactId'] ?? $number['whatsappContactId'] ?? 0),
+                'phoneNumber' => (string) ($number['PhoneNumber'] ?? $number['phoneNumber'] ?? ''),
+                'isMaster' => !empty($number['IsMasterWhatsappContact'] ?? $number['isMasterWhatsappContact'] ?? false),
+            ];
+        }
+
+        $this->response->success([
+            'estateId' => $estateId,
+            'group' => $groupId > 0 ? [
+                'whatsappGroupId' => $groupId,
+                'name' => (string) ($group['Name'] ?? $group['name'] ?? ''),
+                'createdOn' => $group['CreatedOn'] ?? $group['createdOn'] ?? null,
+            ] : null,
+            'numbers' => $numbers,
+        ]);
+    }
+
+    /**
+     * Seçilen numaranın API key'i ile WhatsApp grupları (KT whatsapp/specialgroups). search verilirse
+     * gruplar doğrudan WhatsApp'ta isimle aranır.
+     *
+     * @Get("whatsapp/groups")
+     * @query homesId int required Villa id'si
+     * @query whatsappContactId int required Grupları çekilecek numara
+     * @query search string Grup adı (2+ harf)
+     */
+    public function whatsappGroups(): void
+    {
+        $pdo = $this->db->pdo();
+        $estateId = $this->specialEstateId($pdo, (int) $this->request->query('homesId', 0));
+        $contactId = (int) $this->request->query('whatsappContactId', 0);
+        if ($contactId <= 0) {
+            throw new HttpException('Whatsapp numarası seçiniz.', 'VALIDATION', 422);
+        }
+
+        $query = ['estateId' => $estateId, 'whatsappContactId' => $contactId];
+        $search = trim((string) $this->request->query('search', ''));
+        if ($search !== '') {
+            $query['search'] = $search;
+        }
+
+        $groups = [];
+        foreach ($this->ktApi($this->ktCredentials($pdo), 'GET', 'whatsapp/specialgroups', $query, null, 60) as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+            $groups[] = [
+                'id' => (string) ($group['id'] ?? ''),
+                'name' => $group['name'] ?? null,
+                'phoneNumber' => $group['phoneNumber'] ?? null,
+                'whatsappContactId' => (int) ($group['whatsappContactId'] ?? 0),
+            ];
+        }
+
+        $this->response->success(['groups' => $groups]);
+    }
+
+    /**
+     * Özel ilanı seçilen numaranın WhatsApp grubuna bağlar (KT whatsapp/connectestate); doğrulama kodu gerekmez.
+     *
+     * @Post("whatsapp/connect")
+     * @body homesId int required Villa id'si
+     * @body whatsappContactId int required Grubun çekildiği numara
+     * @body groupId string required WhatsApp grup id'si
+     * @body name string Grup adı
+     */
+    public function whatsappConnect(): void
+    {
+        $pdo = $this->db->pdo();
+        $estateId = $this->specialEstateId($pdo, (int) $this->request->input('homesId', 0));
+        $contactId = (int) $this->request->input('whatsappContactId', 0);
+        $groupId = trim((string) $this->request->input('groupId', ''));
+        if ($contactId <= 0 || $groupId === '') {
+            throw new HttpException('Numara ve grup seçiniz.', 'VALIDATION', 422);
+        }
+
+        $result = $this->ktApi($this->ktCredentials($pdo), 'POST', 'whatsapp/connectestate', [], [
+            'estateId' => $estateId,
+            'whatsappContactId' => $contactId,
+            'groupId' => $groupId,
+            'name' => (string) $this->request->input('name', ''),
+        ], 60);
+
+        $this->response->success([
+            'whatsappGroupId' => (int) ($result['whatsappGroupId'] ?? $result['WhatsappGroupId'] ?? 0),
+        ]);
+    }
+
+    /**
+     * Özel ilanın WhatsApp grup bağlantısını kaldırır (KT whatsapp/disconnectestate); doğrulama kodu gerekmez.
+     *
+     * @Post("whatsapp/disconnect")
+     * @body homesId int required Villa id'si
+     * @body whatsappGroupId int required Bağlı grubun KT id'si
+     */
+    public function whatsappDisconnect(): void
+    {
+        $pdo = $this->db->pdo();
+        $estateId = $this->specialEstateId($pdo, (int) $this->request->input('homesId', 0));
+        $whatsappGroupId = (int) $this->request->input('whatsappGroupId', 0);
+        if ($whatsappGroupId <= 0) {
+            throw new HttpException('Geçerli bir grup gereklidir.', 'VALIDATION', 422);
+        }
+
+        $this->ktApi($this->ktCredentials($pdo), 'DELETE', 'whatsapp/disconnectestate', [
+            'whatsappGroupId' => $whatsappGroupId,
+            'estateId' => $estateId,
+        ]);
+
+        $this->response->success([]);
+    }
+
+    /**
+     * Villanın bağlı olduğu takvim; yalnızca Özel takvimler için WhatsApp grubu buradan yönetilir.
+     */
+    private function specialEstateId(PDO $pdo, int $homesId): int
+    {
+        $connection = $this->connection($pdo, $this->homesId($homesId));
+        if ($connection === null) {
+            throw new HttpException('Villa Kiralama Takvimi\'ne bağlı değil.', 'NOT_CONNECTED', 404);
+        }
+        if ($this->estateType($pdo, $connection['estateId']) !== 'Special') {
+            throw new HttpException('WhatsApp grubu buradan yalnızca özel ilanlarda bağlanabilir.', 'VALIDATION', 422);
+        }
+
+        return $connection['estateId'];
+    }
+
+    /**
      * Panel API'sine POST isteği atar. Panel metotları alanları post() ile (form) okur; Estate::Create ise JSON gövde okur.
      * Panel hata durumlarında da JSON döner (400/502); HTTP koduna değil gövdeye bakılır.
      */
@@ -497,9 +652,11 @@ final class KiralamatakvimiController extends Controller
      *
      * @param array{apiKey: string, establishmentId: string} $credentials
      * @param array<string,mixed> $query
+     * @param array<string,mixed>|null $body JSON gövde (GET dışı; boşsa {})
+     * @param int|null $timeout Saniye; boşsa GET 10, diğerleri 30
      * @return array<string,mixed>
      */
-    private function ktApi(array $credentials, string $method, string $path, array $query = []): array
+    private function ktApi(array $credentials, string $method, string $path, array $query = [], $body = null, $timeout = null): array
     {
         $base = rtrim(trim((string) ($this->app['kiralamatakvimi_api_url'] ?? '')) ?: 'https://backend.kiralamatakvimi.com/api', '/');
         $url = $base . '/' . $path . ($query ? '?' . http_build_query($query) : '');
@@ -509,7 +666,7 @@ final class KiralamatakvimiController extends Controller
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_CONNECTTIMEOUT => 10,
             // Okuma sayfa açılışında yapılır; uzun beklenmez.
-            CURLOPT_TIMEOUT => $method === 'GET' ? 10 : 30,
+            CURLOPT_TIMEOUT => $timeout ?? ($method === 'GET' ? 10 : 30),
             CURLOPT_HTTPHEADER => [
                 'Accept: application/json',
                 'Content-Type: application/json',
@@ -518,7 +675,7 @@ final class KiralamatakvimiController extends Controller
             ],
         ];
         if ($method !== 'GET') {
-            $options[CURLOPT_POSTFIELDS] = '{}';
+            $options[CURLOPT_POSTFIELDS] = $body ? (string) json_encode($body) : '{}';
         }
 
         $curl = curl_init($url);
