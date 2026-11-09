@@ -664,6 +664,10 @@ final class ReservationdetailController extends Controller
             'twitter' => $g('twitter'),
             'adres' => $g('adres'),
             'unvan' => $g('unvan'),
+            // TÜRSAB acenta adı (genel.tursabAcentaAdi; villakilavuzu sözleşmesi "Acenta Ünvanı").
+            'acentaAdi' => $g('tursabAcentaAdi'),
+            // Sözleşme maddeleri (panel belgeler/sozlesme.asp: genel.sozlesmeIcerik{dbtable}, HTML; &nbsp; boşluk olur).
+            'sozlesmeIcerik' => str_replace('&nbsp;', ' ', $g('sozlesmeIcerik' . $suffix) !== '' ? $g('sozlesmeIcerik' . $suffix) : $g('sozlesmeIcerik')),
         ];
         // Belgelerdeki imza resmi (reservation_mail.signature_url; CDN'e göre yol ya da tam adres).
         $site['imza'] = $this->signatureUrl($mailSettings['signature_url'], $site['cdn']);

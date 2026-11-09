@@ -77,6 +77,8 @@ final class MailSiteController extends Controller
                 'twitter' => $g('twitter'),
                 'adres' => $g('adres'),
                 'unvan' => $g('unvan'),
+                'acentaAdi' => $g('tursabAcentaAdi'),
+                'sozlesmeIcerik' => str_replace('&nbsp;', ' ', $g('sozlesmeIcerik' . $suffix) !== '' ? $g('sozlesmeIcerik' . $suffix) : $g('sozlesmeIcerik')),
                 // Belgelerdeki imza (reservation_mail.signature_url; reservationdetail ile aynı kural).
                 'imza' => $signature,
             ],
