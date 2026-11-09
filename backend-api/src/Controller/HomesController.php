@@ -34,6 +34,7 @@ final class HomesController extends Controller
      * @query sadecebizde int 1: sadece homes.sadece_bizde = 1 villalar (Config'de Sadece Bizde secili ise)
      * @query pasifler int 1: aktif olmayan villalar da gelir (sadece Ozel Listeler villa ekrani)
      * @query indirim int 1: secilen tarihlerde indirimi olan villalar (sitede gosterilen indirimler)
+     * @query mimicFrontend int 1: frontend kanun7464 kurallarını (gavel & izin süresi) uygular
      * @query order_by int Sıralama (0-6)
      * @query page int Sayfa
      * @query per_page int Sayfa başına kayıt
@@ -177,7 +178,33 @@ final class HomesController extends Controller
 
         // Dinamik WHERE
         $params = [];
-        if ($gKuraliParam === '1') {
+        $mimicFrontend = ($this->p('mimicFrontend') === '1' || strtolower($this->p('mimicFrontend')) === 'true');
+        if ($mimicFrontend) {
+            $genel = $this->genelSettings($pdo, $siteId, $dbt);
+            $listingOpt = $genel['gavellistingoption'] ?? null;
+            $explodeOpt = $genel['gavelexplodeoption'] ?? null;
+            $explodeDate = trim((string) ($genel['gavelexplodedate'] ?? ''));
+
+            if ($listingOpt === 0 || $listingOpt === '0' || $listingOpt === false || strtolower((string) $listingOpt) === 'false') {
+                $sql .= ' AND ISNULL(kanun.gavel, 0) = 0 ';
+            }
+
+            if ($explodeOpt === 0 || $explodeOpt === '0' || $explodeOpt === false || strtolower((string) $explodeOpt) === 'false') {
+                $durationExpr = 'ISNULL(' . $this->gavelDurationSql('kanun') . ', 1)';
+                $explodeDateObj = $this->parseDate($explodeDate);
+                if ($explodeDateObj !== null) {
+                    $safeExplodeDate = $explodeDateObj->format('Y-m-d');
+                    if ($hasDate) {
+                        $dateExpr = $kisasureli ? 'CONVERT(date, kisasureli.tarih)' : "CONVERT(date, '{$t1}', 104)";
+                        $sql .= " AND ({$durationExpr} IN (0, 1) OR ({$durationExpr} = 2 AND {$dateExpr} <= '{$safeExplodeDate}'))";
+                    } else {
+                        $sql .= " AND ({$durationExpr} IN (0, 1) OR ({$durationExpr} = 2 AND CONVERT(date, '{$safeExplodeDate}') >= CONVERT(date, GETDATE())))";
+                    }
+                } else {
+                    $sql .= " AND {$durationExpr} IN (0, 1)";
+                }
+            }
+        } elseif ($gKuraliParam === '1') {
             $sql .= ' AND ISNULL(kanun.gavel, 0) = 0 ';
         }
 
@@ -830,6 +857,35 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
         }
 
         return $domain;
+    }
+
+    /**
+     * genel{dbt} ya da genel tablosundaki site ayarları (küçük harfe çevrilmiş).
+     *
+     * @return array<string,mixed>
+     */
+    private function genelSettings(PDO $pdo, int $siteId, string $dbt): array
+    {
+        $table = 'genel' . $dbt;
+        try {
+            $row = $pdo->query("SELECT TOP 1 * FROM {$table}")->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            $row = false;
+        }
+
+        if (!is_array($row) && $dbt !== '') {
+            try {
+                $row = $pdo->query('SELECT TOP 1 * FROM genel')->fetch(PDO::FETCH_ASSOC);
+            } catch (\PDOException $e) {
+                $row = false;
+            }
+        }
+
+        if (!is_array($row)) {
+            return [];
+        }
+
+        return array_change_key_case($row, CASE_LOWER);
     }
 
     private function safeSuffix(string $suffix): string

@@ -15,10 +15,45 @@ final class DestinationsController extends Controller
         'canonical' => 'string', 'title' => 'string', 'keywords' => 'string', 'description' => 'string',
     ];
 
-    /** @Get */
+    /**
+     * @Get
+     * @query minimize int 1: sadece id ve name döner
+     */
     public function index(): void
     {
         $pdo = $this->db->pdo();
+        $minimize = (int) ($this->request->query('minimize') ?? $this->request->input('minimize', 0)) === 1;
+
+        if ($minimize) {
+            $rows = $pdo->query('SELECT id, baslik AS name, cat FROM dbo.destinations ORDER BY siralama, id')->fetchAll();
+            $map = [];
+            foreach ($rows as $row) {
+                $id = (int) $row['id'];
+                $map[$id] = [
+                    'id' => $id,
+                    'name' => trim((string) ($row['name'] ?? '')),
+                    'sub_destinations' => [],
+                ];
+            }
+
+            $tree = [];
+            foreach ($rows as $row) {
+                $id = (int) $row['id'];
+                $parentId = (int) ($row['cat'] ?? 0);
+                if ($parentId === 0 || !isset($map[$parentId])) {
+                    $tree[] = &$map[$id];
+                } else {
+                    $map[$parentId]['sub_destinations'][] = &$map[$id];
+                }
+            }
+            unset($row);
+
+            $this->response->success([
+                'destinations' => $tree,
+            ]);
+            return;
+        }
+
         $columns = implode(', ', array_map(function ($field) { return '[' . $field . ']'; }, $this->existingFields($pdo)));
         $rows = $pdo->query('SELECT id, ' . $columns . ' FROM dbo.destinations ORDER BY siralama, id')->fetchAll();
         $this->response->success(['destinations' => $rows]);

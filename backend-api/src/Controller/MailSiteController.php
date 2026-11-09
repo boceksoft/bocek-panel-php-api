@@ -19,11 +19,14 @@ final class MailSiteController extends Controller
 
     /**
      * @Get
+     * @query site int Site kimliği
+     * @query minimize int 1: sadece id ve domain döner
      */
     public function index(): void
     {
         $pdo = $this->db->pdo();
         $siteId = $this->siteId();
+        $minimize = (int) ($this->request->query('minimize') ?? $this->request->input('minimize', 0)) === 1;
         $suffix = $this->tableSuffix($pdo, $siteId);
 
         $genel = [];
@@ -38,6 +41,18 @@ final class MailSiteController extends Controller
             return isset($genel[$key]) ? trim((string) $genel[$key]) : '';
         };
         $domain = rtrim($g('domain'), '/');
+        $siteDomain = str_replace('web.', 'www.', $domain);
+
+        if ($minimize) {
+            $this->response->success([
+                'site' => [
+                    'id' => $siteId,
+                    'domain' => $siteDomain,
+                ],
+            ]);
+            return;
+        }
+
         $cdn = $this->cdn($domain);
         $mailConfig = isset($this->app['reservation_mail']) && is_array($this->app['reservation_mail']) ? $this->app['reservation_mail'] : [];
         $signature = trim((string) ($mailConfig['signature_url'] ?? ''));
@@ -49,7 +64,7 @@ final class MailSiteController extends Controller
             'site' => [
                 'id' => $siteId,
                 'adi' => $g('siteadi'),
-                'domain' => str_replace('web.', 'www.', $domain),
+                'domain' => $siteDomain,
                 'cdn' => $cdn,
                 'telefon' => $g('telefon'),
                 'gsm' => $g('gsm'),
