@@ -10,6 +10,8 @@ final class CategoriesController extends Controller
 { 
     /**
      * @Get
+     * @query site int Site kimliği
+     * @query minimize int 1: sadece id ve name döner
      */ 
     public function index(): void
     {
@@ -17,6 +19,45 @@ final class CategoriesController extends Controller
         
         $siteId = $this->siteId();
         $titleColumn = $this->titleColumn($siteId);
+        $minimize = (int) ($this->request->query('minimize') ?? $this->request->input('minimize', 0)) === 1;
+
+        if ($minimize) {
+            $categoriesQuery = "
+                SELECT 
+                    id, 
+                    {$titleColumn} AS name,
+                    cat
+                FROM tip 
+                ORDER BY siralama ASC, id ASC
+            ";
+            $categories = $pdo->query($categoriesQuery)->fetchAll();
+            $map = [];
+            foreach ($categories as $category) {
+                $id = (int) $category['id'];
+                $map[$id] = [
+                    'id' => $id,
+                    'name' => trim((string) ($category['name'] ?? '')),
+                    'sub_categories' => [],
+                ];
+            }
+
+            $tree = [];
+            foreach ($categories as $category) {
+                $id = (int) $category['id'];
+                $parentId = (int) ($category['cat'] ?? 0);
+                if ($parentId === 0 || !isset($map[$parentId])) {
+                    $tree[] = &$map[$id];
+                } else {
+                    $map[$parentId]['sub_categories'][] = &$map[$id];
+                }
+            }
+            unset($category);
+
+            $this->response->success([
+                'categories' => $tree,
+            ]);
+            return;
+        }
         
         // Fetch categories from `tip` table
         $categoriesQuery = "
