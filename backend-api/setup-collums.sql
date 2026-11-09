@@ -12,6 +12,13 @@ ALTER TABLE [dbo].[homes] ADD [tamamlanma_yuzdesi] int NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[MenuItems]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[MenuItems]', N'resim') IS NULL
+BEGIN
+ALTER TABLE [dbo].[MenuItems] ADD [resim] nvarchar(255) NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[genel]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[genel]', N'dil') IS NULL
 BEGIN
