@@ -552,6 +552,48 @@ END;
 GO
 
 IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'son_durum_guncelleme') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [son_durum_guncelleme] datetime NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[sezonlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[sezonlar]', N'id') IS NULL
+BEGIN
+ALTER TABLE [dbo].[sezonlar] ADD [id] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'kayit_durum') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [kayit_durum] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'tutar') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [tutar] money NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'evkodu') IS NULL
+BEGIN
+ALTER TABLE [dbo].[homes] ADD [evkodu] nvarchar(255) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[sonDakika]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[sonDakika]', N'tarih1') IS NULL
+BEGIN
+ALTER TABLE [dbo].[sonDakika] ADD [tarih1] nvarchar(MAX) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[kayitlar]', N'saat') IS NULL
 BEGIN
 ALTER TABLE [dbo].[kayitlar] ADD [saat] nvarchar(MAX) NULL;

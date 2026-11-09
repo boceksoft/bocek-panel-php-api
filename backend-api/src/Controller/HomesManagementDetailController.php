@@ -1238,7 +1238,7 @@ final class HomesManagementDetailController extends Controller
      */
     private function resimler(array $rows, array $home): array
     {
-        // Config homes_image_property_urls aciksa yeni CDN yapisi: /uploads/property/small/{villaId}/{dosya}. Resizer once
+        // Config homes_image_property_urls aciksa yeni CDN yapisi: /property/small/{villaId}/{dosya}. Resizer once
         // uploads/product/{villaId}/ altina, yoksa eski duz uploads/ klasorune bakar; eski fotograflar da bu adresle gorunur.
         $homeId = (int) ($home['id'] ?? 0);
         $cdnBase = \App\Support\Uploads::homeImageBase((defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/', $homeId, $this->app);

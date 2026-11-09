@@ -327,7 +327,7 @@ final class ReservationsController extends Controller
         $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
         foreach ($rows as &$row) {
             $images = array_values(array_filter(array_map('trim', explode(',', (string) $row['villa_resim']))));
-            // Yeni CDN yapisi: /uploads/property/small/{villaId}/
+            // Yeni CDN yapisi: /property/small/{villaId}/
             $row['villa_resim'] = $images ? Uploads::homeImageBase($cdnBase, (int) ($row['home_id'] ?? 0), $this->app) . $images[0] : '';
         }
         unset($row);

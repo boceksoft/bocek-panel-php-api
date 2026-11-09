@@ -332,7 +332,7 @@ WHERE {$whereSql}
         $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
         foreach ($rows as &$row) {
             unset($row['totalCount']);
-            // Villa fotograflari yeni CDN yapisinda (/uploads/property/small/{villaId}/)
+            // Villa fotograflari yeni CDN yapisinda (/property/small/{villaId}/)
             $imageList = $this->imageList((string) $row['image'], Uploads::homeImageBase($cdnBase, (int) ($row['id'] ?? 0), $this->app));
             $row = [
                 'id' => (int) $row['id'],
