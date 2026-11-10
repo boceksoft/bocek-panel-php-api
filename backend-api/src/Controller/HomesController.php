@@ -417,9 +417,13 @@ final class HomesController extends Controller
         $kisasureli = !empty($c['kisasureli']);
         $gun = (int) ($c['gun'] ?? 0);
         $t1 = (string) ($c['t1'] ?? '');
+        $t2 = (string) ($c['t2'] ?? '');
 
         $startDateSql = $hasDate
             ? ($kisasureli ? 'CONVERT(date, kisasureli.tarih)' : "CONVERT(date, '{$t1}', 104)")
+            : 'CONVERT(date, GETDATE())';
+        $endDateSql = $hasDate
+            ? ($kisasureli ? 'CONVERT(date, kisasureli.tarih2)' : "CONVERT(date, '{$t2}', 104)")
             : 'CONVERT(date, GETDATE())';
 
         $nightSql = $hasDate
@@ -429,27 +433,32 @@ final class HomesController extends Controller
         $cleaningCross = $hasDate ? "
 OUTER APPLY (
     SELECT TOP 1
+        ISNULL(TRY_CONVERT(int, NULLIF(CONVERT(varchar(64), sz_cl.gece), '')), 0) AS gece,
         ISNULL(TRY_CONVERT(int, NULLIF(CONVERT(varchar(64), sz_cl.temizlikgece), '')), 0) AS temizlikgece,
         ISNULL(TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), sz_cl.temizlikFiyat), '')), 0) AS temizlikFiyat
     FROM sezonlar sz_cl
     WHERE sz_cl.site = 1
       AND sz_cl.islem = 'emlak'
       AND sz_cl.islem_id = h.id
-      AND {$startDateSql} >= " . \App\Support\SqlDate::any('sz_cl.tarih1') . "
-      AND {$startDateSql} <= " . \App\Support\SqlDate::any('sz_cl.tarih2') . "
+      AND (
+          ({$startDateSql} >= " . \App\Support\SqlDate::any('sz_cl.tarih1') . " AND {$startDateSql} <= " . \App\Support\SqlDate::any('sz_cl.tarih2') . ")
+          OR
+          ({$endDateSql} >= " . \App\Support\SqlDate::any('sz_cl.tarih1') . " AND {$endDateSql} <= " . \App\Support\SqlDate::any('sz_cl.tarih2') . ")
+      )
     ORDER BY sz_cl.id DESC
 ) AS cleaning
 CROSS APPLY (
     SELECT CASE
         WHEN cleaning.temizlikgece > 0
-             AND ({$nightSql} < cleaning.temizlikgece OR ({$nightSql} <= cleaning.temizlikgece AND cleaning.temizlikgece < 7))
+             AND ({$nightSql} <= cleaning.temizlikgece)
+             AND ({$nightSql} >= cleaning.gece OR cleaning.gece = 0" . ($kisasureli ? " OR 1 = 1" : "") . ")
              AND cleaning.temizlikFiyat > 0
         THEN cleaning.temizlikFiyat
         ELSE 0
     END AS val
 ) AS cleaning_fee" : "
 CROSS APPLY (
-    SELECT 0 AS temizlikgece, CAST(0 AS decimal(18, 6)) AS temizlikFiyat
+    SELECT 0 AS gece, 0 AS temizlikgece, CAST(0 AS decimal(18, 6)) AS temizlikFiyat
 ) AS cleaning
 CROSS APPLY (
     SELECT CAST(0 AS decimal(18, 6)) AS val
