@@ -664,6 +664,10 @@ final class ReservationdetailController extends Controller
             'twitter' => $g('twitter'),
             'adres' => $g('adres'),
             'unvan' => $g('unvan'),
+            // TÜRSAB acenta adı (genel.tursabAcentaAdi; villakilavuzu sözleşmesi "Acenta Ünvanı").
+            'acentaAdi' => $g('tursabAcentaAdi'),
+            // Sözleşme maddeleri (panel belgeler/sozlesme.asp: genel.sozlesmeIcerik{dbtable}, HTML; &nbsp; boşluk olur).
+            'sozlesmeIcerik' => str_replace('&nbsp;', ' ', $g('sozlesmeIcerik' . $suffix) !== '' ? $g('sozlesmeIcerik' . $suffix) : $g('sozlesmeIcerik')),
         ];
         // Belgelerdeki imza resmi (reservation_mail.signature_url; CDN'e göre yol ya da tam adres).
         $site['imza'] = $this->signatureUrl($mailSettings['signature_url'], $site['cdn']);
@@ -719,9 +723,9 @@ final class ReservationdetailController extends Controller
             }
             if (is_array($row)) {
                 $images = array_values(array_filter(array_map('trim', explode(',', (string) ($row['resim'] ?? '')))));
-                // Panel /uploads/400x320/<resim>; yeni CDN yapisi /uploads/property/400x320/{villaId}/<resim>
+                // Panel /uploads/400x320/<resim>; yeni CDN yapisi /property/400x320/{villaId}/<resim>
                 $image = $images !== []
-                    ? (!empty($this->app['homes_image_property_urls']) ? '/uploads/property/400x320/' . $homeId . '/' : '/uploads/400x320/') . $images[0]
+                    ? (!empty($this->app['homes_image_property_urls']) ? '/property/400x320/' . $homeId . '/' : '/uploads/400x320/') . $images[0]
                     : '';
                 $villa = [
                     'adi' => trim((string) ($row['adi'] ?? '')),
@@ -1977,7 +1981,7 @@ final class ReservationdetailController extends Controller
             return [];
         }
 
-        // Villa fotograflari yeni CDN yapisinda (/uploads/property/small/{villaId}/)
+        // Villa fotograflari yeni CDN yapisinda (/property/small/{villaId}/)
         $cdnBase = Uploads::homeImageBase((defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/', (int) ($villa['id'] ?? 0), $this->app);
         $images = array_values(array_filter(array_map('trim', explode(',', $resimStr))));
 

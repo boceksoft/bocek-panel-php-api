@@ -774,7 +774,7 @@ final class KiralamatakvimiController extends Controller
             'estateTitle' => (string) ($home['baslik'] ?? ''),
             'estateDescription' => (string) ($home['kisa_icerik'] ?? ''),
             'estateUrl' => $domain . '/' . ($home['url'] ?? ''),
-            // Ilk kapak, yeni CDN yapisinda (/uploads/property/small/{villaId}/)
+            // Ilk kapak, yeni CDN yapisinda (/property/small/{villaId}/)
             'estateImageUrl' => Uploads::homeImageBase($this->imageBase(), (int) ($home['id'] ?? 0), $this->app)
                 . (explode(',', (string) ($home['resim'] ?? ''))[0] ?? ''),
             'guestPerson' => (int) ($home['kisi'] ?? 0),

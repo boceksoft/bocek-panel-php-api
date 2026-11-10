@@ -293,7 +293,7 @@ final class ImgDownloadController extends Controller
 
             $uploadId = $this->db->pdo()->lastInsertId();
             \App\Support\HomesCompletion::refresh($this->db->pdo(), (int) $villaId);
-            // Config homes_image_property_urls aciksa yeni CDN yapisi: /uploads/property/small/{villaId}/{dosya}
+            // Config homes_image_property_urls aciksa yeni CDN yapisi: /property/small/{villaId}/{dosya}
             $cdnBase = Uploads::homeImageBase((defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/', (int) $villaId, $this->app);
             $this->response->success([
                 'path' => $cdnBase . $filename,

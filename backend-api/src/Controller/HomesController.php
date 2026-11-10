@@ -358,7 +358,7 @@ final class HomesController extends Controller
             $resimStr = isset($row['resim']) ? (string) $row['resim'] : '';
             if ($resimStr !== '') {
                 $liste = array_values(array_filter(array_map('trim', explode(',', $resimStr))));
-                // Villa fotograflari yeni CDN yapisinda (/uploads/property/small/{villaId}/)
+                // Villa fotograflari yeni CDN yapisinda (/property/small/{villaId}/)
                 $homeBase = Uploads::homeImageBase($cdnBase, (int) ($row['id'] ?? 0), $this->app);
                 $row['resim_liste'] = array_map(function ($r) use ($homeBase) {
                     return $homeBase . $r;

@@ -39,7 +39,7 @@ return [
     // Her site icin acilir, ayni ayla cakisan sezon varsa o ay atlanir. Bkz. src/Support/HomesEmptySeasons.php
     'homes_empty_seasons' => ['enabled' => false, 'nights' => 7],
 
-    // true: villa fotograflari yeni CDN yapisiyla doner: {Cdn}/uploads/property/{boyut}/{villaId}/{dosya}
+    // true: villa fotograflari yeni CDN yapisiyla doner: {Cdn}/property/{boyut}/{villaId}/{dosya}
     // (ilan detayi/listesi, yukleme cevabi, rezervasyonlar, mail resmi, Kiralama Takvimi). Sadece sitenin CDN resizer'i
     // bu yapiyi destekliyorsa ac (bkz. natsisa/docs/devir/resizer). false (varsayilan): /uploads/small/{dosya}.
     'homes_image_property_urls' => false,

@@ -142,7 +142,7 @@ final class Uploads
     }
 
     /**
-     * Villa fotografi adresinin tabani. Yeni CDN yapisi (resizer): {domain}/uploads/property/{boyut}/{villaId}/{dosya};
+     * Villa fotografi adresinin tabani. Yeni CDN yapisi (resizer): {domain}/property/{boyut}/{villaId}/{dosya};
      * resizer once uploads/product/{villaId}/, yoksa eski duz uploads/ klasorune bakar. Villa no yoksa eski yapi.
      * $base eski taban olabilir ("https://cdn.site.com/uploads/small/"): boyut ve alan adi ondan alinir.
      * Sadece config homes_image_property_urls acikken (sitenin resizer'i yeni yapiyi destekliyorsa); kapaliysa eski taban.
@@ -156,7 +156,7 @@ final class Uploads
         }
 
         if (preg_match('#^(.*)/uploads/([^/]+)/$#', $base, $m) === 1) {
-            return $m[1] . '/uploads/property/' . $m[2] . '/' . $homeId . '/';
+            return $m[1] . '/property/' . $m[2] . '/' . $homeId . '/';
         }
 
         return $base;
