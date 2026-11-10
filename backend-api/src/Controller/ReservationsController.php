@@ -39,6 +39,14 @@ final class ReservationsController extends Controller
         $useAcentaUsers = !empty($this->app['reservation_filters_use_acenta_users']);
         $useMaliyetColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'maliyet');
         $hasMigrationStatusColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'MigrationStatus');
+        // WhatsApp grup adi: ilan detayindaki gibi once whatsapp_grup, bossa rez_takip_yeri_adi.
+        $whatsappParts = [];
+        foreach (['whatsapp_grup', 'rez_takip_yeri_adi'] as $candidate) {
+            if ($this->columnExists($pdo, 'dbo', 'homes', $candidate)) {
+                $whatsappParts[] = "NULLIF(LTRIM(RTRIM(homes.[{$candidate}])), N'')";
+            }
+        }
+        $whatsappSql = $whatsappParts ? 'ISNULL(' . (count($whatsappParts) > 1 ? 'COALESCE(' . implode(', ', $whatsappParts) . ')' : $whatsappParts[0]) . ", N'')" : "N''";
 
         // Sayfalama
         $page       = max(1, $this->pInt('page', $this->pInt('s', 1)));
@@ -212,7 +220,8 @@ final class ReservationsController extends Controller
             $orderSql,
             $allRows,
             $useAcentaUsers,
-            $useMaliyetColumn
+            $useMaliyetColumn,
+            $whatsappSql
         );
 
         // Çalıştır
@@ -342,7 +351,8 @@ final class ReservationsController extends Controller
         string $orderSql,
         bool $allRows,
         bool $useAcentaUsers,
-        bool $useMaliyetColumn
+        bool $useMaliyetColumn,
+        string $whatsappSql = "N''"
     ): string
     {
         // dolu.durum API koduna çevrilir (siteye özel silinme kodu -> 5).
@@ -441,7 +451,7 @@ SELECT
     ISNULL(sk.baslik, N'') AS satiskanali,
 $acentaSelectSql
     REPLACE(ISNULL(es.tel, ''), ' ', '') AS evsahibitel,
-    ISNULL(homes.rez_takip_yeri_adi, '') AS whatsapp,
+    {$whatsappSql} AS whatsapp,
     kayitlar.oznot AS oz_not,
     kisi.total AS kisi_bilgileri_count,
     opsiyonvarmi.total AS opsiyon_count,

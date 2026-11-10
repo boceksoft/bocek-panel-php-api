@@ -187,20 +187,29 @@ final class AvailabilityController extends Controller
                         FROM rulesruletypes INNER JOIN ruletypes ON ruletypes.id = rulesruletypes.ruletypes WHERE " . $rulesruletypesRulesIdSql . " = r.id FOR JSON PATH) AS maddeler
                         FROM ruleshomes rh INNER JOIN rules r ON r.id = " . $ruleshomesRulesIdSql . " WHERE r.isactive = 1 AND " . $ruleshomesHomesIdSql . " = " . $entityId . " FOR JSON PATH),'') AS kurallar ) AS kurallar,
                 (SELECT 
-                    ISNULL(STRING_AGG(
-                        CAST(CONCAT(YEAR({$anyTarih1}),'-',FORMAT({$anyTarih1},'MM'),'-',FORMAT({$anyTarih1},'dd'),',',
-                        dbo.Natsisa_Fn_aratarihler2({$anyTarih1},{$anyTarih2}),
-                        ',',YEAR({$anyTarih2}),'-',FORMAT({$anyTarih2},'MM'),'-',FORMAT({$anyTarih2},'dd')) AS NVARCHAR(MAX)),','),'') AS fiyatlarTarihler,
-                    ISNULL(STRING_AGG(CAST(REPLICATE(CONVERT(NVARCHAR,(CAST((ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7) AS decimal(10,0))))+',',DATEDIFF(day,{$anyTarih1},{$anyTarih2}))+CONVERT(NVARCHAR,(CAST(ISNULL(CONVERT(float,fiyat*ISNULL(RD.Buy, 1)),0)/7 AS decimal(10,0)))) AS NVARCHAR(MAX)),','),'') AS fiyatlar
-                    FROM sezonlar
-                    LEFT JOIN kanun7464 ka ON ka.homeId=" . (int) $home['id'] . "
-                    LEFT JOIN Finance.Currency FromC ON FromC.CurrencyName='" . $home['doviz'] . "'
-                    LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
-                    LEFT JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
-                        AND RD.FromCurrencyId = FromC.CurrencyId AND RD.RateId = :RateId
-                WHERE site = " . $siteVal . " AND islem_id = " . $entityId . " AND islem = 'emlak' AND {$anyTarih2} >= " . $fromSql . ") AS fiyatlar";
+                    -- Her sezon gunlere acilir; tarih ve fiyat ayni satirdan, ayni sirayla (gun) toplanir.
+                    -- Eskiden iki ayri liste uretiliyordu: 1 gunluk / baslangic=bitis / ters tarihli sezonlarda
+                    -- tarih listesi uzayip kayiyor, sondaki gunler (or. yilbasindan sonrasi) fiyatsiz kaliyordu.
+                    ISNULL(STRING_AGG(CAST(g.gun AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY g.gun), '') AS fiyatlarTarihler,
+                    ISNULL(STRING_AGG(CAST(g.fiyat AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY g.gun), '') AS fiyatlar
+                    FROM (
+                        SELECT FORMAT(DATEADD(DAY, n.n, sd.d1), 'yyyy-MM-dd') AS gun,
+                            CONVERT(NVARCHAR, CAST(ISNULL(CONVERT(float, fiyat * ISNULL(RD.Buy, 1)), 0) / 7 AS decimal(10,0))) AS fiyat
+                        FROM sezonlar
+                        CROSS APPLY (SELECT {$anyTarih1} AS d1, {$anyTarih2} AS d2) sd
+                        CROSS APPLY (
+                            SELECT TOP (CASE WHEN sd.d1 IS NOT NULL AND sd.d2 >= sd.d1 THEN DATEDIFF(DAY, sd.d1, sd.d2) + 1 ELSE 0 END)
+                                ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS n
+                            FROM sys.all_objects o1 CROSS JOIN sys.all_objects o2
+                        ) n
+                        LEFT JOIN Finance.Currency FromC ON FromC.CurrencyName='" . $home['doviz'] . "'
+                        LEFT JOIN Finance.Currency ToC ON ToC.CurrencyId = :DefaultCurrencyId
+                        LEFT JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
+                            AND RD.FromCurrencyId = FromC.CurrencyId AND RD.RateId = :RateId
+                        WHERE site = " . $siteVal . " AND islem_id = " . $entityId . " AND islem = 'emlak' AND sd.d2 >= " . $fromSql . "
+                    ) g) AS fiyatlar";
 
-        $bindRateId = defined('RATE_ID')
+        $bindRateId = defined('RATE_ID') 
             ? constant('RATE_ID') 
             : (class_exists('Rate') ? \Rate::GetLastRate() : 1);
 

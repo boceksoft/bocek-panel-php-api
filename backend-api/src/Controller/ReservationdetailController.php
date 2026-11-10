@@ -335,6 +335,11 @@ final class ReservationdetailController extends Controller
         if ($savedDownRate !== null && $savedDownRate !== '' && is_numeric($savedDownRate)) {
             $result['onOdemeOrani'] = (float) $savedDownRate;
             $result['onOdemeOraniKaynak'] = 'rezervasyon';
+        } elseif ($this->panelDownRate($reservation) > 0) {
+            // Panelin rezervasyona yazdığı oran (kayitlar.depozito_orani; ovillam, evinikirala). Panel de 0/boşsa
+            // villanın oranına düşer: case when isnull(k.depozito_orani,0)=0 then h.depozito else k.depozito_orani end.
+            $result['onOdemeOrani'] = $this->panelDownRate($reservation);
+            $result['onOdemeOraniKaynak'] = 'rezervasyon';
         } elseif ($villa) {
             $siteId = (int) ($reservation['site'] ?? 0);
             $depositCol = (string) ($cfg['villa_down_payment_column'] ?? 'depozito');
@@ -588,7 +593,11 @@ final class ReservationdetailController extends Controller
         }
 
         $email = (string) ($reservation['email'] ?? '');
-        $params = '_=' . $this->idHash((string) $id) . '&authKey=' . $this->idHash($id . '_' . $email);
+        // reservation_mail.link_params: 'auth_key' (varsayılan, ?_=idHash(id)&authKey=idHash(id_email))
+        // | 'rez_email' (eski ASP ön yüz, örn. evinikirala htmlsablon: ?rez={id}&email={email}).
+        $params = $this->mailSettings()['link_params'] === 'rez_email'
+            ? 'rez=' . $id . '&email=' . rawurlencode($email)
+            : '_=' . $this->idHash((string) $id) . '&authKey=' . $this->idHash($id . '_' . $email);
 
         // Sayfa yolu: sayfalar{dbtable}.id ayarı; 0 ya da bulunamazsa genel{dbtable} alanı (ovillam: qsql("kartileodeUrl")).
         $cardPath = $this->pagePath($pdo, $suffix, $this->pageIdSetting('reservation_payment_card_page_id', $siteId, $suffix));
@@ -699,8 +708,13 @@ final class ReservationdetailController extends Controller
         $linkDomain = $site['domain'] !== '' ? rtrim($site['domain'], '/') : $this->paymentDomain();
         $myReservationsLink = '';
         if ($linkDomain !== '' && $myReservationsPath !== '') {
-            $myReservationsLink = $linkDomain . '/' . $myReservationsPath . '?authKey='
-                . $this->idHash((int) ($reservation['id'] ?? 0) . '_' . (string) ($reservation['email'] ?? ''));
+            // link_params 'rez_email': eski ASP ön yüz ?rez={id}&email={email} (evinikirala rez_tamamla sayfası bu
+            // parametrelerle giriş yapar; parametre okumayan Rezervasyonlarım sayfası yok sayar).
+            $myReservationsLink = $mailSettings['link_params'] === 'rez_email'
+                ? $linkDomain . '/' . $myReservationsPath . '?rez=' . (int) ($reservation['id'] ?? 0)
+                    . '&email=' . rawurlencode((string) ($reservation['email'] ?? ''))
+                : $linkDomain . '/' . $myReservationsPath . '?authKey='
+                    . $this->idHash((int) ($reservation['id'] ?? 0) . '_' . (string) ($reservation['email'] ?? ''));
         }
 
         // Villa: sitenin dilinde ad ve bölge ("Üst bölge / Bölge"), ilk resim (panel: /uploads/400x320/<resim>)
@@ -815,6 +829,10 @@ final class ReservationdetailController extends Controller
             'active_bank_accounts_only' => !empty($config['active_bank_accounts_only']),
             'relative_url_base' => trim((string) ($config['relative_url_base'] ?? '')),
             'signature_url' => trim((string) ($config['signature_url'] ?? '')),
+            // Ödeme / Rezervasyonlarım link parametreleri: 'auth_key' (varsayılan) | 'rez_email' (eski ASP ön yüz).
+            'link_params' => strtolower(trim((string) ($config['link_params'] ?? 'auth_key'))) === 'rez_email'
+                ? 'rez_email'
+                : 'auth_key',
             // Klasik ödeme satırları (ovillam varsayılanları; garantivillam app.local.php ile değiştirir).
             'payment_row_badges' => !array_key_exists('payment_row_badges', $config) || !empty($config['payment_row_badges']),
             'cleaning_label' => trim((string) ($config['cleaning_label'] ?? '')) !== ''
@@ -1342,6 +1360,23 @@ final class ReservationdetailController extends Controller
             default:
                 return $text;
         }
+    }
+
+    /**
+     * kayitlar.depozito_orani (panelin rezervasyona yazdığı ön ödeme oranı, 0-100). Kolon yoksa ya da sayı değilse 0.
+     *
+     * @param array<string,mixed> $reservation
+     */
+    private function panelDownRate(array $reservation): float
+    {
+        foreach ($reservation as $key => $value) {
+            if (strtolower((string) $key) === 'depozito_orani') {
+                $rate = is_numeric($value) ? (float) $value : 0.0;
+                return $rate > 0 && $rate <= 100 ? $rate : 0.0;
+            }
+        }
+
+        return 0.0;
     }
 
     /** Panel inc/Functions.asp idHash: Base64("{burasiidkismi_}" + veri). */
