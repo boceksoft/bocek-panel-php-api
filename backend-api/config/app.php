@@ -154,6 +154,9 @@ return [
     //   active_bank_accounts_only: true ise sadece hesaplar.aktif = 1 olanlar (ovillam paneli böyle).
     //   relative_url_base:         mailsablon metnindeki "../../../../../" yerine yazılan adres (panel UrlDuzenle,
     //                              örn. 'https://web.ovillam.com/'). Boşsa sitenin adresi (genel.domain) kullanılır.
+    //   link_params:               ödeme / Rezervasyonlarım link parametreleri. 'auth_key' (varsayılan):
+    //                              ?_=idHash(id)&authKey=idHash(id_email). 'rez_email': eski ASP ön yüz
+    //                              (evinikirala htmlsablon) ?rez={id}&email={email}; Rezervasyonlarım linki de aynı parametrelerle.
     //   signature_url:             belgelerdeki imza resmi ({{site_imza}}). Tam adres ya da CDN'e göre yol
     //                              ('uploads/imza.jpg' -> https://cdn.site.com/uploads/imza.jpg). Boşsa değişken boş.
     //   payment_row_badges:        ödeme satırlarında "Kredi Kartı - Havale" / "Nakit - Havale" etiketleri (ovillam: true).
@@ -166,6 +169,7 @@ return [
         'active_bank_accounts_only' => false,
         'relative_url_base' => '',
         'signature_url' => '',
+        'link_params' => 'auth_key',
         'payment_row_badges' => true,
         'cleaning_label' => 'Kısa Süreli K. Ödemesi',
         'heated_pool' => ['label' => 'Isıtmalı Havuz Ücreti', 'format' => false],
