@@ -115,6 +115,15 @@ return [
     // Ornekler: '/arama', 'https://www.site.com/arama'
     'links_search_page_url' => '',
 
+    // Sitenin arama sayfasi URL / path ayari (siteId => arama URL).
+    // /backend-api/site-url ve /backend-api/mail-site uclarinda alan adinin yaninda search_url
+    // ve tam baglanti (search_page_url) olarak doner.
+    // Deger sadece path (orn: 'arama-sonuclari', '/arama') veya tam URL (orn: 'https://www.site.com/arama') olabilir.
+    // Panelden local-settings uzerinden veya app.local.php icinde site bazli override edilebilir.
+    'site_search_url' => [
+        1 => 'arama-sonuclari',
+    ],
+
     // Rezervasyon filtrelerinde acenta_users tablosundan alt acentalar cekilsin mi?
     'reservation_filters_use_acenta_users' => false,
 
@@ -365,6 +374,7 @@ return [
         'guest_movements_home_id_column' => 'bool',
         'guest_movements_use_caretaker_owner_fallback' => 'bool',
         'links_search_page_url' => 'string',
+        'site_search_url' => 'array',
         'reservation_filters_use_acenta_users' => 'bool',
         'reservation_filters_use_status_log' => 'bool',
         'reservation_detail_use_islem_kaydi' => 'bool',

@@ -106,6 +106,7 @@ gondermelidir.
     'guest_movements_use_caretaker_owner_fallback' => 'bool',
     'links_search_page_query' => 'string',
     'links_search_page_url' => 'string',
+    'site_search_url' => 'array',
     'reservation_filters_use_acenta_users' => 'bool',
     'reservation_detail_use_islem_kaydi' => 'bool',
     'reservations_country_code_column' => 'string',
@@ -131,6 +132,9 @@ Link olustururken redirect hedefindeki arama sayfasi yolunu DB'den okumak icin k
 
 `links_search_page_url`  
 Doluysa `links_search_page_query` calismaz. Redirect hedefi direkt bu URL olur. Tam URL veya path verilebilir. Ornek: `/arama`, `https://www.site.com/arama`.
+
+`site_search_url`  
+Site bazli arama sayfasi URL / path ayaridir. Ornek: `{"1": "arama-sonuclari", "2": "search-results"}`. Tam URL veya path girilebilir.
 
 `reservation_filters_use_acenta_users`  
 Rezervasyon filtrelerinde `acenta_users` tablosundan alt acentalar cekilsin mi?

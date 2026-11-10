@@ -39,6 +39,7 @@ final class LocalSettingsController extends Controller
         }
 
         $this->enrichSiteLanguages($values, $local);
+        $this->enrichSiteSearchUrl($values, $local);
 
         $this->response->success([
             'values' => $values,
@@ -75,7 +76,7 @@ final class LocalSettingsController extends Controller
                 throw new HttpException('Bu ayar panelden degistirilemez: ' . (string) $key, 'VALIDATION', 422);
             }
 
-            $local[$key] = $this->normalizeValue($key, $schema[$key], $value);
+            $local[$key] = $this->normalizeValue($key, $schema[$key], $value, $local);
             $updated[$key] = $local[$key];
         }
 
@@ -147,6 +148,30 @@ final class LocalSettingsController extends Controller
                 // Hata durumunda devam et
             }
         }
+    }
+
+    private function enrichSiteSearchUrl(array &$values, array $local): void
+    {
+        if (!isset($values['site_search_url'])) {
+            return;
+        }
+
+        $suffixes = $values['site_column_suffixes']['value'] ?? ($local['site_column_suffixes'] ?? ($this->app['site_column_suffixes'] ?? [1 => '', 2 => '_s2']));
+        if (!is_array($suffixes) || $suffixes === []) {
+            $suffixes = [1 => ''];
+        }
+
+        $existing = is_array($values['site_search_url']['value']) ? $values['site_search_url']['value'] : [];
+        $siteSearchUrl = [];
+
+        foreach ($suffixes as $siteId => $suffix) {
+            $siteId = (int) $siteId;
+            $siteSearchUrl[$siteId] = isset($existing[$siteId])
+                ? trim((string) $existing[$siteId])
+                : (isset($existing[(string) $siteId]) ? trim((string) $existing[(string) $siteId]) : ($siteId === 1 ? 'arama-sonuclari' : ''));
+        }
+
+        $values['site_search_url']['value'] = $siteSearchUrl;
     }
 
     /**
@@ -572,7 +597,7 @@ final class LocalSettingsController extends Controller
      * @param mixed $value
      * @return mixed
      */
-    private function normalizeValue(string $key, string $type, $value)
+    private function normalizeValue(string $key, string $type, $value, array $local = [])
     {
         switch ($type) {
             case 'string':
@@ -603,11 +628,30 @@ final class LocalSettingsController extends Controller
                 if (is_string($value)) {
                     $decoded = json_decode($value, true);
                     if (is_array($decoded)) {
-                        return $decoded;
+                        $value = $decoded;
+                    } elseif ($key === 'site_search_url') {
+                        $siteId = (int) ($this->request->query('site', $this->request->input('site', 1)));
+                        $siteId = $siteId > 0 ? $siteId : 1;
+                        $existing = $local['site_search_url'] ?? ($this->app['site_search_url'] ?? []);
+                        if (!is_array($existing)) {
+                            $existing = [];
+                        }
+                        $existing[$siteId] = trim($value);
+                        return $existing;
                     }
                 }
                 if (!is_array($value)) {
                     throw new HttpException('Array deger gecersiz: ' . $key, 'VALIDATION', 422);
+                }
+
+                if ($key === 'site_search_url') {
+                    $existing = $local['site_search_url'] ?? ($this->app['site_search_url'] ?? []);
+                    if (is_array($existing)) {
+                        foreach ($value as $k => $v) {
+                            $existing[(int) $k] = trim((string) $v);
+                        }
+                        return $existing;
+                    }
                 }
 
                 return $value;

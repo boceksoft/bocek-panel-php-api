@@ -35,6 +35,12 @@ return [
     // Tam URL veya path verilebilir.
     // 'links_search_page_url' => 'https://www.site.com/arama',
 
+    // Site bazli arama sayfasi URL / path'i.
+    // 'site_search_url' => [
+    //     1 => 'arama-sonuclari',
+    //     2 => 'search-results',
+    // ],
+
     // Bu sitede acenta_users tablosu yoksa false yap.
     // 'reservation_filters_use_acenta_users' => false,
 
