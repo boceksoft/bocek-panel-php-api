@@ -60,7 +60,7 @@ final class HomesManagementDetailCreateController extends Controller
             throw new HttpException('Emlak olusturulamadi.', 'DB_CREATE_FAILED', 500, $e);
         }
 
-        \App\Support\HomesCompletion::refresh($pdo, (int) $id);
+        \App\Support\HomesCompletion::refresh($pdo, (int) $id, $this->app);
 
         $this->response->success([
             'id' => $id,

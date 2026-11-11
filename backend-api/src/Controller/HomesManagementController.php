@@ -32,6 +32,7 @@ final class HomesManagementController extends Controller
      * @query missing_year int If 1, returns homes without season in year
      * @query document string Comma separated document filters
      * @query tamamlanma int 1: %100 tamamlanmis, 0: %100 olmayan villalar
+     * @query seo int 1: SEO puani %100 olan, 0: %100 olmayan villalar
      * @query sort int 1/2 order, 3/4 id
      * @query site int Site id
      */
@@ -174,6 +175,17 @@ final class HomesManagementController extends Controller
             $where[] = $completion === '1' ? "{$completionColumn} = 100" : "ISNULL({$completionColumn}, 0) < 100";
         }
 
+        // SEO puani (homes.seo_yuzdesi, ilan SEO sekmesindeki genel puan): 1 = %100, 0 = %100 olmayan (hesaplanmamis dahil).
+        $seo = $this->p('seo');
+        $hasSeoColumn = \App\Support\HomesSeoScore::columnExists($pdo);
+        $seoColumn = 'h.[' . \App\Support\HomesSeoScore::COLUMN . ']';
+        if ($seo === '1' || $seo === '0') {
+            if (!$hasSeoColumn) {
+                throw new \App\Core\HttpException('SEO filtresi icin once setup calistirilmali.', 'SETUP_REQUIRED', 409);
+            }
+            $where[] = $seo === '1' ? "{$seoColumn} = 100" : "ISNULL({$seoColumn}, 0) < 100";
+        }
+
         $document = $this->p('document') !== '' ? $this->p('document') : $this->p('gavelBelge');
         // Sure tipi ayardaki kolondan okunur (gavel_duration_column); 1 suresiz, 2 sureli
         $durationSql = $this->gavelDurationSql('gavel');
@@ -280,7 +292,8 @@ SELECT
     season.exists_value AS has_season,
     price.min_price AS min_price,
     ISNULL(h.doviz, '') AS currency,
-    " . ($hasCompletionColumn ? $completionColumn : 'CAST(NULL AS int)') . " AS completion_percent
+    " . ($hasCompletionColumn ? $completionColumn : 'CAST(NULL AS int)') . " AS completion_percent,
+    " . ($hasSeoColumn ? $seoColumn : 'CAST(NULL AS int)') . " AS seo_percent
 FROM homes h
 INNER JOIN destinations d ON d.id = h.emlak_bolgesi
 LEFT JOIN kanun7464 gavel ON gavel.homeId = h.id
@@ -368,6 +381,8 @@ WHERE {$whereSql}
                 'currency' => (string) $row['currency'],
                 // Tamamlanma yuzdesi (homes.tamamlanma_yuzdesi); setup calismadiysa veya hesaplanmadiysa null.
                 'completion_percent' => $row['completion_percent'] !== null ? (int) $row['completion_percent'] : null,
+                // SEO puani (homes.seo_yuzdesi); setup calismadiysa veya hesaplanmadiysa null.
+                'seo_percent' => $row['seo_percent'] !== null ? (int) $row['seo_percent'] : null,
             ];
         }
         unset($row);

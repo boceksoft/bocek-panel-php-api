@@ -12,6 +12,14 @@ ALTER TABLE [dbo].[homes] ADD [tamamlanma_yuzdesi] int NULL;
 END;
 GO
 
+-- Ilan SEO puani (0-100, ilan duzenleme SEO sekmesindeki genel puan). Bkz. src/Support/HomesCompletion.php
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'seo_yuzdesi') IS NULL
+BEGIN
+ALTER TABLE [dbo].[homes] ADD [seo_yuzdesi] int NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[MenuItems]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[MenuItems]', N'resim') IS NULL
 BEGIN

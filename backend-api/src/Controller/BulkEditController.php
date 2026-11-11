@@ -179,6 +179,7 @@ final class BulkEditController extends Controller
 
         $updated = 0;
         $skipped = [];
+        $refreshIds = [];
         $pdo->beginTransaction();
         try {
             foreach ($changes as $change) {
@@ -226,6 +227,9 @@ final class BulkEditController extends Controller
                     }
                     $stmt->execute();
                     $updated++;
+                    if ($table === 'homes') {
+                        $refreshIds[] = $id;
+                    }
                 }
 
                 foreach ($poolValues as $tipId => $poolRow) {
@@ -246,6 +250,11 @@ final class BulkEditController extends Controller
                 throw $e;
             }
             throw new HttpException('Toplu kayit yapilamadi, hicbir degisiklik kaydedilmedi: ' . $e->getMessage(), 'DB_UPDATE_FAILED', 500);
+        }
+
+        // Baslik / meta alanlari degismis olabilir: tamamlanma ve SEO yuzdesi yenilenir (hata kaydi bozmaz).
+        foreach (array_unique($refreshIds) as $homeId) {
+            \App\Support\HomesCompletion::refresh($pdo, (int) $homeId, $this->app);
         }
 
         $this->response->success(['updated' => $updated, 'skipped' => $skipped]);
