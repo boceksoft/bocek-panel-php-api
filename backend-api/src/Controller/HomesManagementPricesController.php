@@ -68,7 +68,7 @@ final class HomesManagementPricesController extends Controller
             throw new HttpException('Sezon bilgileri kaydedilemedi.', 'DB_UPDATE_FAILED', 500, $e);
         }
 
-        \App\Support\HomesCompletion::refresh($pdo, $id);
+        \App\Support\HomesCompletion::refresh($pdo, $id, $this->app);
 
         $seasonColumns = $this->sezonlarColumns($pdo);
         $this->response->success([
@@ -124,7 +124,7 @@ final class HomesManagementPricesController extends Controller
             throw new HttpException('Secilen sezon bulunamadi.', 'NOT_FOUND', 404);
         }
 
-        \App\Support\HomesCompletion::refresh($pdo, $homeId);
+        \App\Support\HomesCompletion::refresh($pdo, $homeId, $this->app);
 
         $this->response->success([
             'id' => $seasonId,

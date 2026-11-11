@@ -84,6 +84,10 @@ class SiteUrlController extends Controller
             'type' => 'type',
             'use_mutliple_for_array_query' => false,
         ];
+        $defaultFormatting = [
+            'start' => 'Y-m-d',
+            'end' => 'Y-m-d',
+        ];
 
         $searchParamsConfig = $this->app['site_search_params'] ?? ($this->app['site_search_queries'] ?? []);
         $configuredParams = [];
@@ -94,10 +98,39 @@ class SiteUrlController extends Controller
             }
         }
 
-        $searchParams = array_merge($defaultSearchParams, $inlineParams, $configuredParams);
+        $sourceParams = array_merge($inlineParams, $configuredParams);
+        $searchParams = [];
+        foreach ($defaultSearchParams as $k => $defaultVal) {
+            if ($k === 'use_mutliple_for_array_query') {
+                continue;
+            }
+            if (array_key_exists($k, $sourceParams)) {
+                $searchParams[$k] = trim((string) $sourceParams[$k]);
+            } else {
+                $searchParams[$k] = $defaultVal;
+            }
+        }
+
         $searchParams['use_mutliple_for_array_query'] = (bool) (
-            $searchParams['use_mutliple_for_array_query'] ?? ($searchParams['use_multiple_for_array_query'] ?? false)
+            $sourceParams['use_mutliple_for_array_query']
+            ?? ($sourceParams['use_multiple_for_array_query'] ?? false)
         );
+
+        $rawFormatting = array_key_exists('formatting', $sourceParams)
+            ? (is_array($sourceParams['formatting']) ? $sourceParams['formatting'] : [])
+            : $defaultFormatting;
+
+        $formatting = [];
+        if (is_array($rawFormatting)) {
+            foreach ($rawFormatting as $fKey => $fVal) {
+                $fVal = trim((string) $fVal);
+                if ($fVal !== '') {
+                    $formatting[(string) $fKey] = $fVal;
+                }
+            }
+        }
+
+        $searchParams['formatting'] = $formatting;
 
         $this->response->success([
             'site' => [
@@ -106,11 +139,13 @@ class SiteUrlController extends Controller
                 'search_url' => $searchUrl,
                 'search_page_url' => $searchPageUrl,
                 'search_params' => $searchParams,
+                'formatting' => $formatting,
             ],
             'domain' => $siteDomain,
             'search_url' => $searchUrl,
             'search_page_url' => $searchPageUrl,
             'search_params' => $searchParams,
+            'formatting' => $formatting,
         ]);
     }
 

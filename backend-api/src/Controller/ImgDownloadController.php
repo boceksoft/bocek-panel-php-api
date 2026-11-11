@@ -82,7 +82,7 @@ final class ImgDownloadController extends Controller
                     $this->db->pdo()->prepare("UPDATE homes SET resim = :resim WHERE id = :vid")
                         ->execute(['resim' => $remaining ? implode(',', $remaining) : null, 'vid' => $villaId]);
                 }
-                \App\Support\HomesCompletion::refresh($this->db->pdo(), (int) $villaId);
+                \App\Support\HomesCompletion::refresh($this->db->pdo(), (int) $villaId, $this->app);
             }
             $this->response->success(['message' => 'Fotograf silindi.', 'id' => $uploadId]);
             return;
@@ -292,7 +292,7 @@ final class ImgDownloadController extends Controller
             }
 
             $uploadId = $this->db->pdo()->lastInsertId();
-            \App\Support\HomesCompletion::refresh($this->db->pdo(), (int) $villaId);
+            \App\Support\HomesCompletion::refresh($this->db->pdo(), (int) $villaId, $this->app);
             // Config homes_image_property_urls aciksa yeni CDN yapisi: /property/small/{villaId}/{dosya}
             $cdnBase = Uploads::homeImageBase((defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/', (int) $villaId, $this->app);
             $this->response->success([

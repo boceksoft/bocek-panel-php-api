@@ -130,8 +130,10 @@ return [
         1 => 'arama-sonuclari',
     ],
 
-    // Sitenin arama sorgu parametreleri (siteId => parametre adlari ve dizi tipi).
+    // Sitenin arama sorgu parametreleri (siteId => parametre adlari, dizi tipi ve format).
     // Parametre adlari: start, end, adult, child, baby, min, max, region, type.
+    // Bos string birakilan parametre sorguya dahil edilmez ve default deger verilmez.
+    // formatting: parametre ozel formatlari (orn: {"start": "Y-m-d", "end": "Y-m-d"}). Bos birakilan alanlar formatting listesine eklenmez.
     // use_mutliple_for_array_query: true ise dizi parametreleri ayni isim tekrarlanarak eklenir (orn: bolge=17&bolge=21).
     // false ise virgul ile birlestirilerek eklenir (orn: bolge=55,17).
     'site_search_params' => [
@@ -146,6 +148,10 @@ return [
             'region' => 'bolge',
             'type' => 'type',
             'use_mutliple_for_array_query' => false,
+            'formatting' => [
+                'start' => 'Y-m-d',
+                'end' => 'Y-m-d',
+            ],
         ],
     ],
 

@@ -54,7 +54,7 @@ final class SetupController extends Controller
 
         // Villalarin tamamlanma yuzdesi (homes.tamamlanma_yuzdesi) yeniden hesaplanir; hata kolon setup'ini bozmaz.
         try {
-            $homesCompletion = ['updated' => \App\Support\HomesCompletion::refreshAll($this->db->pdo())];
+            $homesCompletion = ['updated' => \App\Support\HomesCompletion::refreshAll($this->db->pdo(), $this->app)];
         } catch (\Throwable $e) {
             $homesCompletion = ['updated' => 0, 'error' => $e->getMessage()];
         }

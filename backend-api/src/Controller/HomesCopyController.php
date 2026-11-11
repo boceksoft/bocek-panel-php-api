@@ -62,7 +62,7 @@ final class HomesCopyController extends Controller
             throw $e;
         }
 
-        \App\Support\HomesCompletion::refresh($pdo, (int) $newId);
+        \App\Support\HomesCompletion::refresh($pdo, (int) $newId, $this->app);
 
         $this->response->success([
             'message' => 'Villa kopyalandi',

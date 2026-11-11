@@ -138,7 +138,10 @@ Doluysa `links_search_page_query` calismaz. Redirect hedefi direkt bu URL olur. 
 Site bazli arama sayfasi URL / path ayaridir. Ornek: `{"1": "arama-sonuclari", "2": "search-results"}`. Tam URL veya path girilebilir.
 
 `site_search_params`  
-Site bazli arama sorgu parametre adlari ve coklu deger gonderim tipidir. Parametreler: `start`, `end`, `adult`, `child`, `baby`, `min`, `max`, `region`, `type`. `use_mutliple_for_array_query`: `true` ise coklu filtrelerde ayni parametre birden cok kez eklenir (orn: `bolge=17&bolge=21`), `false` ise virgul ile birlestirilir (orn: `bolge=55,17`).
+Site bazli arama sorgu parametre adlari, ozel formatlar ve coklu deger gonderim tipidir. Parametreler: `start`, `end`, `adult`, `child`, `baby`, `min`, `max`, `region`, `type`.
+- Kullanilmayan arama parametresi bos string (`""`) birakilabilir; default degere donusmez.
+- `formatting`: parametre ozel formatlari (orn: `{"start": "Y-m-d", "end": "Y-m-d"}`). Bos birakilan alanlar formatting listesine eklenmez.
+- `use_mutliple_for_array_query`: `true` ise coklu filtrelerde ayni parametre birden cok kez eklenir (orn: `bolge=17&bolge=21`), `false` ise virgul ile birlestirilir (orn: `bolge=55,17`).
 
 `reservation_filters_use_acenta_users`  
 Rezervasyon filtrelerinde `acenta_users` tablosundan alt acentalar cekilsin mi?

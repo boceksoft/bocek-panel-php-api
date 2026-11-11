@@ -15,6 +15,8 @@ use PDO;
  *   Konum: bolge, enlem, boylam
  *   Medya: en az 3 fotograf
  *   SEO: meta baslik >= 10, meta aciklama >= 50, url >= 3 karakter
+ *
+ * Ayni geciste SEO puani da (homes.seo_yuzdesi) hesaplanir; bkz. HomesSeoScore.
  */
 final class HomesCompletion
 {
@@ -25,65 +27,80 @@ final class HomesCompletion
     private const OPTIONAL_COLUMNS = [
         'baslik', 'kisa_icerik', 'icerik', 'kisi', 'ozellikler', 'kurallar',
         'emlak_bolgesi', 'enlem', 'boylam', 'title', 'description', 'url',
+        'keywords', 'villaadi',
     ];
 
     public static function columnExists(PDO $pdo): bool
     {
-        return $pdo->query("SELECT COL_LENGTH('dbo.homes', '" . self::COLUMN . "')")->fetchColumn() !== null;
+        return self::homesColumnExists($pdo, self::COLUMN);
     }
 
     /**
      * Tek villayi yeniler. Asil kayit tamamlandiktan sonra cagrilir; hata kaydi bozmaz (setup yeniden hesaplar).
+     *
+     * @param array<string,mixed> $app uygulama ayarlari (villa adi kolonu icin, bkz. HomesCode::nameColumns)
      */
-    public static function refresh(PDO $pdo, int $homeId): void
+    public static function refresh(PDO $pdo, int $homeId, array $app = []): void
     {
         if ($homeId <= 0) {
             return;
         }
 
         try {
-            self::sync($pdo, $homeId);
+            self::sync($pdo, $homeId, $app);
         } catch (\Throwable $e) {
             error_log('HomesCompletion: ' . $e->getMessage());
         }
     }
 
     /**
-     * Tum villalari yeniler (setup). Sadece degeri degisen satirlara ve sadece bu kolona yazar.
+     * Tum villalari yeniler (setup). Sadece degeri degisen satirlara ve sadece bu iki kolona yazar.
      *
+     * @param array<string,mixed> $app
      * @return int degisen villa sayisi
      */
-    public static function refreshAll(PDO $pdo): int
+    public static function refreshAll(PDO $pdo, array $app = []): int
     {
         // Setup'in onceki adimlari sureyi tuketmis olabilir; toplu hesap kendi suresiyle baslar.
         if (function_exists('set_time_limit')) {
             @set_time_limit(300);
         }
 
-        return self::sync($pdo, null);
+        return self::sync($pdo, null, $app);
     }
 
-    private static function sync(PDO $pdo, ?int $homeId): int
+    /**
+     * @param array<string,mixed> $app
+     */
+    private static function sync(PDO $pdo, ?int $homeId, array $app): int
     {
-        if (!self::columnExists($pdo)) {
+        $hasCompletion = self::columnExists($pdo);
+        $hasSeo = HomesSeoScore::columnExists($pdo);
+        if (!$hasCompletion && !$hasSeo) {
             return 0;
         }
 
-        $features = self::countedFeatureTitles($pdo);
-        $rules = self::ruleIds($pdo);
-        $seasonHomes = self::homesWithSeasons($pdo, $homeId);
-        $imageCounts = self::imageCounts($pdo, $homeId);
+        $features = $hasCompletion ? self::countedFeatureTitles($pdo) : [];
+        $rules = $hasCompletion ? self::ruleIds($pdo) : [];
+        $seasonHomes = $hasCompletion ? self::homesWithSeasons($pdo, $homeId) : [];
+        $imageCounts = $hasCompletion ? self::imageCounts($pdo, $homeId) : [];
+        $nameColumns = HomesCode::nameColumns($app);
 
         $select = [];
         foreach (self::existingColumns($pdo) as $column) {
-            // Icerik uzun olabilir; dolu olup olmadigini anlamak icin basi yeterli, bellek sismesin.
-            $select[] = $column === 'icerik'
-                ? 'LEFT(CONVERT(nvarchar(max), h.[icerik]), 20000) AS [icerik]'
-                : "h.[{$column}]";
+            if ($column === 'icerik') {
+                // Icerik uzun olabilir; bas kismi yeterli, bellek sismesin. SEO icin tam uzunluk ayrica
+                // (frontend'deki JS string uzunlugu = UTF-16 birim sayisi = nvarchar byte / 2).
+                $select[] = 'LEFT(CONVERT(nvarchar(max), h.[icerik]), 20000) AS [icerik]';
+                $select[] = 'ISNULL(DATALENGTH(CONVERT(nvarchar(max), h.[icerik])), 0) / 2 AS [icerik_uzunluk]';
+            } else {
+                $select[] = "h.[{$column}] AS [{$column}]";
+            }
         }
-        $selectSql = $select === [] ? '' : implode(', ', $select) . ',';
+        $select[] = $hasCompletion ? 'h.[' . self::COLUMN . '] AS stored_percent' : 'CAST(NULL AS int) AS stored_percent';
+        $select[] = $hasSeo ? 'h.[' . HomesSeoScore::COLUMN . '] AS stored_seo' : 'CAST(NULL AS int) AS stored_seo';
         $stmt = $pdo->prepare(
-            "SELECT {$selectSql} h.id, h.[" . self::COLUMN . "] AS stored_percent,
+            'SELECT ' . implode(', ', $select) . ", h.id,
                     (SELECT TOP 1 baslik FROM tip WHERE tip.id = h.emlak_tipi) AS tip_baslik
              FROM dbo.homes h" . ($homeId !== null ? ' WHERE h.id = :id' : '')
         );
@@ -93,31 +110,55 @@ final class HomesCompletion
         $stmt->execute();
 
         // Tek baglantida okuma bitmeden yazilmaz; degisenler toplanip sonra guncellenir.
-        $changes = [];
+        $completionChanges = [];
+        $seoChanges = [];
         while (($row = $stmt->fetch(PDO::FETCH_ASSOC)) !== false) {
             $id = (int) $row['id'];
-            $percent = self::percent($row, $features, $rules, isset($seasonHomes[$id]), $imageCounts[$id] ?? 0);
-            if ($row['stored_percent'] === null || (int) $row['stored_percent'] !== $percent) {
-                $changes[$id] = $percent;
+            if ($hasCompletion) {
+                $percent = self::percent($row, $features, $rules, isset($seasonHomes[$id]), $imageCounts[$id] ?? 0);
+                if ($row['stored_percent'] === null || (int) $row['stored_percent'] !== $percent) {
+                    $completionChanges[$id] = $percent;
+                }
+            }
+            if ($hasSeo) {
+                $seo = HomesSeoScore::score($row, $nameColumns);
+                if ($row['stored_seo'] === null || (int) $row['stored_seo'] !== $seo) {
+                    $seoChanges[$id] = $seo;
+                }
             }
         }
         $stmt->closeCursor();
 
-        // Yuzde en fazla yedi farkli deger alir; ayni yuzdedeki villalar parcalar halinde birlikte guncellenir.
-        $idsByPercent = [];
-        foreach ($changes as $id => $percent) {
-            $idsByPercent[$percent][] = (int) $id;
+        self::writeGrouped($pdo, self::COLUMN, $completionChanges);
+        self::writeGrouped($pdo, HomesSeoScore::COLUMN, $seoChanges);
+
+        return count($completionChanges + $seoChanges);
+    }
+
+    /**
+     * Ayni degerdeki villalar parcalar halinde birlikte guncellenir.
+     *
+     * @param array<int,int> $changes villa id => yeni deger
+     */
+    private static function writeGrouped(PDO $pdo, string $column, array $changes): void
+    {
+        $idsByValue = [];
+        foreach ($changes as $id => $value) {
+            $idsByValue[$value][] = (int) $id;
         }
-        foreach ($idsByPercent as $percent => $ids) {
+        foreach ($idsByValue as $value => $ids) {
             foreach (array_chunk($ids, 500) as $chunk) {
                 $pdo->exec(
-                    'UPDATE dbo.homes SET [' . self::COLUMN . '] = ' . (int) $percent
+                    'UPDATE dbo.homes SET [' . $column . '] = ' . (int) $value
                     . ' WHERE id IN (' . implode(',', $chunk) . ')'
                 );
             }
         }
+    }
 
-        return count($changes);
+    public static function homesColumnExists(PDO $pdo, string $column): bool
+    {
+        return $pdo->query("SELECT COL_LENGTH('dbo.homes', '" . str_replace("'", '', $column) . "')")->fetchColumn() !== null;
     }
 
     /**
