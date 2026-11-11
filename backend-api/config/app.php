@@ -124,6 +124,25 @@ return [
         1 => 'arama-sonuclari',
     ],
 
+    // Sitenin arama sorgu parametreleri (siteId => parametre adlari ve dizi tipi).
+    // Parametre adlari: start, end, adult, child, baby, min, max, region, type.
+    // use_mutliple_for_array_query: true ise dizi parametreleri ayni isim tekrarlanarak eklenir (orn: bolge=17&bolge=21).
+    // false ise virgul ile birlestirilerek eklenir (orn: bolge=55,17).
+    'site_search_params' => [
+        1 => [
+            'start' => 'start',
+            'end' => 'end',
+            'adult' => 'yetiskin',
+            'child' => 'cocuk',
+            'baby' => 'bebek',
+            'min' => 'min',
+            'max' => 'max',
+            'region' => 'bolge',
+            'type' => 'type',
+            'use_mutliple_for_array_query' => false,
+        ],
+    ],
+
     // Rezervasyon filtrelerinde acenta_users tablosundan alt acentalar cekilsin mi?
     'reservation_filters_use_acenta_users' => false,
 
@@ -379,6 +398,7 @@ return [
         'guest_movements_use_caretaker_owner_fallback' => 'bool',
         'links_search_page_url' => 'string',
         'site_search_url' => 'array',
+        'site_search_params' => 'array',
         'reservation_filters_use_acenta_users' => 'bool',
         'reservation_filters_use_status_log' => 'bool',
         'reservation_detail_use_islem_kaydi' => 'bool',

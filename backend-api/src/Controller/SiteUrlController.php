@@ -43,8 +43,15 @@ class SiteUrlController extends Controller
 
         $searchUrls = $this->app['site_search_url'] ?? [];
         $searchUrl = '';
+        $inlineParams = [];
         if (is_array($searchUrls)) {
-            $searchUrl = (string) ($searchUrls[$siteId] ?? ($searchUrls[(string) $siteId] ?? ''));
+            $val = $searchUrls[$siteId] ?? ($searchUrls[(string) $siteId] ?? '');
+            if (is_array($val)) {
+                $searchUrl = (string) ($val['url'] ?? ($val['path'] ?? ''));
+                $inlineParams = isset($val['params']) && is_array($val['params']) ? $val['params'] : $val;
+            } else {
+                $searchUrl = (string) $val;
+            }
         } elseif (is_string($searchUrls)) {
             $searchUrl = $searchUrls;
         }
@@ -65,16 +72,45 @@ class SiteUrlController extends Controller
                 : rtrim($fullDomain, '/') . '/' . ltrim($searchUrl, '/');
         }
 
+        $defaultSearchParams = [
+            'start' => 'start',
+            'end' => 'end',
+            'adult' => 'yetiskin',
+            'child' => 'cocuk',
+            'baby' => 'bebek',
+            'min' => 'min',
+            'max' => 'max',
+            'region' => 'bolge',
+            'type' => 'type',
+            'use_mutliple_for_array_query' => false,
+        ];
+
+        $searchParamsConfig = $this->app['site_search_params'] ?? ($this->app['site_search_queries'] ?? []);
+        $configuredParams = [];
+        if (is_array($searchParamsConfig)) {
+            $cfg = $searchParamsConfig[$siteId] ?? ($searchParamsConfig[(string) $siteId] ?? []);
+            if (is_array($cfg)) {
+                $configuredParams = $cfg;
+            }
+        }
+
+        $searchParams = array_merge($defaultSearchParams, $inlineParams, $configuredParams);
+        $searchParams['use_mutliple_for_array_query'] = (bool) (
+            $searchParams['use_mutliple_for_array_query'] ?? ($searchParams['use_multiple_for_array_query'] ?? false)
+        );
+
         $this->response->success([
             'site' => [
                 'id' => $siteId,
                 'domain' => $siteDomain,
                 'search_url' => $searchUrl,
                 'search_page_url' => $searchPageUrl,
+                'search_params' => $searchParams,
             ],
             'domain' => $siteDomain,
             'search_url' => $searchUrl,
             'search_page_url' => $searchPageUrl,
+            'search_params' => $searchParams,
         ]);
     }
 

@@ -107,6 +107,7 @@ gondermelidir.
     'links_search_page_query' => 'string',
     'links_search_page_url' => 'string',
     'site_search_url' => 'array',
+    'site_search_params' => 'array',
     'reservation_filters_use_acenta_users' => 'bool',
     'reservation_detail_use_islem_kaydi' => 'bool',
     'reservations_country_code_column' => 'string',
@@ -135,6 +136,9 @@ Doluysa `links_search_page_query` calismaz. Redirect hedefi direkt bu URL olur. 
 
 `site_search_url`  
 Site bazli arama sayfasi URL / path ayaridir. Ornek: `{"1": "arama-sonuclari", "2": "search-results"}`. Tam URL veya path girilebilir.
+
+`site_search_params`  
+Site bazli arama sorgu parametre adlari ve coklu deger gonderim tipidir. Parametreler: `start`, `end`, `adult`, `child`, `baby`, `min`, `max`, `region`, `type`. `use_mutliple_for_array_query`: `true` ise coklu filtrelerde ayni parametre birden cok kez eklenir (orn: `bolge=17&bolge=21`), `false` ise virgul ile birlestirilir (orn: `bolge=55,17`).
 
 `reservation_filters_use_acenta_users`  
 Rezervasyon filtrelerinde `acenta_users` tablosundan alt acentalar cekilsin mi?

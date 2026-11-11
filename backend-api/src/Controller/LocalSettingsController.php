@@ -40,6 +40,7 @@ final class LocalSettingsController extends Controller
 
         $this->enrichSiteLanguages($values, $local);
         $this->enrichSiteSearchUrl($values, $local);
+        $this->enrichSiteSearchParams($values, $local);
 
         $this->response->success([
             'values' => $values,
@@ -172,6 +173,50 @@ final class LocalSettingsController extends Controller
         }
 
         $values['site_search_url']['value'] = $siteSearchUrl;
+    }
+
+    private function enrichSiteSearchParams(array &$values, array $local): void
+    {
+        if (!isset($values['site_search_params'])) {
+            return;
+        }
+
+        $suffixes = $values['site_column_suffixes']['value'] ?? ($local['site_column_suffixes'] ?? ($this->app['site_column_suffixes'] ?? [1 => '', 2 => '_s2']));
+        if (!is_array($suffixes) || $suffixes === []) {
+            $suffixes = [1 => ''];
+        }
+
+        $defaultParams = [
+            'start' => 'start',
+            'end' => 'end',
+            'adult' => 'yetiskin',
+            'child' => 'cocuk',
+            'baby' => 'bebek',
+            'min' => 'min',
+            'max' => 'max',
+            'region' => 'bolge',
+            'type' => 'type',
+            'use_mutliple_for_array_query' => false,
+        ];
+
+        $existing = is_array($values['site_search_params']['value']) ? $values['site_search_params']['value'] : [];
+        $siteSearchParams = [];
+
+        foreach ($suffixes as $siteId => $suffix) {
+            $siteId = (int) $siteId;
+            $siteParams = $existing[$siteId] ?? ($existing[(string) $siteId] ?? null);
+            if (is_array($siteParams)) {
+                $merged = array_merge($defaultParams, $siteParams);
+                $merged['use_mutliple_for_array_query'] = (bool) (
+                    $merged['use_mutliple_for_array_query'] ?? ($merged['use_multiple_for_array_query'] ?? false)
+                );
+                $siteSearchParams[$siteId] = $merged;
+            } else {
+                $siteSearchParams[$siteId] = $defaultParams;
+            }
+        }
+
+        $values['site_search_params']['value'] = $siteSearchParams;
     }
 
     /**
@@ -649,6 +694,27 @@ final class LocalSettingsController extends Controller
                     if (is_array($existing)) {
                         foreach ($value as $k => $v) {
                             $existing[(int) $k] = trim((string) $v);
+                        }
+                        return $existing;
+                    }
+                }
+
+                if ($key === 'site_search_params') {
+                    $existing = $local['site_search_params'] ?? ($this->app['site_search_params'] ?? []);
+                    if (!is_array($existing)) {
+                        $existing = [];
+                    }
+                    if (isset($value['start']) || isset($value['region']) || isset($value['type']) || isset($value['use_mutliple_for_array_query']) || isset($value['use_multiple_for_array_query'])) {
+                        $siteId = (int) ($this->request->query('site', $this->request->input('site', 1)));
+                        $siteId = $siteId > 0 ? $siteId : 1;
+                        $existing[$siteId] = $value;
+                        return $existing;
+                    }
+                    if (is_array($existing)) {
+                        foreach ($value as $k => $v) {
+                            if (is_array($v)) {
+                                $existing[(int) $k] = $v;
+                            }
                         }
                         return $existing;
                     }

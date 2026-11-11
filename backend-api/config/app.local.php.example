@@ -41,6 +41,34 @@ return [
     //     2 => 'search-results',
     // ],
 
+    // Site bazli arama sorgu parametreleri.
+    // 'site_search_params' => [
+    //     1 => [
+    //         'start' => 'start',
+    //         'end' => 'end',
+    //         'adult' => 'yetiskin',
+    //         'child' => 'cocuk',
+    //         'baby' => 'bebek',
+    //         'min' => 'min',
+    //         'max' => 'max',
+    //         'region' => 'bolge',
+    //         'type' => 'type',
+    //         'use_mutliple_for_array_query' => false,
+    //     ],
+    //     2 => [
+    //         'start' => 'searchdate1',
+    //         'end' => 'searchdate2',
+    //         'adult' => 'yetiskin',
+    //         'child' => 'cocuk',
+    //         'baby' => 'bebek',
+    //         'min' => 'min',
+    //         'max' => 'max',
+    //         'region' => 'bolge',
+    //         'type' => 'tip',
+    //         'use_mutliple_for_array_query' => true,
+    //     ],
+    // ],
+
     // Bu sitede acenta_users tablosu yoksa false yap.
     // 'reservation_filters_use_acenta_users' => false,
 
