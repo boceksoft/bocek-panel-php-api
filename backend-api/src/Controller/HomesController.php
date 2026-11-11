@@ -34,7 +34,7 @@ final class HomesController extends Controller
      * @query sadecebizde int 1: sadece homes.sadece_bizde = 1 villalar (Config'de Sadece Bizde secili ise)
      * @query pasifler int 1: aktif olmayan villalar da gelir (sadece Ozel Listeler villa ekrani)
      * @query indirim int 1: secilen tarihlerde indirimi olan villalar (sitede gosterilen indirimler)
-     * @query mimicFrontend int 1: frontend kanun7464 kurallarını (gavel & izin süresi) uygular
+     * @query mimicFrontend int 1: frontend kurallarını (gavel, izin süresi, alt bölge & alt kategori açılımı) uygular
      * @query order_by int Sıralama (0-6)
      * @query page int Sayfa
      * @query per_page int Sayfa başına kayıt
@@ -143,7 +143,10 @@ final class HomesController extends Controller
         }
 
         $tip2     = $this->p('tip2', '1');
-        $bolge    = $this->p('bolge');
+        $bolge    = $this->multiQuery('bolge');
+        if ($bolge === '') {
+            $bolge = $this->p('bolge');
+        }
         $ozellik  = $this->p('ozellik');
         $villaadi = $this->p('villaadi');
         $orderBy  = $this->pInt('order_by', 0);
@@ -251,14 +254,33 @@ final class HomesController extends Controller
                 return $v > 0;
             });
             if ($tipIds) {
-                if ($tip2 === '2') {
-                    $parts = array_map(function ($t) {
-                        return "(','+REPLACE(h.kategori,' ','')+',' LIKE '%,{$t},%' OR h.emlak_tipi = {$t})";
-                    }, $tipIds);
-                    $sql .= ' AND (1=2 OR ' . implode(' OR ', $parts) . ')';
-                } else {
+                if ($mimicFrontend) {
+                    $categoryConditions = [];
                     foreach ($tipIds as $t) {
-                        $sql .= " AND (','+REPLACE(h.kategori,' ','')+',' LIKE '%,{$t},%' OR h.emlak_tipi = {$t})";
+                        $expanded = $this->resolveDescendantIds($pdo, 'tip', [$t]);
+                        $orClauses = array_map(function ($subT) {
+                            return "(','+REPLACE(h.kategori,' ','')+',' LIKE '%,{$subT},%' OR h.emlak_tipi = {$subT})";
+                        }, $expanded);
+                        $categoryConditions[] = '(' . implode(' OR ', $orClauses) . ')';
+                    }
+
+                    if ($tip2 === '2') {
+                        $sql .= ' AND (1=2 OR ' . implode(' OR ', $categoryConditions) . ')';
+                    } else {
+                        foreach ($categoryConditions as $cond) {
+                            $sql .= ' AND ' . $cond;
+                        }
+                    }
+                } else {
+                    if ($tip2 === '2') {
+                        $parts = array_map(function ($t) {
+                            return "(','+REPLACE(h.kategori,' ','')+',' LIKE '%,{$t},%' OR h.emlak_tipi = {$t})";
+                        }, $tipIds);
+                        $sql .= ' AND (1=2 OR ' . implode(' OR ', $parts) . ')';
+                    } else {
+                        foreach ($tipIds as $t) {
+                            $sql .= " AND (','+REPLACE(h.kategori,' ','')+',' LIKE '%,{$t},%' OR h.emlak_tipi = {$t})";
+                        }
                     }
                 }
             }
@@ -269,6 +291,9 @@ final class HomesController extends Controller
                 return $v > 0;
             });
             if ($bolgeIds) {
+                if ($mimicFrontend) {
+                    $bolgeIds = $this->resolveDescendantIds($pdo, 'destinations', $bolgeIds);
+                }
                 $parts = array_map(function ($b) {
                     return "({$b} IN (d2.id, d1.id, d0.id))";
                 }, $bolgeIds);
@@ -322,8 +347,8 @@ final class HomesController extends Controller
 
         // ORDER BY + sayfalama
         $isFilterSelected = (
-            $hasDate || $this->pInt('kisi') > 0 || $this->p('tip') !== '' ||
-            $this->p('bolge') !== '' || $this->p('ozellik') !== '' || $this->p('villaadi') !== ''
+            $hasDate || $this->pInt('kisi') > 0 || $tipx !== '' ||
+            $bolge !== '' || $this->p('ozellik') !== '' || $this->p('villaadi') !== ''
         );
         $sql .= "\nORDER BY " . $this->orderClause($orderBy, $orderByEk, $isFilterSelected);
         $sql .= "\nOFFSET {$offset} ROWS FETCH NEXT {$perPage} ROWS ONLY";
@@ -955,5 +980,53 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
     private function safeSuffix(string $suffix): string
     {
         return $suffix === '' || preg_match('/^_[A-Za-z0-9]+$/', $suffix) === 1 ? $suffix : '';
+    }
+
+    /**
+     * Verilen tablodaki (destinations / tip) alt kimlikleri (cat kolonundan) özyinelemeli çözer.
+     *
+     * @param PDO $pdo
+     * @param string $table
+     * @param int[] $parentIds
+     * @return int[]
+     */
+    private function resolveDescendantIds(PDO $pdo, string $table, array $parentIds): array
+    {
+        if ($parentIds === []) {
+            return [];
+        }
+
+        $allIds = array_combine($parentIds, $parentIds);
+
+        try {
+            $stmt = $pdo->query("SELECT id, cat FROM {$table}");
+            $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+
+            $childrenByParent = [];
+            foreach ($rows as $row) {
+                $id = (int) ($row['id'] ?? 0);
+                $cat = (int) ($row['cat'] ?? 0);
+                if ($id > 0 && $cat > 0) {
+                    $childrenByParent[$cat][] = $id;
+                }
+            }
+
+            $queue = $parentIds;
+            while ($queue !== []) {
+                $current = array_pop($queue);
+                if (isset($childrenByParent[$current])) {
+                    foreach ($childrenByParent[$current] as $childId) {
+                        if (!isset($allIds[$childId])) {
+                            $allIds[$childId] = $childId;
+                            $queue[] = $childId;
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // Hata durumunda parent kimlikler korunur
+        }
+
+        return array_values($allIds);
     }
 }
