@@ -371,7 +371,7 @@ final class HomesManagementDetailUpdateController extends Controller
             'bakimciadi' => 'bakimciad',
             'bakimcitel' => 'bakimcitel',
             'evsahibi' => 'evsahibi',
-            'whatsappgrupadi' => 'whatsapp_grup',
+            'whatsappgrupadi' => $this->whatsappColumn() ?? 'whatsapp_grup',
             'yetkilifirma' => 'yetkilifirma',
             // Ilan notu: panel homes.not kullaniyor (not2'yi hicbir panel formu doldurmuyor).
             'ilannotlari' => 'not',
@@ -405,7 +405,7 @@ final class HomesManagementDetailUpdateController extends Controller
             'genelBilgiler.iletisimBilgileri.bakimciBilgisi.ad_soyad' => 'bakimciad',
             'genelBilgiler.iletisimBilgileri.bakimciBilgisi.telefon' => 'bakimcitel',
             'genelBilgiler.iletisimBilgileri.evSahibiBilgisi.id' => 'evsahibi',
-            'genelBilgiler.iletisimBilgileri.whatsapp_grup_adi' => 'whatsapp_grup',
+            'genelBilgiler.iletisimBilgileri.whatsapp_grup_adi' => $this->whatsappColumn() ?? 'whatsapp_grup',
             'genelBilgiler.iletisimBilgileri.yetkili_firma_adi' => 'yetkilifirma',
             'genelBilgiler.yoneticiBilgileri.ilan_notlari' => 'not',
             'genelBilgiler.detayliAciklama.icerik' => 'icerik',

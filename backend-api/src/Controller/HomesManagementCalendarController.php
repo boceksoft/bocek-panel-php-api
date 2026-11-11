@@ -19,8 +19,8 @@ use PDO;
  * Kapatma: rezervasyonsuz dolu kaydidir (kayitid -1 veya NULL). Rezervasyon kayitlarina (kayitid > 0) dokunulmaz.
  *
  * rez_tip: dolu.rez_tip doluysa o deger; bossa kayitid varsa "rezervasyon", yoksa "kapali".
- * Kiralama Takvimi'nden ice aktarilan satir (kayitid -1, ReservationId > 0) rezervasyon gibidir: Durum 1 ise "opsiyon",
- * degilse "rezervasyon" listelenir; takvimden duzenlenemez / silinemez, cakisma kontrolunde engeller.
+ * Kiralama Takvimi'nden ice aktarilan satir (kayitid -1, ReservationId > 0): Durum 1 ise "opsiyon", degilse "kapali"
+ * listelenir (KT onayli kaydi "tarihi kapatti" olarak gosterir; panelde rezervasyonu yoktur); takvimden duzenlenemez / silinemez, cakisma kontrolunde engeller.
  *
  * Opsiyon (rezTip "opsiyon", doluluk takviminden, Kiralama Takvimi'ne bagli olmayan villa): rezervasyonsuz dolu kaydi,
  * Durum 1, saat2 = opsiyon suresi (saat). Suresi dolunca kendiliginden silinmez.
@@ -33,7 +33,7 @@ use PDO;
  * Ayarlar (config/app.local.php): kiralamatakvimi_panel_api_url, kiralamatakvimi_panel_api_headers.
  */
 final class HomesManagementCalendarController extends Controller
-{
+{ 
     // Ornek kapatma kaydindaki degerler: Durum 0, kayitid -1, kullanici_id -99, IsExternal 0, State 0.
     private const CLOSURE_DURUM = 0;
     private const CLOSURE_KAYIT_ID = -1;
@@ -125,7 +125,8 @@ final class HomesManagementCalendarController extends Controller
             $rezTip = trim((string) ($row['rez_tip'] ?? ''));
             if ($rezTip === '') {
                 if ($kayitId <= 0 && $ktReservationId > 0) {
-                    $rezTip = $durum === self::OPTION_DURUM ? self::OPTION_TYPE : 'rezervasyon';
+                    // KT'de onayli (Approved) kayit "tarihi kapatti"dir; panelde rezervasyonu olmadigi icin kapali gosterilir.
+                    $rezTip = $durum === self::OPTION_DURUM ? self::OPTION_TYPE : 'kapali';
                 } else {
                     $rezTip = $kayitId > 0 ? 'rezervasyon' : 'kapali';
                 }
@@ -341,10 +342,32 @@ final class HomesManagementCalendarController extends Controller
             );
         }
 
+        // KT'de kapatma onayli bir rezervasyon olarak acilir; panelin dolu satirinda tip olmadigi icin takvimde
+        // "rezervasyon" gorunuyordu. Satir (ReservationId) varsa rez_tip 'kapali' yazilir.
+        if (!$isOption) {
+            $this->markKtRowAsClosure($pdo, $emlakId, $reservationId);
+        }
+
         $this->response->success([
             'message' => $isOption ? 'Kiralama Takvimi\'nde opsiyona alindi' : 'Kiralama Takvimi\'nde tarih kapatildi',
             'kiralamaTakvimi' => ['reservationId' => $reservationId, 'estateId' => $estateId, 'existing' => $isExisting],
         ], 201);
+    }
+
+    /**
+     * Kiralama Takvimi'nde kapatilan tarihlerin dolu satirini (ReservationId) 'kapali' tipine isaretler; hata kapatmayi bozmaz.
+     */
+    private function markKtRowAsClosure(PDO $pdo, int $emlakId, int $reservationId): void
+    {
+        if ($reservationId <= 0 || !$this->hasColumn($pdo, 'dbo.dolu', 'rez_tip') || !$this->hasColumn($pdo, 'dbo.dolu', 'ReservationId')) {
+            return;
+        }
+        try {
+            $pdo->prepare("UPDATE dbo.dolu SET rez_tip = 'kapali' WHERE emlak = :emlak AND ReservationId = :rid AND ISNULL(rez_tip, '') = ''")
+                ->execute([':emlak' => $emlakId, ':rid' => $reservationId]);
+        } catch (\Throwable $e) {
+            error_log('KT kapatma rez_tip yazilamadi: ' . $e->getMessage());
+        }
     }
 
     /**

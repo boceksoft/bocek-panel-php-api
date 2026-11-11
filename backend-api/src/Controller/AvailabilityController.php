@@ -149,7 +149,9 @@ final class AvailabilityController extends Controller
                 (SELECT
                     ISNULL(STRING_AGG({$anyTarih1},','),'') AS sondakikaGirisler,
                     ISNULL(STRING_AGG({$anyTarih2},','),'') AS sondakikaCikislar,
-                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2({$anyTarih1},{$anyTarih2}),','),'') AS sondakikaGunler
+                    ISNULL(STRING_AGG(dbo.Natsisa_Fn_aratarihler2({$anyTarih1},{$anyTarih2}),','),'') AS sondakikaGunler,
+                    -- sondakikaGirisler / sondakikaCikislar ile ayni sirada: o aralik icin toplam fiyat (villanin para biriminde)
+                    ISNULL(STRING_AGG(CASE WHEN {$anyTarih1} IS NULL OR {$anyTarih2} IS NULL THEN NULL ELSE CONVERT(nvarchar(50), ISNULL(fiyat, 0)) END,','),'') AS sondakikaFiyatlar
                     FROM sonDakika WHERE {$anyTarih2} > TRY_CONVERT(date,GETDATE(),103) AND site = " . $siteVal . " AND islem_id = " . $entityId . ") AS sonDakika,
                 (" . $doluTarihlerSql . ") AS dolu,
                 (SELECT

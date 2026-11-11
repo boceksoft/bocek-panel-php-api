@@ -62,6 +62,8 @@ final class HomesManagementDetailDataController extends Controller
         $discountTypes = HomesDiscountTypes::definition($this->app);
         $selectableData['indirim_turu'] = $discountTypes['enabled'];
         $selectableData['indirim_turleri'] = $discountTypes;
+        // Sahte indirim orani (config homes_fake_discount): acikken indirim eklerken sahte oran alani gosterilir.
+        $selectableData['sahte_indirim'] = !empty($this->app['homes_fake_discount']);
 
         $this->response->success([
             'fields' => $this->fields(),
@@ -101,6 +103,7 @@ final class HomesManagementDetailDataController extends Controller
             'yukleme_siniri' => $selectableData['yukleme_siniri'],
             'indirim_turu' => $selectableData['indirim_turu'],
             'indirim_turleri' => $selectableData['indirim_turleri'],
+            'sahte_indirim' => $selectableData['sahte_indirim'],
         ]);
     }
 

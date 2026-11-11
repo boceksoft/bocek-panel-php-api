@@ -49,6 +49,12 @@ return [
     // rezervasyonda firma / villa sahibi tutarlari elle duzeltilir).
     'homes_discount_type' => true,
 
+    // Villa indirimlerinde sahte oran (indirimler.sahte_oran): acilirsa ilan ekraninda ve ilan takviminde indirim
+    // eklerken gercek oranin yaninda "Gosterilecek (sahte) oran" girilir; fiyat hesabinda site eski fiyati bu oranla
+    // ustu cizili gosterir (CalculateController: SahteIndirimTutari). Kapaliysa (varsayilan) alan gizli, sahte oran 0
+    // yazilir. Villa Kiralama > Config ekranindan degistirilir.
+    'homes_fake_discount' => false,
+
     // Villa indirim turleri (indirimler.discountType); degerlerin anlami siteye gore degisir. Bkz. src/Support/HomesDiscountTypes.php
     //   options: value, label, payer (rezervasyonda kim karsilar: site | ev_sahibi | genel),
     //            base (price | commission: fiyat x KO x oran | owner_share: fiyat x (100 - KO) x oran).
@@ -388,6 +394,7 @@ return [
     'editable_local_settings' => [
         'homes_two_cover_images' => 'bool',
         'homes_title_use_code' => 'bool',
+        'homes_fake_discount' => 'bool',
         'homes_extra_fields' => 'array',
         'homes_code' => 'array',
         'homes_empty_seasons' => 'array',

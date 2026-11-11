@@ -48,9 +48,9 @@ final class HomesManagementController extends Controller
         $imageColumn = 'h.' . $this->siteColumn('resim', $siteId);
         $depositColumn = 'h.' . $this->siteColumn('depozito', $siteId);
         $regionTitleColumn = 'd.' . $this->siteColumn('baslik', $siteId);
-        // WhatsApp grup adi: ilan detayindaki gibi whatsapp_grup, yoksa rez_takip_yeri_adi.
+        // WhatsApp grup adi: sitenin config'indeki WhatsappColumnName; tanimli degilse whatsapp_grup, yoksa rez_takip_yeri_adi.
         $whatsappColumn = "N''";
-        foreach (['whatsapp_grup', 'rez_takip_yeri_adi'] as $candidate) {
+        foreach ($this->whatsappColumnCandidates() as $candidate) {
             if ((int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.homes', '{$candidate}') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1) {
                 $whatsappColumn = "ISNULL(h.[{$candidate}], N'')";
                 break;
@@ -256,6 +256,7 @@ SELECT
     h.evkodu AS code,
     " . $this->homeTitleSql('h', $titleColumn) . " AS title,
     {$titleColumn} AS gavel_title,
+    " . $this->homeRealNameSql($pdo, 'h', $titleColumn) . " AS real_title,
     h.siralama AS sort_order, 
     {$imageColumn} AS image,
     h.yatak_odasi AS bedroom_count,
@@ -263,6 +264,8 @@ SELECT
     h.banyo AS bathroom_count,
     h.kazancorani AS earning_rate,
     {$depositColumn} AS deposit_percentage,
+    ISNULL(own.owner_name, '') AS owner_name,
+    ISNULL(own.owner_phone, '') AS owner_phone,
     ISNULL(h.bakimciad, '') AS caretaker_name,
     ISNULL(h.bakimcitel, '') AS caretaker_phone,
     {$whatsappColumn} AS whatsapp_group,
@@ -284,6 +287,14 @@ SELECT
 FROM homes h
 INNER JOIN destinations d ON d.id = h.emlak_bolgesi
 LEFT JOIN kanun7464 gavel ON gavel.homeId = h.id
+OUTER APPLY (
+    -- Ev sahibi: ilan detayindaki gibi homes.evsahibi -> kullanici
+    SELECT TOP 1
+        LTRIM(RTRIM(CONCAT(ISNULL(k.ad, ''), ' ', ISNULL(k.soyad, '')))) AS owner_name,
+        LTRIM(RTRIM(ISNULL(CONVERT(nvarchar(255), k.tel), ''))) AS owner_phone
+    FROM kullanici k
+    WHERE k.id = h.evsahibi
+) AS own
 OUTER APPLY (
     SELECT MIN(fiyat_num.v) AS min_price
     FROM sezonlar sz
@@ -340,6 +351,8 @@ WHERE {$whereSql}
                 'code' => (string) $row['code'],
                 'title' => (string) $row['title'],
                 'gavel_title' => (string) $row['gavel_title'],
+                // Gercek villa adi (config homes_code: kod basliga yaziliyorsa homes.villaadi)
+                'real_title' => (string) ($row['real_title'] ?? ''),
                 'sort_order' => (int) $row['sort_order'],
                 'image' => $imageList ? $imageList[0] : '',
                 'image_list' => $imageList,
@@ -348,6 +361,9 @@ WHERE {$whereSql}
                 'bathroom_count' => (int) $row['bathroom_count'],
                 'earning_rate' => (float) $row['earning_rate'],
                 'deposit_percentage' => (float) $row['deposit_percentage'],
+                // Ev sahibi (homes.evsahibi -> kullanici; ilan detayindaki ev sahibi bilgisi)
+                'owner_name' => (string) ($row['owner_name'] ?? ''),
+                'owner_phone' => (string) ($row['owner_phone'] ?? ''),
                 'caretaker_name' => (string) $row['caretaker_name'],
                 'caretaker_phone' => (string) $row['caretaker_phone'],
                 'whatsapp_group' => (string) $row['whatsapp_group'],

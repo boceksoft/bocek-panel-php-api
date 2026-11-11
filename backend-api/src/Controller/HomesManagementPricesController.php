@@ -17,6 +17,8 @@ use PDO;
  *   POST|PUT /backend-api/homes-management-prices/ekstra-ucretler?id={emlakId}
  *   POST|PUT /backend-api/homes-management-prices/indirimler?id={emlakId}&site={siteId}
  *   POST     /backend-api/homes-management-prices/indirimler?delete=1&indirimId={indirimId}
+ *   POST     /backend-api/homes-management-prices/last-minute?id={emlakId}&site={siteId}&tarih1=&tarih2=&fiyat=
+ *   POST     /backend-api/homes-management-prices/range-price?id={emlakId}&tarih1=&tarih2=&fiyat= (gecelik)
  */
 final class HomesManagementPricesController extends Controller
 {
@@ -379,12 +381,28 @@ final class HomesManagementPricesController extends Controller
     private function deleteDiscountFromPayload(array $payload): void
     {
         $discountId = $this->numericValue($payload, ['indirimId', 'discountId']);
+        $pdo = $this->db->pdo();
+
+        // Ilan takviminde x: indirim numarasi yerine villa + gun gelir; o gunu kapsayan indirim silinir.
+        $day = $this->normalizeDate($this->firstPayloadValue($payload, ['gun', 'day']));
+        $dayHomeId = $this->resolveId($payload);
+        if ($discountId <= 0 && $day !== '' && $dayHomeId > 0) {
+            $stmt = $pdo->prepare(
+                'SELECT TOP 1 id FROM indirimler
+                 WHERE emlak = :homeId AND tarih1 <= CONVERT(date, :day, 104) AND tarih2 >= CONVERT(date, :day2, 104)
+                 ORDER BY tarih1'
+            );
+            $stmt->execute([':homeId' => $dayHomeId, ':day' => $day, ':day2' => $day]);
+            $discountId = (int) $stmt->fetchColumn();
+            if ($discountId <= 0) {
+                throw new HttpException('Bu gunde indirim bulunamadi.', 'NOT_FOUND', 404);
+            }
+        }
 
         if ($discountId <= 0) {
             throw new HttpException('Lutfen gecerli bir indirim ID gonderin.', 'VALIDATION', 422);
         }
 
-        $pdo = $this->db->pdo();
 
         // Emlak verildiyse sadece o villanin indirimi silinir (yanlis indirim id'siyle baska villanin indirimi silinmesin).
         $homeId = $this->resolveId($payload);
@@ -412,6 +430,421 @@ final class HomesManagementPricesController extends Controller
                 'indirimler' => 1,
             ],
         ]);
+    }
+
+    /**
+     * Emlaga son dakika firsati ekler (sonDakika: giris / cikis tarihi ve o aralik icin toplam fiyat).
+     * Tarihler gg.aa.yyyy saklanir (fiyat hesabi ve musaitlik sorgulari once 104 bicimini okur).
+     *
+     * @Post("last-minute")
+     * @query id int required Emlak ID
+     * @query site int Site ID
+     * @query tarih1 string required Giris tarihi (gg.aa.yyyy ya da yyyy-aa-gg)
+     * @query tarih2 string required Cikis tarihi (gg.aa.yyyy ya da yyyy-aa-gg)
+     * @query fiyat float required Aralik icin toplam fiyat (villanin para biriminde)
+     */
+    public function lastMinute(): void
+    {
+        $payload = $this->payload();
+        $id = $this->resolveId($payload);
+        if ($id <= 0) {
+            throw new HttpException('Lutfen gecerli bir emlak ID gonderin.', 'VALIDATION', 422);
+        }
+        if ($this->boolPayloadValue($payload, ['delete'])) {
+            $this->deleteLastMinute($id, $payload);
+
+            return;
+        }
+
+        $startDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih1', 'startDate']));
+        $endDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih2', 'endDate']));
+        if ($startDate === '' || $endDate === '') {
+            throw new HttpException('Giris ve cikis tarihi zorunlu.', 'VALIDATION', 422);
+        }
+        $start = \DateTime::createFromFormat('!d.m.Y', $startDate);
+        $end = \DateTime::createFromFormat('!d.m.Y', $endDate);
+        if (!$start || !$end || $end <= $start) {
+            throw new HttpException('Cikis tarihi giris tarihinden sonra olmali.', 'VALIDATION', 422);
+        }
+
+        $priceRaw = str_replace(',', '.', trim((string) $this->firstPayloadValue($payload, ['fiyat', 'price'])));
+        if (!is_numeric($priceRaw) || (float) $priceRaw <= 0) {
+            throw new HttpException('Lutfen gecerli bir fiyat girin.', 'VALIDATION', 422);
+        }
+        // sonDakika.fiyat int: kurus yuvarlanir.
+        $price = (int) round((float) $priceRaw);
+        $siteId = $this->siteId($payload);
+
+        $pdo = $this->db->pdo();
+        $this->assertHomeExists($pdo, $id);
+
+        // Ayni tarihlere birden fazla son dakika olmaz: geceleri cakisan firsat varsa eklenmez (cikis gunu sayilmaz).
+        $anyTarih1 = \App\Support\SqlDate::any('tarih1');
+        $anyTarih2 = \App\Support\SqlDate::any('tarih2');
+        $overlapStmt = $pdo->prepare(
+            "SELECT TOP 1 CONVERT(varchar(10), {$anyTarih1}, 104) AS t1, CONVERT(varchar(10), {$anyTarih2}, 104) AS t2
+             FROM sonDakika
+             WHERE islem_id = :homeId AND site = :site
+               AND {$anyTarih1} < CONVERT(date, :endDate, 104)
+               AND {$anyTarih2} > CONVERT(date, :startDate, 104)"
+        );
+        $overlapStmt->execute([':homeId' => $id, ':site' => $siteId, ':startDate' => $startDate, ':endDate' => $endDate]);
+        $overlap = $overlapStmt->fetch(PDO::FETCH_ASSOC);
+        if ($overlap) {
+            throw new HttpException(
+                'Bu tarihlerde zaten bir son dakika firsati var (' . trim((string) $overlap['t1']) . ' - ' . trim((string) $overlap['t2'])
+                . '). Ayni tarihe birden fazla son dakika eklenemez.',
+                'VALIDATION',
+                422
+            );
+        }
+
+        try {
+            $stmt = $pdo->prepare(
+                'INSERT INTO sonDakika (site, islem_id, tarih1, tarih2, fiyat) VALUES (:site, :homeId, :tarih1, :tarih2, :fiyat)'
+            );
+            $stmt->execute([
+                ':site' => $siteId,
+                ':homeId' => $id,
+                ':tarih1' => $startDate,
+                ':tarih2' => $endDate,
+                ':fiyat' => $price,
+            ]);
+        } catch (\Throwable $e) {
+            throw new HttpException('Son dakika firsati kaydedilemedi.', 'DB_UPDATE_FAILED', 500, $e);
+        }
+
+        $this->response->success([
+            'id' => $id,
+            'site' => $siteId,
+            'tarih1' => $startDate,
+            'tarih2' => $endDate,
+            'fiyat' => $price,
+            'created' => true,
+        ]);
+    }
+
+    /**
+     * Secilen gecelerin fiyatini degistirir (ilan takvimi: fiyata tiklayip duzenleme / surukleyip toplu).
+     * Araliga dusen sezonlar aralik sinirlarindan bolunur (sezonun disarida kalan kismi eski fiyatla kalir),
+     * araliktaki sezon parcalarinin fiyati guncellenir. Fiyat musaitlik ekranindaki gibi gecelik ve varsayilan
+     * para biriminde gelir; sezonlara villanin kendi para biriminde haftalik olarak yazilir.
+     *
+     * @Post("range-price")
+     * @query id int required Emlak ID
+     * @query tarih1 string required Ilk gece (gg.aa.yyyy ya da yyyy-aa-gg)
+     * @query tarih2 string required Son gece, dahil (gg.aa.yyyy ya da yyyy-aa-gg)
+     * @query fiyat float required Gecelik fiyat (varsayilan para biriminde)
+     * @query aciklama string Sezon aciklamasi (sezonlar.sezon); bos ise mevcut aciklama kalir
+     * @query gece int Sezonu olmayan gunler icin acilan yeni sezonun min. konaklamasi (varsayilan 1)
+     */
+    public function rangePrice(): void
+    {
+        $payload = $this->payload();
+        $id = $this->resolveId($payload);
+        if ($id <= 0) {
+            throw new HttpException('Lutfen gecerli bir emlak ID gonderin.', 'VALIDATION', 422);
+        }
+        if ($this->boolPayloadValue($payload, ['delete'])) {
+            $this->deleteRangePrice($id, $payload);
+
+            return;
+        }
+
+        $startDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih1', 'startDate']));
+        $endDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih2', 'endDate']));
+        if ($startDate === '' || $endDate === '' || $this->compareDates($endDate, $startDate) < 0) {
+            throw new HttpException('Gecerli bir tarih araligi gonderin.', 'VALIDATION', 422);
+        }
+
+        $priceRaw = str_replace(',', '.', trim((string) $this->firstPayloadValue($payload, ['fiyat', 'price'])));
+        if (!is_numeric($priceRaw) || (float) $priceRaw <= 0) {
+            throw new HttpException('Lutfen gecerli bir fiyat girin.', 'VALIDATION', 422);
+        }
+        $nightly = (float) $priceRaw;
+        $description = trim((string) $this->firstPayloadValue($payload, ['aciklama', 'sezon']));
+        $newSeasonMinStay = max(1, $this->numericValue($payload, ['gece', 'minKonaklama']));
+
+        $pdo = $this->db->pdo();
+        $this->assertHomeExists($pdo, $id);
+
+        // Musaitlik ekraniyla ayni site ve kur (AvailabilityController: PRICE_SITE, DEFAULT_CURRENCY_ID, RATE_ID).
+        $priceSite = defined('PRICE_SITE') ? (int) constant('PRICE_SITE') : 1;
+        $buy = $this->homeToDefaultRate($pdo, $id);
+        $weekly = round($nightly * 7 / $buy, 2);
+
+        $anyTarih1 = \App\Support\SqlDate::any('tarih1');
+        $anyTarih2 = \App\Support\SqlDate::any('tarih2');
+
+        $pdo->beginTransaction();
+        try {
+            $stmt = $pdo->prepare(
+                "SELECT id, tarih1, tarih2
+                 FROM sezonlar
+                 WHERE islem_id = :homeId
+                   AND islem = 'emlak'
+                   AND site = :site
+                   AND {$anyTarih1} <= CONVERT(date, :endDate, 104)
+                   AND {$anyTarih2} >= CONVERT(date, :startDate, 104)
+                 ORDER BY {$anyTarih1} ASC, id ASC"
+            );
+            $stmt->execute([
+                ':homeId' => $id,
+                ':site' => $priceSite,
+                ':startDate' => $startDate,
+                ':endDate' => $endDate,
+            ]);
+
+            $seasonIds = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $season) {
+                $seasonIds = array_merge($seasonIds, $this->splitSeasonForExtraPaymentRange($pdo, $season, $startDate, $endDate));
+            }
+            $seasonIds = array_values(array_unique(array_filter(array_map('intval', $seasonIds))));
+
+            if ($seasonIds !== []) {
+                $idList = implode(',', $seasonIds);
+                if ($description !== '') {
+                    $update = $pdo->prepare('UPDATE sezonlar SET fiyat = :fiyat, sezon = :sezon WHERE id IN (' . $idList . ')');
+                    $update->execute([':fiyat' => $weekly, ':sezon' => $description]);
+                } else {
+                    $update = $pdo->prepare('UPDATE sezonlar SET fiyat = :fiyat WHERE id IN (' . $idList . ')');
+                    $update->execute([':fiyat' => $weekly]);
+                }
+            }
+
+            // Sezonu olmayan (bos) gunler: ardisik bosluklar icin yeni sezon acilir.
+            $createdSeasons = 0;
+            foreach ($this->uncoveredRanges($pdo, $seasonIds, $startDate, $endDate) as [$gapStart, $gapEnd]) {
+                $this->insertSeasonRange($pdo, $id, $priceSite, $gapStart, $gapEnd, $weekly, $newSeasonMinStay, $description);
+                $createdSeasons++;
+            }
+            $pdo->commit();
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw new HttpException('Fiyat kaydedilemedi.', 'DB_UPDATE_FAILED', 500, $e);
+        }
+
+        \App\Support\HomesCompletion::refresh($pdo, $id);
+
+        $this->response->success([
+            'id' => $id,
+            'tarih1' => $startDate,
+            'tarih2' => $endDate,
+            'gecelik_fiyat' => $nightly,
+            'haftalik_fiyat' => $weekly,
+            'aciklama' => $description,
+            'updated_seasons' => count($seasonIds),
+            'created_seasons' => $createdSeasons,
+        ]);
+    }
+
+    /**
+     * Son dakika firsatini siler (ilan takviminde x): ayni villa, site, giris ve cikis tarihli kayit.
+     *
+     * @param array<string,mixed> $payload
+     */
+    private function deleteLastMinute(int $homeId, array $payload): void
+    {
+        $startDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih1', 'startDate']));
+        $endDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih2', 'endDate']));
+        if ($startDate === '' || $endDate === '') {
+            throw new HttpException('Giris ve cikis tarihi zorunlu.', 'VALIDATION', 422);
+        }
+        $siteId = $this->siteId($payload);
+        $anyTarih1 = \App\Support\SqlDate::any('tarih1');
+        $anyTarih2 = \App\Support\SqlDate::any('tarih2');
+
+        $pdo = $this->db->pdo();
+        $stmt = $pdo->prepare(
+            "DELETE FROM sonDakika
+             WHERE islem_id = :homeId AND site = :site
+               AND {$anyTarih1} = CONVERT(date, :startDate, 104)
+               AND {$anyTarih2} = CONVERT(date, :endDate, 104)"
+        );
+        $stmt->execute([':homeId' => $homeId, ':site' => $siteId, ':startDate' => $startDate, ':endDate' => $endDate]);
+        if ($stmt->rowCount() <= 0) {
+            throw new HttpException('Secilen son dakika firsati bulunamadi.', 'NOT_FOUND', 404);
+        }
+
+        $this->response->success(['id' => $homeId, 'tarih1' => $startDate, 'tarih2' => $endDate, 'deleted' => $stmt->rowCount()]);
+    }
+
+    /**
+     * Secilen gecelerin fiyatini kaldirir (ilan takviminde x): sezonlar aralik sinirlarindan bolunur, araliktaki
+     * parcalar silinir; araligin disindaki gunler eski fiyatla kalir.
+     *
+     * @param array<string,mixed> $payload
+     */
+    private function deleteRangePrice(int $homeId, array $payload): void
+    {
+        $startDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih1', 'startDate']));
+        $endDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih2', 'endDate']));
+        if ($startDate === '' || $endDate === '' || $this->compareDates($endDate, $startDate) < 0) {
+            throw new HttpException('Gecerli bir tarih araligi gonderin.', 'VALIDATION', 422);
+        }
+        $priceSite = defined('PRICE_SITE') ? (int) constant('PRICE_SITE') : 1;
+        $anyTarih1 = \App\Support\SqlDate::any('tarih1');
+        $anyTarih2 = \App\Support\SqlDate::any('tarih2');
+
+        $pdo = $this->db->pdo();
+        $this->assertHomeExists($pdo, $homeId);
+        $pdo->beginTransaction();
+        try {
+            $stmt = $pdo->prepare(
+                "SELECT id, tarih1, tarih2
+                 FROM sezonlar
+                 WHERE islem_id = :homeId AND islem = 'emlak' AND site = :site
+                   AND {$anyTarih1} <= CONVERT(date, :endDate, 104)
+                   AND {$anyTarih2} >= CONVERT(date, :startDate, 104)"
+            );
+            $stmt->execute([':homeId' => $homeId, ':site' => $priceSite, ':startDate' => $startDate, ':endDate' => $endDate]);
+            $seasonIds = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $season) {
+                $seasonIds = array_merge($seasonIds, $this->splitSeasonForExtraPaymentRange($pdo, $season, $startDate, $endDate));
+            }
+            $seasonIds = array_values(array_unique(array_filter(array_map('intval', $seasonIds))));
+            if ($seasonIds === []) {
+                $pdo->rollBack();
+                throw new HttpException('Secilen tarihlerde fiyat bulunamadi.', 'NOT_FOUND', 404);
+            }
+            $pdo->exec('DELETE FROM sezonlar WHERE id IN (' . implode(',', $seasonIds) . ')');
+            $pdo->commit();
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw new HttpException('Fiyat kaldirilamadi.', 'DB_UPDATE_FAILED', 500, $e);
+        }
+
+        \App\Support\HomesCompletion::refresh($pdo, $homeId);
+
+        $this->response->success(['id' => $homeId, 'tarih1' => $startDate, 'tarih2' => $endDate, 'deleted_seasons' => count($seasonIds)]);
+    }
+
+    /**
+     * [startDate, endDate] (gg.aa.yyyy, dahil) araliginda verilen sezonlarin kapsamadigi ardisik gun araliklari.
+     *
+     * @param int[] $seasonIds
+     * @return array<int,array{0:string,1:string}>
+     */
+    private function uncoveredRanges(PDO $pdo, array $seasonIds, string $startDate, string $endDate): array
+    {
+        $covered = [];
+        if ($seasonIds !== []) {
+            $rows = $pdo->query('SELECT tarih1, tarih2 FROM sezonlar WHERE id IN (' . implode(',', array_map('intval', $seasonIds)) . ')')
+                ->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as $row) {
+                $from = \DateTime::createFromFormat('!d.m.Y', $this->maxDate($this->normalizeDate($row['tarih1'] ?? ''), $startDate));
+                $to = \DateTime::createFromFormat('!d.m.Y', $this->minDate($this->normalizeDate($row['tarih2'] ?? ''), $endDate));
+                if (!$from || !$to) {
+                    continue;
+                }
+                for ($day = clone $from; $day <= $to; $day->modify('+1 day')) {
+                    $covered[$day->format('Y-m-d')] = true;
+                }
+            }
+        }
+
+        $ranges = [];
+        $gapStart = null;
+        $previous = null;
+        $start = \DateTime::createFromFormat('!d.m.Y', $startDate);
+        $end = \DateTime::createFromFormat('!d.m.Y', $endDate);
+        if (!$start || !$end) {
+            return [];
+        }
+        for ($day = clone $start; $day <= $end; $day->modify('+1 day')) {
+            if (isset($covered[$day->format('Y-m-d')])) {
+                if ($gapStart !== null) {
+                    $ranges[] = [$gapStart, $previous];
+                    $gapStart = null;
+                }
+            } elseif ($gapStart === null) {
+                $gapStart = $day->format('d.m.Y');
+            }
+            $previous = $day->format('d.m.Y');
+        }
+        if ($gapStart !== null) {
+            $ranges[] = [$gapStart, $previous];
+        }
+
+        return $ranges;
+    }
+
+    /**
+     * Yeni sezon satiri (sezonlar kayitlariyla ayni bicim: gg.aa.yyyy tarih, haftalik fiyat, temizlik 0).
+     */
+    private function insertSeasonRange(PDO $pdo, int $homeId, int $siteId, string $startDate, string $endDate, float $weekly, int $minStay, string $title): void
+    {
+        $columns = $this->sezonlarColumns($pdo);
+        $insertColumns = ['site', 'islem', 'islem_id', 'tarih1', 'tarih2', 'fiyat', 'gece', 'sezon'];
+        $values = [':site', "'emlak'", ':homeId', ':tarih1', ':tarih2', ':fiyat', ':gece', ':sezon'];
+        $params = [
+            ':site' => $siteId,
+            ':homeId' => $homeId,
+            ':tarih1' => $startDate,
+            ':tarih2' => $endDate,
+            ':fiyat' => $weekly,
+            ':gece' => $minStay,
+            ':sezon' => $title,
+        ];
+        if (isset($columns['tarih1_date'])) {
+            $insertColumns[] = 'tarih1_date';
+            $values[] = 'CONVERT(date, :tarih1Date, 104)';
+            $params[':tarih1Date'] = $startDate;
+        }
+        if (isset($columns['tarih2_date'])) {
+            $insertColumns[] = 'tarih2_date';
+            $values[] = 'CONVERT(date, :tarih2Date, 104)';
+            $params[':tarih2Date'] = $endDate;
+        }
+        foreach (['temizlikGece', 'temizlikFiyat'] as $column) {
+            if (isset($columns[strtolower($column)])) {
+                $insertColumns[] = $column;
+                $values[] = '0';
+            }
+        }
+
+        $stmt = $pdo->prepare(
+            'INSERT INTO sezonlar ([' . implode('], [', $insertColumns) . ']) VALUES (' . implode(', ', $values) . ')'
+        );
+        $stmt->execute($params);
+    }
+
+    /**
+     * Villanin para biriminden varsayilan para birimine kur (musaitlik fiyatlari bu kurla gosterilir); bulunamazsa 1.
+     */
+    private function homeToDefaultRate(PDO $pdo, int $homeId): float
+    {
+        $defaultCurrencyId = defined('DEFAULT_CURRENCY_ID') ? (int) constant('DEFAULT_CURRENCY_ID') : 1;
+        $uzanti = defined('UZANTI') ? preg_replace('/[^A-Za-z0-9_]/', '', (string) constant('UZANTI')) : '';
+        $rateId = defined('RATE_ID') ? constant('RATE_ID') : (class_exists('Rate') ? \Rate::GetLastRate() : 1);
+
+        try {
+            $stmt = $pdo->prepare(
+                "SELECT TOP 1 RD.Buy
+                 FROM homes h
+                 INNER JOIN Finance.Currency FromC ON FromC.CurrencyName = h.doviz{$uzanti}
+                 INNER JOIN Finance.Currency ToC ON ToC.CurrencyId = :defaultCurrencyId
+                 INNER JOIN Finance.RateDetail RD ON RD.ToCurrencyId = ToC.CurrencyId
+                    AND RD.FromCurrencyId = FromC.CurrencyId AND RD.RateId = :rateId
+                 WHERE h.id = :homeId"
+            );
+            $stmt->execute([':defaultCurrencyId' => $defaultCurrencyId, ':rateId' => $rateId, ':homeId' => $homeId]);
+            $buy = (float) $stmt->fetchColumn();
+        } catch (\Throwable $e) {
+            $buy = 0.0;
+        }
+
+        return $buy > 0 ? $buy : 1.0;
     }
 
     /**
@@ -989,6 +1422,17 @@ final class HomesManagementPricesController extends Controller
 
             $discountId = $this->numericValue($row, ['id', 'discountId', 'indirimId']);
 
+            // Ayni tarihlere birden fazla indirim olmaz: konaklama tarihleri cakisan baska indirim varsa atlanir.
+            $overlap = $this->overlappingDiscount($pdo, $homeId, $startDate, $endDate, $discountId);
+            if ($overlap !== null) {
+                $skipped[] = [
+                    'section' => 'indirimler',
+                    'index' => (string) $index,
+                    'reason' => 'Bu tarihlerde zaten bir indirim var (' . $overlap . '). Ayni tarihe birden fazla indirim eklenemez.',
+                ];
+                continue;
+            }
+
             if ($discountId > 0) {
                 $stmt = $pdo->prepare(
                     "UPDATE indirimler
@@ -1047,6 +1491,32 @@ final class HomesManagementPricesController extends Controller
         }
 
         return ['updated' => $updated, 'skipped' => $skipped];
+    }
+
+    /**
+     * Villada [startDate, endDate] (gg.aa.yyyy, dahil) konaklama tarihleriyle cakisan baska indirim:
+     * "gg.aa.yyyy - gg.aa.yyyy %oran" ya da null. $exceptId: guncellenen indirimin kendisi.
+     */
+    private function overlappingDiscount(PDO $pdo, int $homeId, string $startDate, string $endDate, int $exceptId): ?string
+    {
+        $stmt = $pdo->prepare(
+            "SELECT TOP 1 CONVERT(varchar(10), tarih1, 104) AS t1, CONVERT(varchar(10), tarih2, 104) AS t2, oran
+             FROM indirimler
+             WHERE emlak = :homeId
+               AND id <> :exceptId
+               AND tarih1 <= CONVERT(date, :endDate, 104)
+               AND tarih2 >= CONVERT(date, :startDate, 104)
+             ORDER BY tarih1"
+        );
+        $stmt->execute([
+            ':homeId' => $homeId,
+            ':exceptId' => $exceptId,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate,
+        ]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ? trim((string) $row['t1']) . ' - ' . trim((string) $row['t2']) . ' %' . trim((string) $row['oran']) : null;
     }
 
     private function discountExists(PDO $pdo, int $homeId, int $discountId): bool

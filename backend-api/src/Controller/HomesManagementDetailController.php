@@ -138,7 +138,7 @@ final class HomesManagementDetailController extends Controller
                         'eposta' => $this->firstValueFrom($evSahibi, ['email', 'eposta', 'mail']),
                         'adres' => $this->firstValueFrom($evSahibi, ['adres', 'address']),
                     ],
-                    'whatsapp_grup_adi' => $this->firstValueFrom($rs, ['whatsapp_grup', 'rez_takip_yeri_adi']),
+                    'whatsapp_grup_adi' => $this->firstValueFrom($rs, $this->whatsappColumnCandidates()),
                     'yetkili_firma_adi' => $this->firstValueFrom($rs, ['yetkilifirma']),
                 ],
                 'yoneticiBilgileri' => [

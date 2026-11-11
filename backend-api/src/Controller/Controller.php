@@ -38,6 +38,57 @@ abstract class Controller
      * Belge sure tipinin tutuldugu kanun7464 kolonu (ayar: gavel_duration_column, panelde elle yazilir).
      * Bos veya gecersiz kolon adinda varsayilan belgeSuresiTipi kullanilir.
      */
+    /**
+     * Gercek villa adi (kod degil) SQL ifadesi: ilan detayindaki gibi config homes_code'a gore
+     * (HomesCode::nameColumns: kod basliga yaziliyorsa once homes.villaadi, sonra baslik; degilse baslik).
+     * $titleExpr: villaadi bossa / yoksa kullanilacak baslik ifadesi (site sonekli olabilir).
+     */
+    protected function homeRealNameSql(\PDO $pdo, string $alias, string $titleExpr): string
+    {
+        $parts = [];
+        foreach (\App\Support\HomesCode::nameColumns($this->app) as $column) {
+            if ($column === 'baslik') {
+                $parts[] = "NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(500), {$titleExpr}))), '')";
+                continue;
+            }
+            $exists = (int) $pdo->query(
+                "SELECT CASE WHEN COL_LENGTH('dbo.homes', '{$column}') IS NULL THEN 0 ELSE 1 END"
+            )->fetchColumn() === 1;
+            if ($exists) {
+                $parts[] = "NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(500), {$alias}.[{$column}]))), '')";
+            }
+        }
+
+        return count($parts) > 1 ? 'COALESCE(' . implode(', ', $parts) . ')' : ($parts[0] ?? $titleExpr);
+    }
+
+    /**
+     * WhatsApp grup adinin tutuldugu homes kolonu: sitenin config'indeki WhatsappColumnName sabiti
+     * (or. '[rez_takip_yeri_adi]', koseli parantezsiz dondurulur); tanimli degil / gecersizse null.
+     */
+    protected function whatsappColumn(): ?string
+    {
+        if (!defined('WhatsappColumnName')) {
+            return null;
+        }
+        $column = trim((string) constant('WhatsappColumnName'), " \t[]");
+
+        return preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $column) === 1 ? $column : null;
+    }
+
+    /**
+     * WhatsApp grup adi icin okunacak kolonlar: config'de kolon tanimliysa sadece o; degilse eski sira
+     * (whatsapp_grup, yoksa rez_takip_yeri_adi).
+     *
+     * @return string[]
+     */
+    protected function whatsappColumnCandidates(): array
+    {
+        $column = $this->whatsappColumn();
+
+        return $column !== null ? [$column] : ['whatsapp_grup', 'rez_takip_yeri_adi'];
+    }
+
     protected function gavelDurationColumn(): string
     {
         $column = trim((string) ($this->app['gavel_duration_column'] ?? ''));

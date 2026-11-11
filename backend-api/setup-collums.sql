@@ -586,6 +586,36 @@ ALTER TABLE [dbo].[homes] ADD [evkodu] nvarchar(255) NULL;
 END;
 GO
 
+IF OBJECT_ID(N'[dbo].[sonDakika]', N'U') IS NULL
+BEGIN
+CREATE TABLE [dbo].[sonDakika]
+(
+    [id] int IDENTITY(1,1) NOT NULL,
+    [sezon] nvarchar(MAX) NULL,
+    [fiyat] int NULL,
+    [tarih1] nvarchar(MAX) NULL,
+    [tarih2] nvarchar(MAX) NULL,
+    [islem_id] int NULL,
+    [site] int NULL,
+    CONSTRAINT [PK_sonDakika_1] PRIMARY KEY ([id])
+);
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[sonDakika]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[sonDakika]', N'sezon') IS NULL
+BEGIN
+ALTER TABLE [dbo].[sonDakika] ADD [sezon] nvarchar(MAX) NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[sonDakika]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[sonDakika]', N'fiyat') IS NULL
+BEGIN
+ALTER TABLE [dbo].[sonDakika] ADD [fiyat] int NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[sonDakika]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[sonDakika]', N'tarih1') IS NULL
 BEGIN

@@ -767,7 +767,8 @@ final class KiralamatakvimiController extends Controller
     private function villaInfo(array $home): array
     {
         $domain = defined('Domain') ? rtrim((string) constant('Domain'), '/') : '';
-        $whatsappColumn = defined('WhatsappColumnName') ? (string) constant('WhatsappColumnName') : 'whatsapp_grup';
+        // Config'deki WhatsappColumnName koseli parantezli gelebilir ('[rez_takip_yeri_adi]'); dizi anahtari parantezsiz.
+        $whatsappColumn = $this->whatsappColumn() ?? 'whatsapp_grup';
 
         return [
             'homesId' => (int) $home['id'],

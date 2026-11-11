@@ -39,13 +39,19 @@ final class ReservationsController extends Controller
         $useAcentaUsers = !empty($this->app['reservation_filters_use_acenta_users']);
         $useMaliyetColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'maliyet');
         $hasMigrationStatusColumn = $this->columnExists($pdo, 'dbo', 'kayitlar', 'MigrationStatus');
-        // WhatsApp grup adi: ilan detayindaki gibi once whatsapp_grup, bossa rez_takip_yeri_adi.
+        // WhatsApp grup adi: sitenin config'indeki WhatsappColumnName; tanimli degilse whatsapp_grup, bossa rez_takip_yeri_adi.
         $whatsappParts = [];
-        foreach (['whatsapp_grup', 'rez_takip_yeri_adi'] as $candidate) {
+        foreach ($this->whatsappColumnCandidates() as $candidate) {
             if ($this->columnExists($pdo, 'dbo', 'homes', $candidate)) {
                 $whatsappParts[] = "NULLIF(LTRIM(RTRIM(homes.[{$candidate}])), N'')";
             }
         }
+        // Villa kodu (homes.evkodu): kolon yoksa bos.
+        $villaCodeSql = $this->columnExists($pdo, 'dbo', 'homes', 'evkodu')
+            ? "ISNULL(CONVERT(nvarchar(255), homes.evkodu), N'')"
+            : "N''";
+        // Gercek villa adi: config homes_code (kod basliga yaziliyorsa homes.villaadi).
+        $villaRealNameSql = $this->homeRealNameSql($pdo, 'homes', 'homes.baslik');
         $whatsappSql = $whatsappParts ? 'ISNULL(' . (count($whatsappParts) > 1 ? 'COALESCE(' . implode(', ', $whatsappParts) . ')' : $whatsappParts[0]) . ", N'')" : "N''";
 
         // Sayfalama
@@ -221,7 +227,9 @@ final class ReservationsController extends Controller
             $allRows,
             $useAcentaUsers,
             $useMaliyetColumn,
-            $whatsappSql
+            $whatsappSql,
+            $villaCodeSql,
+            $villaRealNameSql
         );
 
         // Çalıştır
@@ -352,7 +360,9 @@ final class ReservationsController extends Controller
         bool $allRows,
         bool $useAcentaUsers,
         bool $useMaliyetColumn,
-        string $whatsappSql = "N''"
+        string $whatsappSql = "N''",
+        string $villaCodeSql = "N''",
+        string $villaRealNameSql = 'homes.baslik'
     ): string
     {
         // dolu.durum API koduna çevrilir (siteye özel silinme kodu -> 5).
@@ -452,6 +462,10 @@ SELECT
 $acentaSelectSql
     REPLACE(ISNULL(es.tel, ''), ' ', '') AS evsahibitel,
     {$whatsappSql} AS whatsapp,
+    {$villaCodeSql} AS villa_kodu,
+    -- Villa adi kolonu config'e gore kod gosterebilir (homes_title_use_code); gercek ad ayri
+    -- (config homes_code: kod basliga yaziliyorsa homes.villaadi).
+    ISNULL({$villaRealNameSql}, kayitlar.adi) AS villa_baslik,
     kayitlar.oznot AS oz_not,
     kisi.total AS kisi_bilgileri_count,
     opsiyonvarmi.total AS opsiyon_count,
