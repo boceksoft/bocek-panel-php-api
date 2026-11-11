@@ -197,6 +197,10 @@ final class LocalSettingsController extends Controller
             'region' => 'bolge',
             'type' => 'type',
             'use_mutliple_for_array_query' => false,
+            'formatting' => [
+                'start' => 'Y-m-d',
+                'end' => 'Y-m-d',
+            ],
         ];
 
         $existing = is_array($values['site_search_params']['value']) ? $values['site_search_params']['value'] : [];
@@ -206,10 +210,38 @@ final class LocalSettingsController extends Controller
             $siteId = (int) $siteId;
             $siteParams = $existing[$siteId] ?? ($existing[(string) $siteId] ?? null);
             if (is_array($siteParams)) {
-                $merged = array_merge($defaultParams, $siteParams);
+                $merged = [];
+                foreach ($defaultParams as $k => $defVal) {
+                    if ($k === 'formatting' || $k === 'use_mutliple_for_array_query') {
+                        continue;
+                    }
+                    if (array_key_exists($k, $siteParams)) {
+                        $merged[$k] = trim((string) $siteParams[$k]);
+                    } else {
+                        $merged[$k] = $defVal;
+                    }
+                }
+
                 $merged['use_mutliple_for_array_query'] = (bool) (
-                    $merged['use_mutliple_for_array_query'] ?? ($merged['use_multiple_for_array_query'] ?? false)
+                    $siteParams['use_mutliple_for_array_query']
+                    ?? ($siteParams['use_multiple_for_array_query'] ?? false)
                 );
+
+                $rawFormatting = array_key_exists('formatting', $siteParams)
+                    ? (is_array($siteParams['formatting']) ? $siteParams['formatting'] : [])
+                    : $defaultParams['formatting'];
+
+                $cleanFormatting = [];
+                if (is_array($rawFormatting)) {
+                    foreach ($rawFormatting as $fKey => $fVal) {
+                        $fVal = trim((string) $fVal);
+                        if ($fVal !== '') {
+                            $cleanFormatting[(string) $fKey] = $fVal;
+                        }
+                    }
+                }
+                $merged['formatting'] = $cleanFormatting;
+
                 $siteSearchParams[$siteId] = $merged;
             } else {
                 $siteSearchParams[$siteId] = $defaultParams;
@@ -704,16 +736,36 @@ final class LocalSettingsController extends Controller
                     if (!is_array($existing)) {
                         $existing = [];
                     }
-                    if (isset($value['start']) || isset($value['region']) || isset($value['type']) || isset($value['use_mutliple_for_array_query']) || isset($value['use_multiple_for_array_query'])) {
+                    $cleanFormatting = function (array $item): array {
+                        if (isset($item['formatting']) && is_array($item['formatting'])) {
+                            $f = [];
+                            foreach ($item['formatting'] as $fk => $fv) {
+                                $fv = trim((string) $fv);
+                                if ($fv !== '') {
+                                    $f[(string) $fk] = $fv;
+                                }
+                            }
+                            $item['formatting'] = $f;
+                        }
+                        return $item;
+                    };
+                    if (
+                        array_key_exists('start', $value)
+                        || array_key_exists('region', $value)
+                        || array_key_exists('type', $value)
+                        || array_key_exists('formatting', $value)
+                        || array_key_exists('use_mutliple_for_array_query', $value)
+                        || array_key_exists('use_multiple_for_array_query', $value)
+                    ) {
                         $siteId = (int) ($this->request->query('site', $this->request->input('site', 1)));
                         $siteId = $siteId > 0 ? $siteId : 1;
-                        $existing[$siteId] = $value;
+                        $existing[$siteId] = $cleanFormatting($value);
                         return $existing;
                     }
                     if (is_array($existing)) {
                         foreach ($value as $k => $v) {
                             if (is_array($v)) {
-                                $existing[(int) $k] = $v;
+                                $existing[(int) $k] = $cleanFormatting($v);
                             }
                         }
                         return $existing;

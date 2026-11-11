@@ -54,18 +54,26 @@ return [
     //         'region' => 'bolge',
     //         'type' => 'type',
     //         'use_mutliple_for_array_query' => false,
+    //         'formatting' => [
+    //             'start' => 'Y-m-d',
+    //             'end' => 'Y-m-d',
+    //         ],
     //     ],
     //     2 => [
     //         'start' => 'searchdate1',
     //         'end' => 'searchdate2',
     //         'adult' => 'yetiskin',
     //         'child' => 'cocuk',
-    //         'baby' => 'bebek',
+    //         'baby' => '', // bos string birakilirsa sorguya eklenmez, default degeri ezilmez
     //         'min' => 'min',
     //         'max' => 'max',
     //         'region' => 'bolge',
     //         'type' => 'tip',
     //         'use_mutliple_for_array_query' => true,
+    //         'formatting' => [
+    //             'start' => 'd.m.Y',
+    //             'end' => 'd.m.Y',
+    //         ],
     //     ],
     // ],
 
