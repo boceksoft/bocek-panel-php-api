@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\LegacySql;
 use PDO;
 
 /*
@@ -17,6 +18,8 @@ use PDO;
  */
 final class CaretakerController extends Controller
 {
+    use LegacySql;
+
     /**
      * Bakimcilari listeler.
      *
@@ -108,21 +111,15 @@ final class CaretakerController extends Controller
         try {
             $this->clearOtherHomeCaretakers($pdo, $homesIdValue);
 
-            $stmt = $pdo->prepare(
-                "INSERT INTO dbo.bakimcilar
-                    (homesId, bakimciAdi, bakimcitel, bakimciAdres, bakimciEmail)
-                 OUTPUT INSERTED.id
-                 VALUES
-                    (:homesId, :bakimciAdi, :bakimcitel, :bakimciAdres, :bakimciEmail)"
-            );
-            $stmt->bindValue(':homesId', $homesIdValue, $homesIdValue === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
-            $stmt->bindValue(':bakimciAdi', $name);
-            $stmt->bindValue(':bakimcitel', $phone !== '' ? $phone : null, $phone !== '' ? PDO::PARAM_STR : PDO::PARAM_NULL);
-            $stmt->bindValue(':bakimciAdres', $address !== '' ? $address : null, $address !== '' ? PDO::PARAM_STR : PDO::PARAM_NULL);
-            $stmt->bindValue(':bakimciEmail', $email !== '' ? $email : null, $email !== '' ? PDO::PARAM_STR : PDO::PARAM_NULL);
-            $stmt->execute();
-
-            $id = (int) $stmt->fetchColumn();
+            // OUTPUT INSERTED.id yerine SET NOCOUNT + SCOPE_IDENTITY (LegacySql::insertRow):
+            // sqlsrv once satir sayisi sonucunu donunce id 0 okunuyordu (kayit eklenip bos bakimci donuyordu).
+            $id = $this->insertRow($pdo, 'bakimcilar', [
+                'homesId' => $homesIdValue,
+                'bakimciAdi' => $name,
+                'bakimcitel' => $phone !== '' ? $phone : null,
+                'bakimciAdres' => $address !== '' ? $address : null,
+                'bakimciEmail' => $email !== '' ? $email : null,
+            ]);
             $pdo->commit();
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) {
