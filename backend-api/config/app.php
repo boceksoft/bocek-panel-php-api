@@ -161,6 +161,10 @@ return [
     // Logda 3 -> 4 gecisi olan iptal rezervasyonlar icin durum=7 filtresi.
     'reservation_filters_use_status_log' => false,
 
+    // Rezervasyon listesinde "gorevli" alani: true ise villanin ev sahibi (kullanici.ad + soyad, homes.evsahibi),
+    // false ise villanin bakimcisi (homes.bakimciad). Bossa (ya da kolon yoksa) kayitlar.gorevli.
+    'reservations_assignee_is_owner' => false,
+
     // Rezervasyon detayinda islem_kaydi tablosundan belge gecmisi cekilsin mi?
     'reservation_detail_use_islem_kaydi' => true,
 
@@ -414,6 +418,7 @@ return [
         'site_search_params' => 'array',
         'reservation_filters_use_acenta_users' => 'bool',
         'reservation_filters_use_status_log' => 'bool',
+        'reservations_assignee_is_owner' => 'bool',
         'reservation_detail_use_islem_kaydi' => 'bool',
         'calculate_param_names' => 'array',
         'calculate_date_formats' => 'array',

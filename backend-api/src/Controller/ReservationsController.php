@@ -227,6 +227,7 @@ final class ReservationsController extends Controller
             $allRows,
             $useAcentaUsers,
             $useMaliyetColumn,
+            $this->columnExists($pdo, 'dbo', 'homes', 'bakimciad'),
             $whatsappSql,
             $villaCodeSql,
             $villaRealNameSql
@@ -360,6 +361,7 @@ final class ReservationsController extends Controller
         bool $allRows,
         bool $useAcentaUsers,
         bool $useMaliyetColumn,
+        bool $hasHomeCaretaker = false,
         string $whatsappSql = "N''",
         string $villaCodeSql = "N''",
         string $villaRealNameSql = 'homes.baslik'
@@ -367,6 +369,15 @@ final class ReservationsController extends Controller
     {
         // dolu.durum API koduna çevrilir (siteye özel silinme kodu -> 5).
         $durumSql = $this->normalizedStatusSql('dolu.durum');
+
+        // Görevli: ayar açıksa villanın ev sahibi (ad soyad), kapalıysa villanın bakımcısı (homes.bakimciad,
+        // ilan formunun yazdığı kolon; sitede yoksa atlanır). İkisi de boşsa kayitlar.gorevli.
+        $fallbackSql = "ISNULL(kayitlar.gorevli, '')";
+        $gorevliSql = $this->configBool('reservations_assignee_is_owner', false)
+            ? "ISNULL(NULLIF(LTRIM(RTRIM(CONCAT(ISNULL(es.ad, ''), ' ', ISNULL(es.soyad, '')))), ''), {$fallbackSql})"
+            : ($hasHomeCaretaker
+                ? "ISNULL(NULLIF(LTRIM(RTRIM(ISNULL(homes.bakimciad, ''))), ''), {$fallbackSql})"
+                : $fallbackSql);
 
         $maliyetValueSql = $useMaliyetColumn
             ? 'ISNULL(TRY_CONVERT(float, dbo.fnTemizle(kayitlar.maliyet)), 0)'
@@ -424,7 +435,7 @@ SELECT
     REPLACE(ISNULL(kayitlar.telefon, ''), ' ', '') AS telefon,
     LTRIM(RTRIM(CONCAT(ISNULL('+' + kayitlar.ulkekodu, ''), ' ', ISNULL(kayitlar.telefon, '')))) AS telefon_full,
     kayitlar.adi AS silinen_emlak_adi,
-    ISNULL(gorevli, '') AS gorevli,
+    {$gorevliSql} AS gorevli,
     CONVERT(varchar(10), kayitlar.rez_tarihi, 104) AS giris_tarihi,
     CONVERT(varchar(10), kayitlar.gelecek_tarih, 104) AS cikis_tarihi,
     CONVERT(varchar(10), dolu.tarih, 104) AS dolu_giris_tarihi,
