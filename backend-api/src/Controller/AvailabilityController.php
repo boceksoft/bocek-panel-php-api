@@ -101,7 +101,7 @@ final class AvailabilityController extends Controller
             FROM dolu WHERE TRY_CONVERT(date,tarih2,103) > " . $fromSql . " AND durum = 3 AND emlak = " . $entityId . $excludeSql
             . ($separateManual ? " AND " . $reservationRowSql : '');
 
-        // separateManual: rezervasyonsuz kapatmalar (takvimden: durum 0, eski panel: durum 3; kayitid -1 / NULL) ayri liste.
+        // separateManual: rezervasyonsuz kapatmalar (durum 3; eski takvim kayitlari durum 0; kayitid -1 / NULL) ayri liste.
         $manuelSql = $separateManual ? "
                 (SELECT
                     ISNULL(STRING_AGG(CONCAT(YEAR(tarih),'-',FORMAT(tarih,'MM'),'-',FORMAT(tarih,'dd')),','),'') AS manuelGirisler,

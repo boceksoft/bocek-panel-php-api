@@ -33,9 +33,10 @@ use PDO;
  * Ayarlar (config/app.local.php): kiralamatakvimi_panel_api_url, kiralamatakvimi_panel_api_headers.
  */
 final class HomesManagementCalendarController extends Controller
-{ 
-    // Ornek kapatma kaydindaki degerler: Durum 0, kayitid -1, kullanici_id -99, IsExternal 0, State 0.
-    private const CLOSURE_DURUM = 0;
+{
+    // Kapatma kaydi: Durum 3 (dolu'da kapali; site ve panel bu durumu dolu sayar), kayitid -1, kullanici_id -99,
+    // IsExternal 0, State 0. (Eskiden Durum 0 yaziliyordu; sitede kapali sayilmiyordu.)
+    private const CLOSURE_DURUM = 3;
     private const CLOSURE_KAYIT_ID = -1;
     private const CLOSURE_KULLANICI_ID = -99;
     // Takvimden eklenebilen kayit tipleri; dolu.rez_tip kolonuna yazilir.
