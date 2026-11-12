@@ -7,7 +7,7 @@ namespace App\Core;
 /*
  * Tüm endpoint'ler için standart JSON yanıt zarfı.
  *   Başarı: { "success": true,  "data": { ... } }
- *   Hata:   { "success": false, "error": { "message": "...", "code": "..." } }
+ *   Hata:   { "success": false, "error": { "message": "...", "code": "...", "details"?: { ... } } }
  */
 final class Response
 {
@@ -38,11 +38,19 @@ final class Response
         $this->send($status, ['success' => true, 'data' => $data]);
     }
 
-    public function error(string $message, string $code = 'ERROR', int $status = 400): void
+    /**
+     * @param array<string,mixed> $details Boş değilse error.details olarak eklenir.
+     */
+    public function error(string $message, string $code = 'ERROR', int $status = 400, array $details = []): void
     {
+        $error = ['message' => $message, 'code' => $code];
+        if ($details !== []) {
+            $error['details'] = $details;
+        }
+
         $this->send($status, [
             'success' => false,
-            'error' => ['message' => $message, 'code' => $code],
+            'error' => $error,
         ]);
     }
 

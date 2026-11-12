@@ -377,6 +377,20 @@ return [
     // false ise sezonlar.isitmaFiyat gunluk fiyat kabul edilir.
     'calculate_heating_price_is_weekly' => false,
 
+    // Hafta sonu fiyatlari (dbo.haftasonu): sadece sitenin kendi fiyat fonksiyonu bu tabloyu kullaniyorsa true
+    // (orn. garantivillam: Fn_yenifiyathesapla_tablo). Tablo baska sitelerin DB'sinde de bulunabilir ama kullanilmaz;
+    // false iken ilan ekraninda bolum gorunmez, hesaplamada uygulanmaz, endpoint yazmaz. Tablo yoksa true da etkisiz.
+    'homes_weekend_prices' => false,
+
+    // Ilan sezonlarinda isitma alanlari (eski panel doldur.asp sezon listesi "Isitma" / "I.Pasif"):
+    //   homes_season_heating     sezonlar.isitmaFiyat (isitma fiyati)
+    //   homes_season_heating_off sezonlar.isitmaHizmetDisi (isitma pasif / hizmet disi)
+    // Kolon DB'de olsa da site kullanmiyor olabilir; varsayilan kapali, kullanan sitede (orn. villavillam) acilir.
+    // Kapaliyken alan ilan ekraninda gorunmez ve kaydedilmez. Acik olsa da kolon yoksa etkisiz.
+    // Fiyat hesaplamasi (calculate) bu ayarlara bakmaz; kolon varsa eskisi gibi okur.
+    'homes_season_heating' => false,
+    'homes_season_heating_off' => false,
+
     // Homes endpoint'inde siteye gore URL/foto domain'i.
     // Sorgu ilk satirda "domain" alias'i dondurmelidir.
     'homes_site_domain_queries' => [
@@ -428,6 +442,9 @@ return [
         'site_languages' => 'array',
         'calculate_prices_same_across_sites' => 'bool',
         'calculate_heating_price_is_weekly' => 'bool',
+        'homes_weekend_prices' => 'bool',
+        'homes_season_heating' => 'bool',
+        'homes_season_heating_off' => 'bool',
         'reservation_pos' => 'array',
         'reservation_extras' => 'array',
         'reservation_discount' => 'array',

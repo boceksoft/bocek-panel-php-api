@@ -10,6 +10,7 @@ use PDO;
 /*
  * Rezervasyon detayındaki "POS" seçimi için seçenekler ve rezervasyonun seçili POS'u. Sadece okuma.
  *   GET /backend-api/virtual-pos?id=99187
+ *   GET /backend-api/virtual-pos?site=1        -> yeni rezervasyon (id yok): seçenekler + sitenin varsayılan POS'u
  *
  * Yapı rezervasyona göre seçilir (panel siparis_detaylari.asp "Kiralama Ödeme Bilgileri"):
  *   - kayitlar.isNewSite = 1 (React site) -> config reservation_pos.new_site (varsayılan Finance.VirtualPos)
@@ -21,13 +22,15 @@ final class VirtualPosController extends Controller
 {
     /**
      * @Get
-     * @query id int required Rezervasyon kimliği
+     * @query id int Rezervasyon kimliği (yoksa yeni rezervasyon için seçenekler döner)
+     * @query site int Yeni rezervasyonun sitesi (id yokken; varsayılan 1)
      */
     public function index(): void
     {
         $id = (int) $this->request->query('id', 0);
         if ($id <= 0) {
-            throw new HttpException('Lütfen geçerli bir rezervasyon ID gönderin.', 'VALIDATION', 422);
+            $this->forNewReservation();
+            return;
         }
 
         $pdo = $this->db->pdo();
@@ -84,6 +87,74 @@ final class VirtualPosController extends Controller
             'secenekler' => $options,
             'iyzico' => $iyzico,
         ]);
+    }
+
+    /**
+     * Yeni rezervasyon (/rezervasyonlar/yeni): durum yok, POS seçilebilir. Seçili POS, reservations-create'in
+     * yazdığı varsayılandır (genel{dbtable}.DefaultVirtualPosId, yoksa genel). Yeni kayıt eski yapıyla (legacy) açılır.
+     */
+    private function forNewReservation(): void
+    {
+        $pdo = $this->db->pdo();
+        $siteId = (int) $this->request->query('site', 1);
+        if ($siteId <= 0) {
+            $siteId = 1;
+        }
+
+        $settings = $this->settings();
+        $config = $settings['legacy'];
+        $defaultId = $this->defaultVirtualPos($pdo, $siteId);
+
+        $options = $this->filterHidden(
+            $this->options($pdo, $config),
+            $settings['hidden_ids_by_site'][$siteId] ?? ($settings['hidden_ids_by_site'][(string) $siteId] ?? []),
+            $defaultId
+        );
+
+        $this->response->success([
+            'yapi' => 'legacy',
+            'isNewSite' => false,
+            'durum' => null,
+            'gorunur' => true,
+            'kilitli' => false,
+            'seciliId' => $defaultId,
+            'secenekler' => $options,
+            'iyzico' => null,
+        ]);
+    }
+
+    /** Sitenin varsayılan sanal POS'u (ReservationsCreateController::defaultVirtualPos ile aynı kural); yoksa null. */
+    private function defaultVirtualPos(PDO $pdo, int $siteId): ?int
+    {
+        $suffix = '';
+        try {
+            $stmt = $pdo->prepare('SELECT TOP 1 dbtable FROM sites WHERE id = :id');
+            $stmt->execute([':id' => $siteId]);
+            $value = trim((string) ($stmt->fetchColumn() ?: ''));
+            if (preg_match('/^_[A-Za-z0-9]+$/', $value) === 1) {
+                $suffix = $value;
+            }
+        } catch (\Throwable $e) {
+            $suffix = '';
+        }
+
+        foreach (array_unique([$suffix, '']) as $tableSuffix) {
+            $stmt = $pdo->prepare('SELECT CASE WHEN COL_LENGTH(:table, \'DefaultVirtualPosId\') IS NULL THEN 0 ELSE 1 END');
+            $stmt->execute([':table' => 'dbo.genel' . $tableSuffix]);
+            if ((int) $stmt->fetchColumn() !== 1) {
+                continue;
+            }
+            try {
+                $row = $pdo->query('SELECT TOP 1 DefaultVirtualPosId AS pos FROM genel' . $tableSuffix)->fetch(PDO::FETCH_ASSOC);
+            } catch (\Throwable $e) {
+                continue;
+            }
+            $pos = (int) ($row['pos'] ?? 0);
+
+            return $pos > 0 ? $pos : null;
+        }
+
+        return null;
     }
 
     /** config reservation_pos: app.php varsayılanı + app.local.php (alt anahtarlar tek tek ezilir). */

@@ -16,6 +16,9 @@ class HttpException extends \RuntimeException
     /** @var int */
     private $httpStatus;
 
+    /** @var array<string,mixed> Hata zarfına error.details olarak eklenen ek bilgi (boşsa eklenmez). */
+    private $details = [];
+
     public function __construct(
         string $message,
         string $errorCode = 'ERROR',
@@ -35,5 +38,23 @@ class HttpException extends \RuntimeException
     public function httpStatus(): int
     {
         return $this->httpStatus;
+    }
+
+    /**
+     * @param array<string,mixed> $details
+     */
+    public function withDetails(array $details): self
+    {
+        $this->details = $details;
+
+        return $this;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function details(): array
+    {
+        return $this->details;
     }
 }

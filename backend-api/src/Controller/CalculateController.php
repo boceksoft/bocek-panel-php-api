@@ -107,7 +107,10 @@ final class CalculateController extends Controller
             $json['calendarCheck'] = $calendarCheck;
             if ($calendarCheck['checked'] && !$calendarCheck['available'] && !empty($json['success'])) {
                 $calendarMessage = $calendarCheck['description'] !== '' ? $calendarCheck['description'] : 'Secilen tarihler Kiralama Takvimi\'nde musait degil.';
-                if ($this->excludeReservationId > 0) {
+                // Eski panel (ajax.asp islm=hesapla) fiyat hesaplarken Kiralama Takvimi'ne hiç sormaz; KT kontrolü
+                // "Opsiyona Al"da yapılır (WhatsApp opsiyonu orada devralınır). Bu yüzden KT'deki opsiyon / sıra / kural
+                // fiyatı engellemez, uyarı olur. Sadece KT'de onaylı rezervasyon (UnavailableHasApproved) engeller.
+                if ($this->excludeReservationId > 0 || $calendarCheck['status'] !== 'UnavailableHasApproved') {
                     // Panel: mevcut rezervasyonda KT durumu (sıra, opsiyon vb.) fiyatı engellemez; uyarı olarak döner.
                     $json['warnings'][] = 'Kiralama Takvimi: ' . $calendarMessage;
                 } else {
@@ -539,8 +542,13 @@ final class CalculateController extends Controller
         $anyTarih1 = \App\Support\SqlDate::any('tarih1');
         $anyTarih2 = \App\Support\SqlDate::any('tarih2');
         // Fiyat fonksiyonu yyyy-aa-gg tarihte hata verir; boyle kaydi olan villanin tutarlari PHP'de hesaplanir.
+        // Hafta sonu fiyati (dbo.haftasonu, sadece bazi panellerde) Natsisa fonksiyonunda yok: villanin bu konaklamaya
+        // denk gelen hafta sonu satiri varsa tutar yine PHP'de, sitenin fonksiyonundaki kuralla hesaplanir.
+        // Hafta sonu sadece config homes_weekend_prices acik ve tablo varsa (tablo kullanilmadan duran sitede uygulanmaz).
+        $weekendPrices = \App\Support\HomesPriceTable::weekendEnabled($pdo, $this->app);
         $priceTableSql = \App\Support\HomesPriceTable::hasNonStandardDates($pdo, $entityId, (int) $priceSite)
-            ? \App\Support\HomesPriceTable::inlineSql($pdo, $start, $end, $entityId, (int) $priceSite)
+            || ($weekendPrices && \App\Support\HomesPriceTable::hasWeekendPrices($pdo, $entityId, (int) $priceSite, $start, $end))
+            ? \App\Support\HomesPriceTable::inlineSql($pdo, $start, $end, $entityId, (int) $priceSite, $weekendPrices)
             : "SELECT * FROM dbo.Natsisa_Fn_yenifiyathesapla_tablo('{$start}', '{$end}', {$entityId}, {$priceSite})";
 
         $sql = "

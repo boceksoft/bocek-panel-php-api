@@ -17,6 +17,14 @@ use PDOException;
  *   GET  /backend-api/reservation-status         -> durum listesi
  *   GET  /backend-api/reservation-status/current -> rezervasyonun şu anki durumu (callback takibi)
  *   POST /backend-api/reservation-status         -> rezervasyonun durumunu değiştirir
+ *   POST /backend-api/reservation-status/whatsapp-send   -> WhatsApp opsiyonunu devralmak için doğrulama kodu gönderir
+ *   POST /backend-api/reservation-status/whatsapp-verify -> kodu doğrular, WhatsApp opsiyonu rezervasyona geçer
+ *
+ * WhatsApp opsiyonu devralma (eski panel KiralamaTakvimi.js "WhatsappOption"): Opsiyona Al, tarihlerde WhatsApp
+ * grubundan alınmış bir opsiyon bulursa KT_WHATSAPP_OPTION (error.details: reservationId, whatsappReservationId,
+ * checkIn, checkOut, phone) döner. whatsapp-send → whatsapp-verify sonrası Opsiyona Al whatsappChanged=true ile
+ * tekrar gönderilir: KT kontrolü ve KT'ye opsiyon gönderimi atlanır, durum yerelde yazılır. Bağlama (dolu.ReservationId
+ * ve KiralamaTakvimi.Response) site /api'sindeki Whatsapp/verifychangereservationowner tarafından yapılır.
  *
  * Panel karşılığı: aktif_pasif.asp (islem=siparis_{durum}) + asp_scripts/KiralamaTakvimiScripts.asp.
  *
@@ -148,6 +156,7 @@ final class ReservationStatusController extends Controller
      * @body saat int Opsiyon süresi, sadece durum=1 (varsayılan 24)
      * @body isMinute bool true ise saat dakika olarak yorumlanır, sadece durum=1
      * @body skipRules bool Kiralama Takvimi uyarı kurallarını atla (KT_WARNING_RULE sonrası)
+     * @body whatsappChanged bool WhatsApp opsiyonu devralındı (whatsapp-verify sonrası, sadece durum=1)
      * @body sendWhatsappGroup bool Kiralama Takvimi bildirimi villanın WhatsApp grubuna gitsin mi (durum=1 ve 3, varsayılan true)
      * @body kullanici_id int İşlemi yapan panel kullanıcısı (log kaydı için)
      * @body kullanici_adi string İşlemi yapan kişinin adı (Natsisa'dan); log açıklamasının sonuna "(Ad)" olarak eklenir
@@ -215,6 +224,171 @@ final class ReservationStatusController extends Controller
         } else {
             $this->toCancelled($pdo, $reservation);
         }
+    }
+
+    /**
+     * WhatsApp opsiyonunu devralmak için doğrulama kodu gönderir (kod opsiyonu alan WhatsApp numarasına gider).
+     * Panel: KiralamaTakvimi.js "WhatsappOption" → /api/Whatsapp/Sendchangereservationownerverification.
+     *
+     * @Post("whatsapp-send")
+     * @body id int required Rezervasyon kimliği (kayitlar.id)
+     * @body whatsappReservationId int required WhatsApp opsiyonunun KT id'si (KT_WHATSAPP_OPTION details)
+     */
+    public function whatsappSend(): void
+    {
+        $pdo = $this->db->pdo();
+        [$id, $whatsappReservationId] = $this->whatsappTakeoverTarget($pdo);
+
+        $result = $this->panelApiJson('Whatsapp/Sendchangereservationownerverification', [
+            'reservationId' => $whatsappReservationId,
+        ]);
+        if (empty($result['success'])) {
+            throw new HttpException(
+                $this->panelJsonMessage($result, 'Doğrulama kodu gönderilemedi.'),
+                'KT_WHATSAPP_SEND_FAILED',
+                502
+            );
+        }
+
+        $this->response->success(['id' => $id, 'whatsappReservationId' => $whatsappReservationId]);
+    }
+
+    /**
+     * Kodu doğrular; doğruysa WhatsApp opsiyonu rezervasyona geçer. Site /api'si rezervasyonun KT kaydını
+     * (dolu.ReservationId ve KiralamaTakvimi.Response) WhatsApp opsiyonunun id'sine çevirir.
+     * Ardından Opsiyona Al whatsappChanged=true ile tekrar gönderilir.
+     * Panel: KiralamaTakvimi.js → /api/Whatsapp/verifychangereservationowner.
+     *
+     * @Post("whatsapp-verify")
+     * @body id int required Rezervasyon kimliği (kayitlar.id)
+     * @body whatsappReservationId int required WhatsApp opsiyonunun KT id'si
+     * @body code string required WhatsApp'a gelen doğrulama kodu
+     * @body checkIn string Opsiyonun giriş tarihi (KT_WHATSAPP_OPTION details; log için)
+     * @body checkOut string Opsiyonun çıkış tarihi (log için)
+     * @body phone string Opsiyonu alan WhatsApp numarası (log için)
+     */
+    public function whatsappVerify(): void
+    {
+        $pdo = $this->db->pdo();
+        [$id, $whatsappReservationId, $mapping] = $this->whatsappTakeoverTarget($pdo);
+
+        $code = trim((string) $this->request->input('code', ''));
+        if ($code === '') {
+            throw new HttpException('Doğrulama kodunu girin.', 'VALIDATION', 422);
+        }
+
+        $currentReservationId = (int) $mapping['ReservationId'];
+        if ($currentReservationId !== $whatsappReservationId) {
+            // /api, "ReservationId = <bu id>" olan satırları WhatsApp opsiyonunun id'sine çevirir; id boş/0 gitmemeli.
+            $result = $this->panelApiJson('Whatsapp/verifychangereservationowner', [
+                'code' => $code,
+                'reservationId' => $currentReservationId,
+                'oldReservationId' => $whatsappReservationId,
+            ]);
+            if (empty($result['success'])) {
+                throw new HttpException(
+                    $this->panelJsonMessage($result, 'Kod doğrulanamadı.'),
+                    'KT_WHATSAPP_VERIFY_FAILED',
+                    422
+                );
+            }
+        }
+
+        // Log: işlem geçmişinde "WhatsApp opsiyonu devralındı" (tarih, numara, KT id'leri).
+        $checkIn = $this->shortText('checkIn', 20);
+        $checkOut = $this->shortText('checkOut', 20);
+        $phone = $this->shortText('phone', 30);
+        $this->logDetails = [
+            'kaynak' => $this->natsisaUserId() > 0 || $this->userName() !== '' ? 'natsisa' : 'api',
+            'kullaniciAdi' => $this->userName(),
+            'natsisaKullaniciId' => $this->natsisaUserId(),
+            'whatsappDevralma' => [
+                'opsiyonId' => $whatsappReservationId,
+                'eskiKtRezervasyonId' => $currentReservationId,
+                'giris' => $checkIn !== '' ? $checkIn : null,
+                'cikis' => $checkOut !== '' ? $checkOut : null,
+                'numara' => $phone !== '' ? $phone : null,
+            ],
+        ];
+        $dates = trim($checkIn . ' - ' . $checkOut, ' -');
+        $this->log(
+            $pdo,
+            $id,
+            $id . ' numaralı rezervasyon için ' . ($dates !== '' ? $dates . ' tarihli ' : '')
+                . 'WhatsApp opsiyonunu devraldı' . ($phone !== '' ? ' (' . $phone . ')' : '') . '.'
+        );
+
+        $this->response->success(['id' => $id, 'reservationId' => $whatsappReservationId]);
+    }
+
+    /** İstekten tek satır kısa metin (log için). */
+    private function shortText(string $name, int $max): string
+    {
+        $value = trim(preg_replace('/\s+/u', ' ', (string) $this->request->input($name, '')) ?? '');
+
+        return function_exists('mb_substr') ? mb_substr($value, 0, $max) : substr($value, 0, $max);
+    }
+
+    /**
+     * Devralma isteğinin rezervasyonu: KT'ye bağlı villada olmalı ve KT kaydı (eşleşme) bulunmalı.
+     *
+     * @return array{0:int,1:int,2:array<string,mixed>}
+     */
+    private function whatsappTakeoverTarget(PDO $pdo): array
+    {
+        $id = (int) $this->request->input('id', 0);
+        if ($id <= 0) {
+            throw new HttpException('Lütfen geçerli bir rezervasyon ID gönderin.', 'VALIDATION', 422);
+        }
+        $whatsappReservationId = (int) $this->request->input('whatsappReservationId', 0);
+        if ($whatsappReservationId <= 0) {
+            throw new HttpException('WhatsApp opsiyonunun ID\'si gerekli.', 'VALIDATION', 422);
+        }
+
+        $reservation = $this->reservation($pdo, $id);
+        if (!$reservation) {
+            throw new HttpException('Belirtilen ID ile rezervasyon bulunamadı.', 'NOT_FOUND', 404);
+        }
+        if (!$this->calendarHome($pdo, (int) $reservation['evid'])) {
+            throw new HttpException('Villa Kiralama Takvimi\'ne bağlı değil.', 'VALIDATION', 422);
+        }
+        $mapping = $this->calendarResponse($pdo, $id);
+        if (!$mapping || (int) $mapping['ReservationId'] <= 0) {
+            throw new HttpException(
+                'Rezervasyonun Kiralama Takvimi kaydı yok; önce Opsiyona Al ile kayıt oluşturulmalı.',
+                'KT_NOT_MAPPED',
+                409
+            );
+        }
+
+        return [$id, $whatsappReservationId, $mapping];
+    }
+
+    /**
+     * Panel API'sinin JSON dönen uçları (Whatsapp/...). Yanıt çözülemezse boş dizi döner.
+     *
+     * @param array<string,mixed> $data
+     * @return array<string,mixed>
+     */
+    private function panelApiJson(string $path, array $data): array
+    {
+        $raw = $this->panelApi('POST', $path, $data);
+        $json = json_decode($raw, true);
+
+        return is_array($json) ? $json : [];
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     */
+    private function panelJsonMessage(array $result, string $fallback): string
+    {
+        $messages = $result['Messages'] ?? $result['messages'] ?? null;
+        if (is_array($messages) && $messages !== []) {
+            return trim(implode(' ', array_map('strval', $messages))) ?: $fallback;
+        }
+
+        return $fallback;
     }
 
     /**
@@ -338,6 +512,8 @@ final class ReservationStatusController extends Controller
         $isMinute = $this->flag('isMinute');
         $skipRules = $this->flag('skipRules');
         $sendGroup = $this->sendWhatsappGroup();
+        // WhatsApp opsiyonu devralındı (whatsapp-verify): opsiyon KT'de zaten var ve artık bu rezervasyonun.
+        $whatsappChanged = $this->flag('whatsappChanged');
 
         $calendar = $this->calendarResult();
 
@@ -348,9 +524,23 @@ final class ReservationStatusController extends Controller
             $mapping = $this->calendarResponse($pdo, $id);
             $alreadyOption = $mapping && $oldDurum === 1;
 
-            if (!$mapping) {
+            if ($whatsappChanged) {
+                // Panel: WhatsappChanged=1 ile KT kontrolü ve ReservationStatus "Option" atlanır.
+                if (!$mapping) {
+                    throw new HttpException(
+                        'WhatsApp opsiyonu devralınmamış: rezervasyonun Kiralama Takvimi kaydı bulunamadı.',
+                        'KT_WHATSAPP_NOT_TAKEN',
+                        409
+                    );
+                }
+            } elseif (!$mapping) {
                 // Merkezi sistemde henüz yok: önce oluştur (panelde bu yolda müsaitlik kontrolü yapılmaz).
                 $mapping = $this->createOnCalendar($pdo, $reservation, $estateId, 0);
+                // Yeni açılan kayıtla yalnızca WhatsApp opsiyonu kontrol edilir: varsa bu kaydın id'siyle
+                // devralınır (eski panelde de devralma, KT'de açılmış kaydın id'si üzerinden yapılır).
+                if (!$skipRules) {
+                    $this->checkOnCalendar($reservation, $estateId, (int) $mapping['ReservationId'], true);
+                }
             } elseif (!$skipRules && !$alreadyOption) {
                 $this->checkOnCalendar($reservation, $estateId);
             }
@@ -361,15 +551,23 @@ final class ReservationStatusController extends Controller
             // Panel, yerelde zaten opsiyondaysa ("Opsiyon Değiştir") merkezi sisteme hiç gitmiyordu; bu yüzden
             // yerel ile merkezi sistem ayrışınca bir daha düzelmiyordu. Burada önce opsiyon süresi uzatılır,
             // merkezi sistemde opsiyonda değilse (uzatma reddedilirse) yeniden opsiyona alınır.
-            $calendar['islem'] = 'option';
-            if ($alreadyOption && !$isMinute && $this->extendOptionOnCalendar($reservationId, $mappedEstateId, $saat, $sendGroup)) {
-                $calendar['islem'] = 'option_extend';
+            if ($whatsappChanged) {
+                // KT'ye gidilmez, callback gelmez: durum ve opsiyon bitişi aşağıda yerelde yazılır.
+                $calendar['islem'] = 'whatsapp_option_taken';
+                $calendar['reservation_id'] = $reservationId;
+                // İşlem geçmişi: bu opsiyon WhatsApp opsiyonu devralınarak alındı (KT kaydı = WhatsApp opsiyonu).
+                $this->logDetails['whatsappDevralma'] = ['opsiyonId' => $reservationId];
             } else {
-                $this->optionOnCalendar($reservationId, $mappedEstateId, $saat, $isMinute, $sendGroup);
+                $calendar['islem'] = 'option';
+                if ($alreadyOption && !$isMinute && $this->extendOptionOnCalendar($reservationId, $mappedEstateId, $saat, $sendGroup)) {
+                    $calendar['islem'] = 'option_extend';
+                } else {
+                    $this->optionOnCalendar($reservationId, $mappedEstateId, $saat, $isMinute, $sendGroup);
+                }
+                $calendar['gonderildi'] = true;
+                $calendar['whatsapp_grup_bildirimi'] = $sendGroup;
+                $calendar['reservation_id'] = $reservationId;
             }
-            $calendar['gonderildi'] = true;
-            $calendar['whatsapp_grup_bildirimi'] = $sendGroup;
-            $calendar['reservation_id'] = $reservationId;
         }
 
         // Merkezi sisteme gittiyse durum ve opsiyon bitişini callback (OptionReservation) yazar.
@@ -389,7 +587,7 @@ final class ReservationStatusController extends Controller
         $this->logDetails['opsiyonBitis'] = $optionEndText;
         $this->calendarLog($calendar);
 
-        $this->transaction($pdo, function () use ($pdo, $id, $optionEndText, $optionHoursText) {
+        $this->transaction($pdo, function () use ($pdo, $id, $optionEndText, $optionHoursText, $whatsappChanged) {
             if ($optionEndText !== null) {
                 $this->setStatus($pdo, $id, 1);
 
@@ -400,7 +598,11 @@ final class ReservationStatusController extends Controller
                 $stmt->execute([':saat2' => $optionHoursText, ':id' => $id]);
             }
 
-            $this->log($pdo, $id, $id . ' numaralı rezervasyonu ödeme bekliyor durumuna aldı.');
+            $this->log(
+                $pdo,
+                $id,
+                $id . ' numaralı rezervasyonu ' . ($whatsappChanged ? 'WhatsApp opsiyonunu devralarak ' : '') . 'ödeme bekliyor durumuna aldı.'
+            );
         });
 
         $this->respond($id, $oldDurum, 1, [
@@ -588,14 +790,17 @@ final class ReservationStatusController extends Controller
 
     /**
      * Panel: /api/Reservation/CheckFromPanel (ReservationCheck). Sadece "1" ile başlayan yanıt işlemi durdurur.
+     *
+     * @param int $calendarReservationId Rezervasyonun KT kaydı (az önce oluşturulduysa; 0 ise dolu.ReservationId)
+     * @param bool $onlyWhatsapp Sadece WhatsApp opsiyonu işlemi durdurur (diğer durumlar KT opsiyon adımına bırakılır)
      */
-    private function checkOnCalendar(array $reservation, int $estateId): void
+    private function checkOnCalendar(array $reservation, int $estateId, int $calendarReservationId = 0, bool $onlyWhatsapp = false): void
     {
         $raw = $this->panelApi('POST', 'Reservation/CheckFromPanel', [
             'estateId' => $estateId,
             'checkInDate' => (string) $reservation['tarih'],
             'checkOutDate' => (string) $reservation['tarih2'],
-            'ReservationId' => (string) $reservation['ReservationId'],
+            'ReservationId' => $calendarReservationId > 0 ? (string) $calendarReservationId : (string) $reservation['ReservationId'],
         ]);
 
         // "{0|1};/{Status};/{StatusDescription};/{bizim işletme mi: 1|''}"
@@ -607,12 +812,22 @@ final class ReservationStatusController extends Controller
 
         $status = $parts[1] ?? '';
         if ($status === 'WhatsappOption') {
-            throw new HttpException(
+            // Devralma (whatsapp-send / whatsapp-verify) için gereken bilgiler.
+            throw (new HttpException(
                 'Bu tarihlerde WhatsApp üzerinden oluşturulmuş bir opsiyon var ('
                     . ($parts[4] ?? '') . ' - ' . ($parts[5] ?? '') . ', ' . ($parts[6] ?? '') . ').',
                 'KT_WHATSAPP_OPTION',
                 409
-            );
+            ))->withDetails([
+                'reservationId' => (int) ($parts[2] ?? 0),
+                'whatsappReservationId' => (int) ($parts[3] ?? 0),
+                'checkIn' => trim((string) ($parts[4] ?? '')),
+                'checkOut' => trim((string) ($parts[5] ?? '')),
+                'phone' => trim((string) ($parts[6] ?? '')),
+            ]);
+        }
+        if ($onlyWhatsapp) {
+            return;
         }
         if ($status === 'AvailableHasWarningRule') {
             $isOwnerEstablishment = ($parts[3] ?? '') === '1';

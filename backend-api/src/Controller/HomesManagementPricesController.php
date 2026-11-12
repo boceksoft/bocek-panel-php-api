@@ -19,6 +19,7 @@ use PDO;
  *   POST     /backend-api/homes-management-prices/indirimler?delete=1&indirimId={indirimId}
  *   POST     /backend-api/homes-management-prices/last-minute?id={emlakId}&site={siteId}&tarih1=&tarih2=&fiyat=
  *   POST     /backend-api/homes-management-prices/range-price?id={emlakId}&tarih1=&tarih2=&fiyat= (gecelik)
+ *   POST     /backend-api/homes-management-prices/haftasonu?id={emlakId}&site={siteId}  hafta sonu fiyati ekle / guncelle / sil
  */
 final class HomesManagementPricesController extends Controller
 {
@@ -80,6 +81,129 @@ final class HomesManagementPricesController extends Controller
             'skipped_related_rows' => $result['skipped'],
             // Sezon temizlik alanlari (temizlikFiyat / temizlikGece) bu surumde yaziliyor mu; frontend eski API'yi ayirt eder.
             'sezon_temizlik' => isset($seasonColumns['temizlikfiyat']) || isset($seasonColumns['temizlikgece']),
+            // Sezon isitma alanlari: config (homes_season_heating / _off) acik ve kolon varsa yazilir.
+            'sezon_isitma' => $this->seasonHeatingEnabled($seasonColumns, 'isitmaFiyat'),
+            'sezon_isitma_hizmet_disi' => $this->seasonHeatingEnabled($seasonColumns, 'isitmaHizmetDisi'),
+        ]);
+    }
+
+    /**
+     * Hafta sonu fiyatlari (dbo.haftasonu; config homes_weekend_prices acik ve tablo varsa, orn. garantivillam).
+     * Panel karsiligi: doldur.asp villahaftasonu_ekle, ajax.asp haftasonu_duzenle, sil.asp villa_haftasonu.
+     * Fiyat gecelik ve villanin para biriminde; cuma / cumartesi / pazar o gecenin fiyatinin bu satirdan alinip
+     * alinmayacagini belirler (site fonksiyonu Fn_yenifiyathesapla_tablo, Natsisa'da HomesPriceTable).
+     * Yanit: villanin guncel hafta sonu satirlari.
+     *
+     * @Post("haftasonu")
+     * @query id int required Emlak ID
+     * @query site int Site ID (varsayilan 1)
+     * @query haftasonuId int Guncellenecek / silinecek satir (yoksa yeni satir)
+     * @query delete bool Satiri sil (haftasonuId gerekli)
+     * @query tarih1 string Baslangic (gg.aa.yyyy ya da yyyy-aa-gg)
+     * @query tarih2 string Bitis, dahil
+     * @query fiyat float Gecelik fiyat
+     * @query cuma bool Cuma gecesi
+     * @query cumartesi bool Cumartesi gecesi
+     * @query pazar bool Pazar gecesi
+     */
+    public function weekendPrices(): void
+    {
+        $payload = $this->payload();
+        $id = $this->resolveId($payload);
+        if ($id <= 0) {
+            throw new HttpException('Lutfen gecerli bir emlak ID gonderin.', 'VALIDATION', 422);
+        }
+
+        $pdo = $this->db->pdo();
+        if (!\App\Support\HomesPriceTable::weekendEnabled($pdo, $this->app)) {
+            throw new HttpException(
+                'Bu sitede hafta sonu fiyatlari kullanilmiyor (config homes_weekend_prices kapali ya da haftasonu tablosu yok).',
+                'NOT_SUPPORTED',
+                409
+            );
+        }
+        $this->assertHomeExists($pdo, $id);
+        $siteId = $this->siteId($payload);
+        $rowId = $this->numericValue($payload, ['haftasonuId', 'weekendId']);
+
+        if ($this->boolPayloadValue($payload, ['delete'])) {
+            if ($rowId <= 0) {
+                throw new HttpException('Silinecek hafta sonu fiyati secilmedi.', 'VALIDATION', 422);
+            }
+            $stmt = $pdo->prepare('DELETE FROM dbo.haftasonu WHERE id = :id AND emlak = :home');
+            $stmt->execute([':id' => $rowId, ':home' => $id]);
+            $this->respondWeekendPrices($pdo, $id, $siteId);
+
+            return;
+        }
+
+        $startDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih1', 'startDate']));
+        $endDate = $this->normalizeDate($this->firstPayloadValue($payload, ['tarih2', 'endDate']));
+        if ($startDate === '' || $endDate === '' || $this->compareDates($endDate, $startDate) < 0) {
+            throw new HttpException('Gecerli bir tarih araligi gonderin.', 'VALIDATION', 422);
+        }
+        $priceRaw = str_replace(',', '.', trim((string) $this->firstPayloadValue($payload, ['fiyat', 'price'])));
+        if (!is_numeric($priceRaw) || (float) $priceRaw <= 0) {
+            throw new HttpException('Lutfen gecerli bir fiyat girin.', 'VALIDATION', 422);
+        }
+        $friday = $this->boolPayloadValue($payload, ['cuma']) ? 1 : 0;
+        $saturday = $this->boolPayloadValue($payload, ['cumartesi']) ? 1 : 0;
+        $sunday = $this->boolPayloadValue($payload, ['pazar']) ? 1 : 0;
+        if ($friday + $saturday + $sunday === 0) {
+            throw new HttpException('En az bir gece (Cuma, Cumartesi ya da Pazar) secin.', 'VALIDATION', 422);
+        }
+
+        // Panel tarihleri yyyy-aa-gg yaziyor (doldur.asp / ajax.asp).
+        $params = [
+            ':tarih1' => \DateTime::createFromFormat('d.m.Y', $startDate)->format('Y-m-d'),
+            ':tarih2' => \DateTime::createFromFormat('d.m.Y', $endDate)->format('Y-m-d'),
+            ':fiyat' => $priceRaw,
+            ':cuma' => $friday,
+            ':cumartesi' => $saturday,
+            ':pazar' => $sunday,
+            ':home' => $id,
+        ];
+        if ($rowId > 0) {
+            $stmt = $pdo->prepare(
+                'UPDATE dbo.haftasonu
+                 SET tarih1 = :tarih1, tarih2 = :tarih2, fiyat = :fiyat, cuma = :cuma, cumartesi = :cumartesi, pazar = :pazar
+                 WHERE id = :id AND emlak = :home'
+            );
+            $params[':id'] = $rowId;
+            $stmt->execute($params);
+            if ($stmt->rowCount() === 0) {
+                throw new HttpException('Hafta sonu fiyati bulunamadi.', 'NOT_FOUND', 404);
+            }
+        } else {
+            $stmt = $pdo->prepare(
+                'INSERT INTO dbo.haftasonu (emlak, site, tarih1, tarih2, fiyat, cuma, cumartesi, pazar)
+                 VALUES (:home, :site, :tarih1, :tarih2, :fiyat, :cuma, :cumartesi, :pazar)'
+            );
+            $params[':site'] = $siteId;
+            $stmt->execute($params);
+        }
+
+        $this->respondWeekendPrices($pdo, $id, $siteId);
+    }
+
+    /**
+     * Sezon isitma alani bu sitede kullaniliyor mu: config acik (isitmaFiyat: homes_season_heating,
+     * isitmaHizmetDisi: homes_season_heating_off) ve sezonlar'da kolon var.
+     *
+     * @param array<string,mixed> $seasonColumns sezonlarColumns() (kucuk harf anahtar)
+     */
+    private function seasonHeatingEnabled(array $seasonColumns, string $column): bool
+    {
+        $setting = $column === 'isitmaHizmetDisi' ? 'homes_season_heating_off' : 'homes_season_heating';
+
+        return !empty($this->app[$setting]) && isset($seasonColumns[strtolower($column)]);
+    }
+
+    private function respondWeekendPrices(PDO $pdo, int $homeId, int $siteId): void
+    {
+        $this->response->success([
+            'id' => $homeId,
+            'haftasonu' => \App\Support\HomesPriceTable::weekendRowsForHome($pdo, $homeId, $siteId),
         ]);
     }
 
@@ -806,7 +930,10 @@ final class HomesManagementPricesController extends Controller
             $values[] = 'CONVERT(date, :tarih2Date, 104)';
             $params[':tarih2Date'] = $endDate;
         }
-        foreach (['temizlikGece', 'temizlikFiyat'] as $column) {
+        foreach (['temizlikGece', 'temizlikFiyat', 'isitmaFiyat', 'isitmaHizmetDisi'] as $column) {
+            if (in_array($column, ['isitmaFiyat', 'isitmaHizmetDisi'], true) && !$this->seasonHeatingEnabled($columns, $column)) {
+                continue;
+            }
             if (isset($columns[strtolower($column)])) {
                 $insertColumns[] = $column;
                 $values[] = '0';
@@ -922,6 +1049,10 @@ final class HomesManagementPricesController extends Controller
                      'temizlik_gece',
                      'temizlikFiyat',
                      'temizlik_fiyat',
+                     'isitmaFiyat',
+                     'isitma_fiyat',
+                     'isitmaHizmetDisi',
+                     'isitma_hizmet_disi',
                  ] as $key) {
             if (array_key_exists($key, $payload)) {
                 $single[$key] = $payload[$key];
@@ -1128,6 +1259,9 @@ final class HomesManagementPricesController extends Controller
             // Sezon temizlik ucreti / temizlik gecesi (sezonlar.temizlikFiyat, sezonlar.temizlikGece; tum panellerde).
             // Hesap: konaklama temizlikGece'den kisaysa temizlikFiyat eklenir. Gonderilmezse update'te mevcut deger kalir,
             // insert'te 0 yazilir (panel gibi).
+            // Isitma: sezonlar.isitmaFiyat (fiyat) ve sezonlar.isitmaHizmetDisi (pasif, 0/1); sadece config
+            // homes_season_heating / homes_season_heating_off acik ve kolon varsa (panel doldur.asp sezon_duzenle:
+            // bos fiyat 0, pasif Evet=1).
             $cleaningSet = '';
             $cleaningColumns = '';
             $cleaningValues = '';
@@ -1136,8 +1270,13 @@ final class HomesManagementPricesController extends Controller
             foreach ([
                          'temizlikGece' => ['temizlikGece', 'temizlik_gece'],
                          'temizlikFiyat' => ['temizlikFiyat', 'temizlik_fiyat'],
+                         'isitmaFiyat' => ['isitmaFiyat', 'isitma_fiyat'],
+                         'isitmaHizmetDisi' => ['isitmaHizmetDisi', 'isitma_hizmet_disi'],
                      ] as $column => $keys) {
                 if (!isset($seasonColumns[strtolower($column)])) {
+                    continue;
+                }
+                if (in_array($column, ['isitmaFiyat', 'isitmaHizmetDisi'], true) && !$this->seasonHeatingEnabled($seasonColumns, $column)) {
                     continue;
                 }
                 $hasValue = false;
@@ -1149,8 +1288,14 @@ final class HomesManagementPricesController extends Controller
                 if (!$hasValue && $seasonId > 0) {
                     continue;
                 }
-                $raw = $hasValue ? str_replace(',', '.', trim((string) $this->firstPayloadValue($row, $keys))) : '0';
-                $value = is_numeric($raw) && (float) $raw > 0 ? $raw : '0';
+                $rawValue = $hasValue ? $this->firstPayloadValue($row, $keys) : '0';
+                if ($column === 'isitmaHizmetDisi') {
+                    // bit: true / 1 / "1" / "evet" -> 1, diger her sey 0
+                    $value = in_array(strtolower(trim((string) (is_bool($rawValue) ? (int) $rawValue : $rawValue))), ['1', 'true', 'evet'], true) ? '1' : '0';
+                } else {
+                    $raw = str_replace(',', '.', trim((string) $rawValue));
+                    $value = is_numeric($raw) && (float) $raw > 0 ? $raw : '0';
+                }
                 $param = ':' . $column;
                 $cleaningSet .= ', [' . $column . '] = ' . $param;
                 $cleaningColumns .= ', [' . $column . ']';
@@ -2348,12 +2493,10 @@ final class HomesManagementPricesController extends Controller
     private function seasonExtraPaymentColumn(PDO $pdo, array $type): string
     {
         $key = $type['home_column_base'] !== '' ? $type['home_column_base'] : $type['code'];
+        // Elektrik sezonda ayri kolonda tutulmaz; sezonlar.isitmaFiyat isitma fiyatidir (eskiden elektrik buraya
+        // yaziliyor, isitma fiyatinin uzerine yaziyordu). Elektrik ucreti ek ucret fiyat tablosunda kalir.
         $map = [
             'temizlik' => 'temizlikFiyat',
-            'elektrik' => 'isitmaFiyat',
-            'elektriksu' => 'isitmaFiyat',
-            'elektrik-su' => 'isitmaFiyat',
-            'elektrik_su' => 'isitmaFiyat',
         ];
         $column = $map[$key] ?? '';
         if ($column === '') {

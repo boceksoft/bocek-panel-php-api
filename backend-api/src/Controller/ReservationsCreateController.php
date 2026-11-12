@@ -25,6 +25,8 @@ use PDO;
  *
  * Çakışma: aynı villada dolu.durum 1 (opsiyon) / 3 (onaylı) ya da dolu_fake.durum 3 (kapalı) varsa kayıt açılmaz
  * (reservation-update ile aynı kural). Aynı gün çıkış-giriş çakışma değildir.
+ * İstisna: Kiralama Takvimi'ne bağlı villada opsiyon (durum 1) engellemez. Eski panel gibi kayıt "Onay Bekliyor"
+ * açılır; KT kontrolü "Opsiyona Al"da (reservation-status) yapılır, WhatsApp opsiyonu orada devralınır.
  */
 final class ReservationsCreateController extends Controller
 {
@@ -371,7 +373,7 @@ final class ReservationsCreateController extends Controller
             $pdo,
             'SELECT TOP 1 kayitid, durum, CONVERT(varchar(10), tarih, 104) AS t1, CONVERT(varchar(10), tarih2, 104) AS t2
              FROM dolu
-             WHERE emlak = :home AND durum IN (1, 3)
+             WHERE emlak = :home AND durum IN (' . ($this->isCalendarHome($pdo, $homeId) ? '3' : '1, 3') . ')
                AND CONVERT(date, tarih) < :out AND CONVERT(date, tarih2) > :in
              ORDER BY tarih',
             [':home' => $homeId, ':in' => $in, ':out' => $out]
@@ -558,6 +560,20 @@ final class ReservationsCreateController extends Controller
         }
 
         return $value;
+    }
+
+    /** Villa Kiralama Takvimi'ne bağlı mı (KiralamaTakvimi.CalendarHomes). */
+    private function isCalendarHome(PDO $pdo, int $homeId): bool
+    {
+        if (!$this->objectExists($pdo, 'KiralamaTakvimi.CalendarHomes')) {
+            return false;
+        }
+
+        return (bool) $this->fetchOne(
+            $pdo,
+            'SELECT TOP 1 homesId FROM KiralamaTakvimi.CalendarHomes WHERE homesId = :home',
+            [':home' => $homeId]
+        );
     }
 
     private function objectExists(PDO $pdo, string $name): bool
