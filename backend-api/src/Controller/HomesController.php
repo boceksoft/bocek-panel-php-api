@@ -579,6 +579,7 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
   AND d2.aktif = 1 AND d1.aktif = 1 AND t.aktif = 1
   AND fiyatlar_num.sqfiyat > 0
   AND rate_num.rate > 0
+  AND " . $this->homesNotDeletedSql($this->db->pdo(), 'h') . "
   {$c['takvimWhere']}
 ";
     }

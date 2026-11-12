@@ -14,6 +14,8 @@ use PDO;
  *   GET  /bulk-edit?type=..&fields=a,b&page=1&per_page=50&search=&active=1|0&sort=   kayitlar
  *        sort: order (siralama, varsayilan) | id_desc | id_asc | title_asc | title_desc
  *   POST /bulk-edit/save { type, changes: [{ id, values: { alan: deger } }] }
+ *   POST /bulk-edit/save { type: villas, action: delete, ids: [..] }   toplu silme: homes.isDeleted = 1, aktif = 0 (satir silinmez,
+ *        panel listelerinde gosterilmez; geri almak icin isDeleted = 0)
  *
  * Villa alanlari detay kaydetmenin yazdigi homes kolonlarina, havuz alanlari havuztanimlamari tablosuna
  * (homes havuz kolonlari senkron) yazilir. Sayfa/blog: sayfalar{dbtable}. Her alanin kolonu INFORMATION_SCHEMA'dan
@@ -96,6 +98,10 @@ final class BulkEditController extends Controller
         $search = trim((string) $this->request->query('search', ''));
 
         $where = [$this->scope($type, $columns)];
+        if ($type === 'villas') {
+            // Toplu silinen (isDeleted = 1) villalar listelenmez.
+            $where[] = $this->homesNotDeletedSql($pdo, '');
+        }
         $params = [];
         if ($search !== '') {
             $where[] = '(baslik LIKE :search OR CONVERT(nvarchar(20), id) = :searchId)';
@@ -171,6 +177,11 @@ final class BulkEditController extends Controller
         $columns = $this->tableColumns($pdo, $table);
         $definitions = $this->definitions($type);
         $scope = $this->scope($type, $columns);
+
+        if ((string) $this->request->input('action', '') === 'delete') {
+            $this->softDeleteVillas($pdo, $type, $columns);
+            return;
+        }
 
         $changes = $this->request->input('changes', []);
         if (!is_array($changes) || !$changes) {
@@ -258,6 +269,23 @@ final class BulkEditController extends Controller
         }
 
         $this->response->success(['updated' => $updated, 'skipped' => $skipped]);
+    }
+
+    /**
+     * Toplu silme: secilen villalarda homes.isDeleted = 1 (kayit ve bagli veriler silinmez).
+     *
+     * @param string[] $columns
+     */
+    private function softDeleteVillas(PDO $pdo, string $type, array $columns): void
+    {
+        if ($type !== 'villas') {
+            throw new HttpException('Toplu silme sadece villalarda yapilabilir.', 'VALIDATION', 422);
+        }
+        $rawIds = $this->request->input('ids', []);
+        // isDeleted = 1 + butun sitelerde aktif = 0 (bkz. HomesSoftDelete)
+        $result = \App\Support\HomesSoftDelete::delete($pdo, is_array($rawIds) ? $rawIds : []);
+
+        $this->response->success(['deleted' => $result['deleted'], 'requested' => $result['requested']]);
     }
 
     /**

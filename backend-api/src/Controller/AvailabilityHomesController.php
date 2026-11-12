@@ -159,8 +159,10 @@ OUTER APPLY (
                AND ' . \App\Support\SqlDate::any('sezonlar.tarih2') . ' > CONVERT(date, :dateFrom, 23)'
             : 'AND ' . \App\Support\SqlDate::any('sezonlar.tarih2') . ' >= CONVERT(date, GETDATE(), 103)';
 
+        // Toplu silinen (isDeleted = 1) villalar listelenmez.
+        $where[] = $this->homesNotDeletedSql($pdo, 'h');
         $whereSql = implode(' AND ', $where);
-        $sql = " 
+        $sql = "  
 SELECT
     COUNT(*) OVER() AS totalCount,
     h.id,
