@@ -20,6 +20,15 @@ ALTER TABLE [dbo].[homes] ADD [seo_yuzdesi] int NULL;
 END;
 GO
 
+-- Toplu veri duzenlemedeki toplu silme: villa satiri silinmez, isDeleted = 1 yapilir; panel listelerinde gosterilmez.
+-- Mevcut satirlar 0 (silinmemis) olur.
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'isDeleted') IS NULL
+BEGIN
+ALTER TABLE [dbo].[homes] ADD [isDeleted] bit NOT NULL CONSTRAINT [DF_homes_isDeleted] DEFAULT (0);
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[MenuItems]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[MenuItems]', N'resim') IS NULL
 BEGIN

@@ -34,6 +34,27 @@ abstract class Controller
         $this->app = $app;
     }
 
+    /** @var bool|null homes.isDeleted kolonu var mi (istek boyunca bir kez bakilir) */
+    private $homesHasDeletedColumn = null;
+
+    /**
+     * Toplu silmede isDeleted = 1 yapilan villalar listelenmez. Kolon yoksa (setup calismamis) filtre uygulanmaz.
+     * $alias bos verilirse kolon adi tek basina yazilir.
+     */
+    protected function homesNotDeletedSql(\PDO $pdo, string $alias = 'h'): string
+    {
+        if ($this->homesHasDeletedColumn === null) {
+            $this->homesHasDeletedColumn = (int) $pdo->query(
+                "SELECT CASE WHEN COL_LENGTH('dbo.homes', 'isDeleted') IS NULL THEN 0 ELSE 1 END"
+            )->fetchColumn() === 1;
+        }
+        if (!$this->homesHasDeletedColumn) {
+            return '1 = 1';
+        }
+
+        return 'ISNULL(' . ($alias !== '' ? $alias . '.' : '') . '[isDeleted], 0) = 0';
+    }
+
     /**
      * Belge sure tipinin tutuldugu kanun7464 kolonu (ayar: gavel_duration_column, panelde elle yazilir).
      * Bos veya gecersiz kolon adinda varsayilan belgeSuresiTipi kullanilir.

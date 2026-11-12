@@ -64,7 +64,8 @@ final class HomesManagementController extends Controller
         $perPage = $allRows ? 0 : max(1, $this->pInt('per_page', 50));
         $offset = $allRows ? 0 : (($page - 1) * $perPage);
 
-        $where = ['1 = 1'];
+        // Toplu silinen (isDeleted = 1) villalar listelenmez.
+        $where = [$this->homesNotDeletedSql($this->db->pdo(), 'h')];
         $params = [];
         $hasTypeFilter = false;
 
@@ -429,7 +430,20 @@ WHERE {$whereSql}
             throw new \App\Core\HttpException('Gecersiz villa ID', 'VALIDATION', 422);
         }
 
-        $stmt = $this->db->pdo()->prepare('DELETE FROM dbo.homes WHERE id = :id');
+        // isDeleted kolonu varsa (setup) satir silinmez: isDeleted = 1 + butun sitelerde aktif = 0, listelerde gorunmez.
+        $pdo = $this->db->pdo();
+        if (\App\Support\HomesSoftDelete::hasColumn($pdo)) {
+            $exists = $pdo->prepare('SELECT COUNT(1) FROM dbo.homes WHERE id = :id AND ISNULL([isDeleted], 0) = 0');
+            $exists->execute([':id' => $id]);
+            if ((int) $exists->fetchColumn() === 0) {
+                throw new \App\Core\HttpException('Villa bulunamadi.', 'NOT_FOUND', 404);
+            }
+            \App\Support\HomesSoftDelete::delete($pdo, [$id]);
+            $this->response->success(['message' => 'Villa silindi', 'id' => $id, 'soft' => true]);
+            return;
+        }
+
+        $stmt = $pdo->prepare('DELETE FROM dbo.homes WHERE id = :id');
         $stmt->execute([':id' => $id]);
         if ($stmt->rowCount() === 0) {
             throw new \App\Core\HttpException('Villa bulunamadi.', 'NOT_FOUND', 404);
