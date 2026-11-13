@@ -55,6 +55,16 @@ return [
     // yazilir. Villa Kiralama > Config ekranindan degistirilir.
     'homes_fake_discount' => false,
 
+    // true: ilan detayinda (Ozellikler sekmesi) "One Cikan Ozellikler" secimi gosterilir (oneCikanOzellikler tablosu ->
+    // homes.onecikan, virgullu id); varsayilan acik. false: bolum gizli, kayitli secimler korunur (ilan kaydi degistirmez).
+    // Villa Kiralama > Config ekranindan degistirilir.
+    'homes_featured_features' => true,
+
+    // Villa silinince / pasife alininca URL'si (homes.url) yonlendirme tablosuna "410 Gone" olarak yazilir
+    // (ayni URL'nin kaydi varsa kodu 410 yapilir). Tekrar aktif edilince o 410 kaydi silinir.
+    // Bkz. App\Support\HomesGoneRedirect. Villa Kiralama > Config ekranindan degistirilir.
+    'homes_gone_redirect' => true,
+
     // Villa indirim turleri (indirimler.discountType); degerlerin anlami siteye gore degisir. Bkz. src/Support/HomesDiscountTypes.php
     //   options: value, label, payer (rezervasyonda kim karsilar: site | ev_sahibi | genel),
     //            base (price | commission: fiyat x KO x oran | owner_share: fiyat x (100 - KO) x oran).
@@ -405,6 +415,8 @@ return [
         'homes_two_cover_images' => 'bool',
         'homes_title_use_code' => 'bool',
         'homes_fake_discount' => 'bool',
+        'homes_featured_features' => 'bool',
+        'homes_gone_redirect' => 'bool',
         'homes_extra_fields' => 'array',
         'homes_code' => 'array',
         'homes_empty_seasons' => 'array',

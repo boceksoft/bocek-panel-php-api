@@ -64,6 +64,10 @@ final class HomesManagementDetailDataController extends Controller
         $selectableData['indirim_turleri'] = $discountTypes;
         // Sahte indirim orani (config homes_fake_discount): acikken indirim eklerken sahte oran alani gosterilir.
         $selectableData['sahte_indirim'] = !empty($this->app['homes_fake_discount']);
+        // One cikan ozellikler (config homes_featured_features): acikken Ozellikler sekmesinde secim bolumu gosterilir.
+        // Hic one cikan ozellik tanimli degilse (veya tablo yoksa) bolum gosterilmez.
+        $selectableData['one_cikan_ozellikler_aktif'] = !empty($this->app['homes_featured_features'])
+            && !empty($selectableData['onecikan_ozellikler']);
 
         $this->response->success([
             'fields' => $this->fields(),
@@ -259,11 +263,13 @@ final class HomesManagementDetailDataController extends Controller
                  FROM ozellikler
                  ORDER BY cat ASC, siralama ASC, baslik ASC"
             ),
+            // Pasifler de listelenir: kayitta secili ozellik adi id'ye bu listeden cevrilir (filtrelenirse secim bozulur).
             'onecikan_ozellikler' => $this->fetchOptions(
                 $pdo,
                 "SELECT id, baslik AS title
                  FROM oneCikanOzellikler
-                 ORDER BY baslik ASC"
+                 ORDER BY " . ((int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.oneCikanOzellikler', 'siralama') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1
+                    ? 'ISNULL(siralama, 2147483647) ASC, ' : '') . "baslik ASC"
             ),
             'kurallar' => $this->fetchOptions(
                 $pdo,

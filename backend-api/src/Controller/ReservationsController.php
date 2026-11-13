@@ -298,6 +298,50 @@ final class ReservationsController extends Controller
         ]);
     }
 
+    /**
+     * Satis Yonetimi menu rozetleri tek istekte: durum basina rezervasyon sayisi + yeni teklif sayisi.
+     * Her sayi, listenin sadeceToplam=1 ile verdigi sayiyla aynidir: durum filtresi + giris tarihi bugunden itibaren
+     * (6 Acik Rezervasyon'da tarih filtresi yok). Tek sorguda SUM(CASE ...) ile sayilir.
+     *
+     * @Get("menu-counts")
+     * @query site int Yeni teklif sayisinin sitesi (varsayilan 1)
+     */
+    public function menuCounts(): void
+    {
+        $pdo = $this->db->pdo();
+        $useAcentaUsers = !empty($this->app['reservation_filters_use_acenta_users']);
+        $statuses = ['pending' => 0, 'paymentPending' => 1, 'expired' => 2, 'confirmed' => 3, 'cancelled' => 4, 'open' => 6];
+
+        // sqlsrv ayni isimli parametreyi tekrar kullanamaz: her durum kendi :todayN parametresini alir.
+        $sums = [];
+        $params = [];
+        foreach ($statuses as $key => $status) {
+            $condition = $this->statusFilterSql((string) $status);
+            if ($status !== 6) {
+                $param = ':today' . $status;
+                $condition .= " AND CONVERT(date, dolu.tarih, 103) >= CONVERT(date, {$param}, 104)";
+                $params[$param] = date('d.m.Y');
+            }
+            $sums[] = "SUM(CASE WHEN {$condition} THEN 1 ELSE 0 END) AS [{$key}]";
+        }
+
+        // Ayni FROM/JOIN (sadeceToplam ile ayni satirlar); sadece secilen sutunlar farkli.
+        $countSql = $this->buildCountSql('WHERE kayitlar.id NOT IN (45285,32729,29108)', $useAcentaUsers, false);
+        $sql = str_replace('SELECT COUNT(*) AS total', 'SELECT ' . implode(",\n       ", $sums), $countSql);
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $counts = [];
+        foreach (array_keys($statuses) as $key) {
+            $counts[$key] = (int) ($row[$key] ?? 0);
+        }
+        $siteId = max(1, $this->pInt('site', 1));
+        $counts['newOffers'] = OffersController::newOfferCount($pdo, $siteId);
+
+        $this->response->success($counts);
+    }
 
     /**
      * Üst bar araması: müşteri adı, villa adı ya da rezervasyon no ile son rezervasyonlar.

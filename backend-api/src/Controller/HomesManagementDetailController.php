@@ -414,15 +414,27 @@ final class HomesManagementDetailController extends Controller
     private function oneCikanOzellikler(PDO $pdo, array $rs): array
     {
         $selectedIds = $this->selectedIdMap((string) ($rs['onecikan'] ?? ''), ',');
+        // Tablo yoksa (setup calismamis) bos: ilan detayinda bolum gizlenir.
+        if ((int) $pdo->query("SELECT CASE WHEN OBJECT_ID(N'dbo.oneCikanOzellikler', N'U') IS NULL THEN 0 ELSE 1 END")->fetchColumn() !== 1) {
+            return [];
+        }
+        $hasSort = (int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.oneCikanOzellikler', 'siralama') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
+        $hasActive = (int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.oneCikanOzellikler', 'aktif') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
         $rows = $this->fetchAll(
             $pdo,
-            'SELECT id, baslik FROM oneCikanOzellikler ORDER BY baslik ASC'
+            'SELECT id, baslik, ' . ($hasActive ? 'CAST(ISNULL(aktif, 1) AS int)' : 'CAST(1 AS int)') . ' AS aktif
+             FROM oneCikanOzellikler
+             ORDER BY ' . ($hasSort ? 'ISNULL(siralama, 2147483647) ASC, ' : '') . 'baslik ASC'
         );
 
         $items = [];
         foreach ($rows as $row) {
             $id = (int) ($row['id'] ?? 0);
             if ($id <= 0) {
+                continue;
+            }
+            // Pasif ozellik secenek olarak cikmaz; ilanda zaten seciliyse gosterilir (secim kaybolmasin).
+            if ((int) ($row['aktif'] ?? 1) !== 1 && !isset($selectedIds[$id])) {
                 continue;
             }
 

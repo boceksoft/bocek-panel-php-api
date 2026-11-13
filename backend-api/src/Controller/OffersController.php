@@ -19,6 +19,27 @@ final class OffersController extends Controller
     const DEFAULT_PER_PAGE = 50;
 
     /**
+     * Durumu "Yeni" (cevaplanmamis) teklif sayisi (menu rozeti). /reservations/menu-counts de kullanir.
+     * Durum teklifler.durum kolonunda tutuluyorsa dogrudan ondan sayilir (redirects'e bakilmaz).
+     * Kolon yoksa eski hesap: cevap linki (redirects) olmayan teklifler; redirects bir kez okunur.
+     */
+    public static function newOfferCount(PDO $pdo, int $siteId): int
+    {
+        $hasDurum = (int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.teklifler', 'durum') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
+        $stmt = $pdo->prepare($hasDurum
+            ? "SELECT COUNT(*) FROM dbo.teklifler t
+               WHERE t.site = :site AND ISNULL(NULLIF(LTRIM(RTRIM(t.durum)), ''), N'Yeni') = N'Yeni'"
+            : 'SELECT COUNT(*) FROM dbo.teklifler t
+               LEFT JOIN (SELECT DISTINCT teklifId FROM dbo.redirects WHERE teklifId IS NOT NULL) r ON r.teklifId = t.id
+               WHERE t.site = :site AND r.teklifId IS NULL'
+        );
+        $stmt->bindValue(':site', $siteId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
      * Teklifleri sayfalı listeler.
      *
      * @Get
@@ -32,20 +53,7 @@ final class OffersController extends Controller
         $siteId  = $this->siteId();
 
         if ((string) $this->request->query('sadeceYeniToplam', '') === '1') {
-            $pdo = $this->db->pdo();
-            $hasDurum = (int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.teklifler', 'durum') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
-            // Durum teklifler.durum kolonunda tutuluyorsa dogrudan ondan sayilir (redirects'e bakilmaz).
-            // Kolon yoksa eski hesap: cevap linki (redirects) olmayan teklifler; redirects bir kez okunur.
-            $stmt = $pdo->prepare($hasDurum
-                ? "SELECT COUNT(*) FROM dbo.teklifler t
-                   WHERE t.site = :site AND ISNULL(NULLIF(LTRIM(RTRIM(t.durum)), ''), N'Yeni') = N'Yeni'"
-                : 'SELECT COUNT(*) FROM dbo.teklifler t
-                   LEFT JOIN (SELECT DISTINCT teklifId FROM dbo.redirects WHERE teklifId IS NOT NULL) r ON r.teklifId = t.id
-                   WHERE t.site = :site AND r.teklifId IS NULL'
-            );
-            $stmt->bindValue(':site', $siteId, PDO::PARAM_INT);
-            $stmt->execute();
-            $this->response->success(['total' => (int) $stmt->fetchColumn()]);
+            $this->response->success(['total' => self::newOfferCount($this->db->pdo(), $siteId)]);
             return;
         }
         $page    = max(1, (int) $this->request->query('page', 1));

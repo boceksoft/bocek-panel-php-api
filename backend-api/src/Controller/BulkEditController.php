@@ -191,6 +191,8 @@ final class BulkEditController extends Controller
         $updated = 0;
         $skipped = [];
         $refreshIds = [];
+        // Villa aktif alani degisenler (id => yeni durum): pasif -> URL 410 Gone, aktif -> 410 kaldirilir.
+        $activeChanges = [];
         $pdo->beginTransaction();
         try {
             foreach ($changes as $change) {
@@ -229,6 +231,9 @@ final class BulkEditController extends Controller
                     $param = ':v' . $i++;
                     $sets[] = "[{$column}] = {$param}";
                     $params[$param] = $this->inputValue($def['type'], $value);
+                    if ($table === 'homes' && $key === 'aktif') {
+                        $activeChanges[$id] = (int) $params[$param] === 1;
+                    }
                 }
 
                 if ($sets) {
@@ -268,7 +273,23 @@ final class BulkEditController extends Controller
             \App\Support\HomesCompletion::refresh($pdo, (int) $homeId, $this->app);
         }
 
-        $this->response->success(['updated' => $updated, 'skipped' => $skipped]);
+        // aktif kolonu ana sitenin (site 1): yonlendirme de ana sitenin tablosuna yazilir. Hata kaydi bozmaz.
+        $redirect = null;
+        if ($activeChanges && \App\Support\HomesGoneRedirect::enabled($this->app)) {
+            try {
+                $off = array_keys(array_filter($activeChanges, function ($on) { return !$on; }));
+                $on = array_keys(array_filter($activeChanges));
+                $redirect = [
+                    'gone' => $off ? \App\Support\HomesGoneRedirect::markGone($pdo, \App\Support\HomesGoneRedirect::collect($pdo, $off, [1])) : 0,
+                    'cleared' => $on ? \App\Support\HomesGoneRedirect::clearGone($pdo, \App\Support\HomesGoneRedirect::collect($pdo, $on, [1])) : 0,
+                ];
+            } catch (\Throwable $e) {
+                error_log('HomesGoneRedirect: ' . $e->getMessage());
+                $redirect = ['error' => $e->getMessage()];
+            }
+        }
+
+        $this->response->success(['updated' => $updated, 'skipped' => $skipped, 'redirect' => $redirect]);
     }
 
     /**
@@ -282,10 +303,35 @@ final class BulkEditController extends Controller
             throw new HttpException('Toplu silme sadece villalarda yapilabilir.', 'VALIDATION', 422);
         }
         $rawIds = $this->request->input('ids', []);
-        // isDeleted = 1 + butun sitelerde aktif = 0 (bkz. HomesSoftDelete)
-        $result = \App\Support\HomesSoftDelete::delete($pdo, is_array($rawIds) ? $rawIds : []);
+        $ids = is_array($rawIds) ? $rawIds : [];
 
-        $this->response->success(['deleted' => $result['deleted'], 'requested' => $result['requested']]);
+        // Silinen villalarin URL'leri butun sitelerde 410 Gone olur (config homes_gone_redirect); hata silmeyi bozmaz.
+        $goneEnabled = \App\Support\HomesGoneRedirect::enabled($this->app);
+        $goneLinks = [];
+        $redirect = null;
+        if ($goneEnabled) {
+            try {
+                $goneLinks = \App\Support\HomesGoneRedirect::collect($pdo, $ids);
+            } catch (\Throwable $e) {
+                error_log('HomesGoneRedirect: ' . $e->getMessage());
+                $redirect = ['error' => $e->getMessage()];
+                $goneEnabled = false;
+            }
+        }
+
+        // isDeleted = 1 + butun sitelerde aktif = 0 (bkz. HomesSoftDelete)
+        $result = \App\Support\HomesSoftDelete::delete($pdo, $ids);
+
+        if ($goneEnabled && $result['deleted'] > 0) {
+            try {
+                $redirect = \App\Support\HomesGoneRedirect::markGone($pdo, $goneLinks);
+            } catch (\Throwable $e) {
+                error_log('HomesGoneRedirect: ' . $e->getMessage());
+                $redirect = ['error' => $e->getMessage()];
+            }
+        }
+
+        $this->response->success(['deleted' => $result['deleted'], 'requested' => $result['requested'], 'redirect' => $redirect]);
     }
 
     /**

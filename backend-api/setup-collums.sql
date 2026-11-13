@@ -29,6 +29,41 @@ ALTER TABLE [dbo].[homes] ADD [isDeleted] bit NOT NULL CONSTRAINT [DF_homes_isDe
 END;
 GO
 
+-- One cikan ozellikler: ilan detayinda secilir (homes.onecikan = virgullu id), Tanimlamalar > Villa Ozellikleri'nden yonetilir.
+IF OBJECT_ID(N'[dbo].[oneCikanOzellikler]', N'U') IS NULL
+BEGIN
+CREATE TABLE [dbo].[oneCikanOzellikler]
+(
+    [id] int IDENTITY(1,1) NOT NULL,
+    [baslik] nvarchar(MAX) NULL,
+    [siralama] int NULL,
+    [aktif] bit NULL,
+    CONSTRAINT [PK_oneCikanOzellikler] PRIMARY KEY ([id])
+);
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[oneCikanOzellikler]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[oneCikanOzellikler]', N'siralama') IS NULL
+BEGIN
+ALTER TABLE [dbo].[oneCikanOzellikler] ADD [siralama] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[oneCikanOzellikler]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[oneCikanOzellikler]', N'aktif') IS NULL
+BEGIN
+ALTER TABLE [dbo].[oneCikanOzellikler] ADD [aktif] bit NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[homes]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[homes]', N'onecikan') IS NULL
+BEGIN
+ALTER TABLE [dbo].[homes] ADD [onecikan] nvarchar(MAX) NULL;
+END;
+GO
+
 IF OBJECT_ID(N'[dbo].[MenuItems]', N'U') IS NOT NULL
     AND COL_LENGTH(N'[dbo].[MenuItems]', N'resim') IS NULL
 BEGIN

@@ -259,7 +259,22 @@ final class HomesManagementController extends Controller
             $orderSql = preg_replace('/^ORDER BY /', 'ORDER BY CASE WHEN h.id = :keywordExactOrder THEN 0 ELSE 1 END, ', $orderSql, 1);
             $params[':keywordExactOrder'] = (int) trim($search);
         }
+        // Diger sitelerin villa adlari: sites tablosundaki her site (1 haric) icin baslik kolonu (baslik_s2 / config soneki)
+        // homes'ta varsa doner (site_titles). Kolonu olmayan site listelenmez; frontend her site icin bir kolon acar.
+        $extraTitleSites = $this->extraTitleSites($pdo);
+        $extraTitleSql = '';
+        foreach ($extraTitleSites as $extraSite) {
+            $extraTitleSql .= "    ISNULL(CONVERT(nvarchar(500), h.[{$extraSite['column']}]), N'') AS site_title_{$extraSite['id']}, ";
+        }
+
         $pagingSql = $allRows ? '' : 'OFFSET :offset ROWS FETCH NEXT :perPage ROWS ONLY';
+
+        // Villa URL'si (homes.url / site sonekli url_s2): pasif yaparken yonlendirme modalinda eski link olarak gelir.
+        $urlColumn = $this->siteColumn('url', $siteId);
+        if ($urlColumn !== 'url' && !$this->homesColumnExists($pdo, $urlColumn)) {
+            $urlColumn = 'url';
+        }
+        $urlSql = $this->homesColumnExists($pdo, $urlColumn) ? "ISNULL(CONVERT(nvarchar(1000), h.[{$urlColumn}]), N'')" : "N''";
 
         $sql = "
 SELECT
@@ -267,10 +282,11 @@ SELECT
     h.id,
     {$siteId} AS site_id,
     h.evkodu AS code,
+    {$urlSql} AS url,
     " . $this->homeTitleSql('h', $titleColumn) . " AS title,
     {$titleColumn} AS gavel_title,
     " . $this->homeRealNameSql($pdo, 'h', $titleColumn) . " AS real_title,
-    h.siralama AS sort_order, 
+{$extraTitleSql}    h.siralama AS sort_order, 
     {$imageColumn} AS image,
     h.yatak_odasi AS bedroom_count,
     h.kisi AS capacity,
@@ -363,10 +379,20 @@ WHERE {$whereSql}
                 'id' => (int) $row['id'],
                 'site_id' => (int) $row['site_id'],
                 'code' => (string) $row['code'],
+                'url' => (string) ($row['url'] ?? ''),
                 'title' => (string) $row['title'],
                 'gavel_title' => (string) $row['gavel_title'],
                 // Gercek villa adi (config homes_code: kod basliga yaziliyorsa homes.villaadi)
                 'real_title' => (string) ($row['real_title'] ?? ''),
+                // Diger sitelerdeki villa adlari [{id, name, title}]; baslik kolonu olmayan site yok
+                'site_titles' => array_map(function (array $extraSite) use ($row): array {
+                    return [
+                        'id' => $extraSite['id'],
+                        'name' => $extraSite['name'],
+                        'short' => $extraSite['short'],
+                        'title' => (string) ($row['site_title_' . $extraSite['id']] ?? ''),
+                    ];
+                }, $extraTitleSites),
                 'sort_order' => (int) $row['sort_order'],
                 'image' => $imageList ? $imageList[0] : '',
                 'image_list' => $imageList,
@@ -409,6 +435,8 @@ WHERE {$whereSql}
             'meta' => [
                 'total' => $total,
                 'site' => $currentSite,
+                // Listelenen sitenin kisa adi (sites.kisa; "VV"): Ad kolonu basligi "VV Villa Adı"
+                'site_short' => $this->siteShort($pdo, $siteId),
                 'page' => $page,
                 'per_page' => $allRows ? $total : $perPage,
                 'total_pages' => $allRows ? 1 : (int) ceil($total / max(1, $perPage)),
@@ -432,6 +460,19 @@ WHERE {$whereSql}
 
         // isDeleted kolonu varsa (setup) satir silinmez: isDeleted = 1 + butun sitelerde aktif = 0, listelerde gorunmez.
         $pdo = $this->db->pdo();
+        // Silinen villanin URL'si butun sitelerde 410 Gone olur; URL silmeden once okunur.
+        $goneLinks = $this->goneRedirect(function () use ($pdo, $id) {
+            return \App\Support\HomesGoneRedirect::collect($pdo, [$id]);
+        });
+        $markGone = function () use ($pdo, $goneLinks) {
+            // null: config kapali; ['error' => ...]: URL okunamadi (sonuc oldugu gibi doner).
+            return is_array($goneLinks) && !isset($goneLinks['error'])
+                ? $this->goneRedirect(function () use ($pdo, $goneLinks) {
+                    return \App\Support\HomesGoneRedirect::markGone($pdo, $goneLinks);
+                })
+                : $goneLinks;
+        };
+
         if (\App\Support\HomesSoftDelete::hasColumn($pdo)) {
             $exists = $pdo->prepare('SELECT COUNT(1) FROM dbo.homes WHERE id = :id AND ISNULL([isDeleted], 0) = 0');
             $exists->execute([':id' => $id]);
@@ -439,7 +480,7 @@ WHERE {$whereSql}
                 throw new \App\Core\HttpException('Villa bulunamadi.', 'NOT_FOUND', 404);
             }
             \App\Support\HomesSoftDelete::delete($pdo, [$id]);
-            $this->response->success(['message' => 'Villa silindi', 'id' => $id, 'soft' => true]);
+            $this->response->success(['message' => 'Villa silindi', 'id' => $id, 'soft' => true, 'redirect' => $markGone()]);
             return;
         }
 
@@ -449,7 +490,7 @@ WHERE {$whereSql}
             throw new \App\Core\HttpException('Villa bulunamadi.', 'NOT_FOUND', 404);
         }
 
-        $this->response->success(['message' => 'Villa silindi', 'id' => $id]);
+        $this->response->success(['message' => 'Villa silindi', 'id' => $id, 'redirect' => $markGone()]);
     }
 
     /**
@@ -486,6 +527,16 @@ WHERE {$whereSql}
             throw new \App\Core\HttpException('Villa bulunamadi.', 'NOT_FOUND', 404);
         }
 
+        // Panelde secilen yonlendirme once dogrulanir: hataliysa villa pasife alinmaz.
+        $redirectInput = $this->request->input('redirect', null);
+        // { items: [...] } satir satir (eski -> yeni, her biri kendi turu); tek nesne (eski bicim) de kabul edilir.
+        $customRedirect = null;
+        if ($active === 0 && is_array($redirectInput)) {
+            $customRedirect = isset($redirectInput['items'])
+                ? \App\Support\HomesGoneRedirect::parseCustomItems($redirectInput)
+                : [\App\Support\HomesGoneRedirect::parseCustom($redirectInput)];
+        }
+
         $stmt = $pdo->prepare("UPDATE dbo.homes SET [{$column}] = :active WHERE id = :id");
         $stmt->execute([':active' => $active, ':id' => $id]);
 
@@ -493,7 +544,62 @@ WHERE {$whereSql}
         $check->execute([':id' => $id]);
         $current = (int) $check->fetchColumn();
 
-        $this->response->success(['id' => $id, 'active' => $current === 1, 'column' => $column]);
+        // Pasif: o sitede villanin URL'si 410 Gone; tekrar aktif: o URL'deki 410 kaldirilir.
+        // redirect (sadece pasifte): gonderilmezse otomatik 410; "none" -> yonlendirme yazilmaz;
+        // { turu_code, yeni_link?, turu_string?, eski_linkler? } -> panelde secilen yonlendirme (ayni link varsa guncellenir).
+        if ($current === 0 && ($redirectInput === 'none' || $redirectInput === false || $redirectInput === 0 || $redirectInput === '0')) {
+            $redirect = null;
+        } elseif ($current === 0 && $customRedirect !== null) {
+            // Kullanicinin sectigi yonlendirme config kapali olsa da yazilir (hata villa durumunu bozmaz).
+            try {
+                $redirect = 0;
+                foreach ($customRedirect as $item) {
+                    $collected = $item['links'] !== null
+                        ? \App\Support\HomesGoneRedirect::collectLinks($pdo, $siteId, $item['links'])
+                        : \App\Support\HomesGoneRedirect::collect($pdo, [$id], [$siteId]);
+                    $redirect += \App\Support\HomesGoneRedirect::upsert($pdo, $collected, $item['code'], $item['text'], $item['target']);
+                }
+            } catch (\Throwable $e) {
+                error_log('HomesGoneRedirect: ' . $e->getMessage());
+                $redirect = ['error' => $e->getMessage()];
+            }
+        } else {
+            $redirect = $this->goneRedirect(function () use ($pdo, $id, $siteId, $current) {
+                $collected = \App\Support\HomesGoneRedirect::collect($pdo, [$id], [$siteId]);
+                return $current === 1
+                    ? \App\Support\HomesGoneRedirect::clearGone($pdo, $collected)
+                    : \App\Support\HomesGoneRedirect::markGone($pdo, $collected);
+            });
+        }
+
+        $this->response->success(['id' => $id, 'active' => $current === 1, 'column' => $column, 'redirect' => $redirect]);
+    }
+
+    private function homesColumnExists(PDO $pdo, string $column): bool
+    {
+        $stmt = $pdo->prepare("SELECT CASE WHEN COL_LENGTH('dbo.homes', :c) IS NULL THEN 0 ELSE 1 END");
+        $stmt->execute([':c' => $column]);
+
+        return (int) $stmt->fetchColumn() === 1;
+    }
+
+    /**
+     * 410 Gone yonlendirme adimi (config homes_gone_redirect kapaliysa calismaz). Hata asil islemi bozmaz:
+     * sonuc dondurulur, hata olursa ['error' => mesaj], kapaliysa null.
+     *
+     * @return mixed
+     */
+    private function goneRedirect(callable $fn)
+    {
+        if (!\App\Support\HomesGoneRedirect::enabled($this->app)) {
+            return null;
+        }
+        try {
+            return $fn();
+        } catch (\Throwable $e) {
+            error_log('HomesGoneRedirect: ' . $e->getMessage());
+            return ['error' => $e->getMessage()];
+        }
     }
 
     private function p(string $key, string $default = ''): string
@@ -569,6 +675,53 @@ WHERE {$whereSql}
     /**
      * @return array{id:int,isim:string}
      */
+    /**
+     * Site 1 disindaki siteler ve homes'taki baslik kolonlari; kolonu olmayan site atlanir.
+     *
+     * @return array<int,array{id:int,name:string,short:string,column:string}>
+     */
+    private function extraTitleSites(PDO $pdo): array
+    {
+        try {
+            $rows = $pdo->query('SELECT id, site, kisa FROM sites WHERE id > 1 ORDER BY id ASC')->fetchAll(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($rows as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            if ($id <= 1) {
+                continue;
+            }
+            $column = $this->siteColumn('baslik', $id);
+            if ($column === 'baslik' || preg_match('/^[A-Za-z0-9_]+$/', $column) !== 1) {
+                continue;
+            }
+            $exists = (int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.homes', '{$column}') IS NULL THEN 0 ELSE 1 END")->fetchColumn();
+            if ($exists !== 1) {
+                continue;
+            }
+            $name = $this->siteDisplayName((string) ($row['site'] ?? ''));
+            // short: sites.kisa (kolon basliginda "co.uk Villa Adı" gibi kullanilir)
+            $result[] = ['id' => $id, 'name' => $name !== '' ? $name : 'Site ' . $id, 'short' => trim((string) ($row['kisa'] ?? '')), 'column' => $column];
+        }
+
+        return $result;
+    }
+
+    private function siteShort(PDO $pdo, int $siteId): string
+    {
+        try {
+            $stmt = $pdo->prepare('SELECT TOP 1 kisa FROM sites WHERE id = :id');
+            $stmt->execute([':id' => $siteId]);
+
+            return trim((string) $stmt->fetchColumn());
+        } catch (\PDOException $e) {
+            return '';
+        }
+    }
+
     private function siteInfo(PDO $pdo, int $siteId): array
     {
         try {
