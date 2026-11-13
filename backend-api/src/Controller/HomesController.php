@@ -29,12 +29,13 @@ final class HomesController extends Controller
      * @query tip string Tip kimlik(ler)i (virgüllü ya da tekrarlı)
      * @query bolge string Bölge kimlik(ler)i
      * @query ozellik string Özellik kimlik(ler)i
+     * @query havuzisitma string Havuz ısıtma filtresi (1/var/true: ısıtmalı, 0/yok/false: ısıtmasız, boş/all: hepsi)
      * @query villaadi string Villa adı / gavel belge no araması
      * @query ozelliste int Sadece bu ozel listeye (CustomListHomes.ListId) eklenmis villalar
      * @query sadecebizde int 1: sadece homes.sadece_bizde = 1 villalar (Config'de Sadece Bizde secili ise)
      * @query pasifler int 1: aktif olmayan villalar da gelir (sadece Ozel Listeler villa ekrani)
      * @query indirim int 1: secilen tarihlerde indirimi olan villalar (sitede gosterilen indirimler)
-     * @query mimicFrontend int 1: frontend kurallarını (gavel, izin süresi, alt bölge & alt kategori açılımı) uygular
+     * @query mimicFrontend int 1: frontend kurallarını (gavel, izin süresi, min. gece kontrolü, alt bölge & alt kategori açılımı) uygular
      * @query order_by int Sıralama (0-6)
      * @query page int Sayfa
      * @query per_page int Sayfa başına kayıt
@@ -165,8 +166,10 @@ final class HomesController extends Controller
         $perPage = max(1, $this->pInt('per_page', 50));
         $offset  = ($page - 1) * $perPage;
 
+        $mimicFrontend = ($this->p('mimicFrontend') === '1' || strtolower($this->p('mimicFrontend')) === 'true');
+
         // Dinamik SQL parçaları
-        [$takvimSelect, $takvimCross, $takvimWhere] = $this->takvimParts($hasDate, $takvimKuraliReq, $gun, $t1, $t2);
+        [$takvimSelect, $takvimCross, $takvimWhere] = $this->takvimParts($hasDate, $takvimKuraliReq, $gun, $t1, $t2, $mimicFrontend, $kisasureli);
         $dsql2       = $this->fiyatParcasi($hasDate, $netTarih, $kisasureli, $siteId, $t1, $t2);
         [$ksqlx, $ksql] = $this->kisasureliParts($hasDate, $kisasureli, $geceSql);
         $nettarihSql = $this->nettarihParcasi($hasDate, $netTarih, $minTL, $maxTL, $season, (int) $now->format('Y'), $siteId);
@@ -182,7 +185,6 @@ final class HomesController extends Controller
 
         // Dinamik WHERE
         $params = [];
-        $mimicFrontend = ($this->p('mimicFrontend') === '1' || strtolower($this->p('mimicFrontend')) === 'true');
         if ($mimicFrontend) {
             $genel = $this->genelSettings($pdo, $siteId, $dbt);
             $listingOpt = $genel['gavellistingoption'] ?? null;
@@ -345,10 +347,30 @@ final class HomesController extends Controller
             $sql .= ' AND EXISTS (SELECT 1 FROM indirimler ind WHERE ind.emlak = h.id AND ' . $discountWhere . ')';
         }
 
+        // Havuz isitma filtresi (1/var/true: isitmali, 0/yok/false: isitmasiz, bos/all: hepsi)
+        $poolHeatingRaw = $this->p('havuzisitma');
+        if ($poolHeatingRaw === '') {
+            $poolHeatingRaw = $this->p('pool_heating');
+        }
+        if ($poolHeatingRaw === '') {
+            $poolHeatingRaw = $this->p('havuz_isitma');
+        }
+        if ($poolHeatingRaw === '') {
+            $poolHeatingRaw = $this->p('isitmaliHavuz');
+        }
+        $poolHeatingVal = strtolower(trim($poolHeatingRaw));
+
+        if (in_array($poolHeatingVal, ['1', 'true', 'var', 'yes', 'evet'], true)) {
+            $sql .= ' AND (' . $this->poolHeatingExistsSql() . ')';
+        } elseif (in_array($poolHeatingVal, ['0', 'false', 'yok', 'no', 'hayir'], true)) {
+            $sql .= ' AND NOT (' . $this->poolHeatingExistsSql() . ')';
+        }
+
         // ORDER BY + sayfalama
         $isFilterSelected = (
             $hasDate || $this->pInt('kisi') > 0 || $tipx !== '' ||
-            $bolge !== '' || $this->p('ozellik') !== '' || $this->p('villaadi') !== ''
+            $bolge !== '' || $this->p('ozellik') !== '' || $this->p('villaadi') !== '' ||
+            in_array($poolHeatingVal, ['1', 'true', 'var', 'yes', 'evet', '0', 'false', 'yok', 'no', 'hayir'], true)
         );
         $sql .= "\nORDER BY " . $this->orderClause($orderBy, $orderByEk, $isFilterSelected);
         $sql .= "\nOFFSET {$offset} ROWS FETCH NEXT {$perPage} ROWS ONLY";
@@ -361,7 +383,31 @@ final class HomesController extends Controller
         $siteDomain = $this->siteDomain($pdo, $siteId);
         $cdnBase = $this->cdnBase($siteDomain);
 
-        foreach ($rows as &$row) {
+        $allCatIds = [];
+        $rowsCatIds = [];
+        foreach ($rows as $idx => $row) {
+            $catIds = [];
+            if (!empty($row['emlak_tipi'])) {
+                $catIds[] = (int) $row['emlak_tipi'];
+            }
+            if (!empty($row['kategori'])) {
+                foreach (explode(',', (string) $row['kategori']) as $cid) {
+                    $cid = trim($cid);
+                    if (is_numeric($cid) && (int) $cid > 0) {
+                        $catIds[] = (int) $cid;
+                    }
+                }
+            }
+            $catIds = array_values(array_unique($catIds));
+            $rowsCatIds[$idx] = $catIds;
+            foreach ($catIds as $cid) {
+                $allCatIds[$cid] = $cid;
+            }
+        }
+
+        $tipTitles = $this->fetchTipTitles($pdo, array_values($allCatIds), $dbt);
+
+        foreach ($rows as $idx => &$row) {
             unset($row['totalCount']);
             if (isset($row['fiyat'])) {
                 $row['fiyat'] = (int) round((float) $row['fiyat']);
@@ -394,6 +440,16 @@ final class HomesController extends Controller
                 $row['kapak_resmi'] = null;
             }
             unset($row['resim']);
+
+            $itemCategories = [];
+            foreach ($rowsCatIds[$idx] ?? [] as $cid) {
+                $itemCategories[] = [
+                    'id'    => $cid,
+                    'title' => $tipTitles[$cid] ?? '',
+                ];
+            }
+            $row['categories'] = $itemCategories;
+            unset($row['emlak_tipi'], $row['kategori']);
         }
         unset($row);
 
@@ -504,14 +560,7 @@ SELECT
     h.ribbon{$c['dbt']} AS ribbon,
     h.ribbon2{$c['dbt']} AS ribbon2,
     h.yuzme_havuzu, h.kisi, h.oda_sayisi,
-    CASE WHEN EXISTS (
-        SELECT 1 
-        FROM sezonlar sz_isitma
-        WHERE sz_isitma.islem_id = h.id
-          AND sz_isitma.islem = 'emlak'
-          AND " . \App\Support\SqlDate::any('sz_isitma.tarih1') . " > CONVERT(date, GETDATE(), 104)
-          AND ISNULL(sz_isitma.isitmaFiyat, 0) > 0
-    ) THEN 'var' ELSE 'yok' END AS havuzisitma,
+    CASE WHEN " . $this->poolHeatingExistsSql() . " THEN 'var' ELSE 'yok' END AS havuzisitma,
     '{$c['doviz']}' AS doviz,
     d2.baslik{$c['dbt']} AS d2baslik,
     {$c['takvimSelect']}
@@ -536,7 +585,8 @@ SELECT
     " . (empty($c['includeInactive']) ? '' : "h.aktif{$c['dbt']} AS aktif,") . "
     d1.baslik{$c['dbt']} + ' / ' + d2.baslik{$c['dbt']} AS bolgebaslik,
     mm.val AS mm,
-    bosluklar.girisbosluk, bosluklar.cikisbosluk
+    bosluklar.girisbosluk, bosluklar.cikisbosluk,
+    h.emlak_tipi, h.kategori
 FROM homes AS h
 INNER JOIN rate ON rate.CurrencyName = h.doviz
 {$c['ksql']}
@@ -587,8 +637,15 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
     /**
      * @return array{0:string,1:string,2:string}
      */
-    private function takvimParts(bool $hasDate, string $takvimKuraliReq, int $gun, string $t1, string $t2): array
-    {
+    private function takvimParts(
+        bool $hasDate,
+        string $takvimKuraliReq,
+        int $gun,
+        string $t1,
+        string $t2,
+        bool $mimicFrontend = false,
+        bool $kisasureli = false
+    ): array {
         $select = '0 AS gecemax, 0 AS sezongece,';
         $cross = '';
         $where = '';
@@ -620,6 +677,9 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
                   AND CONVERT(date, '{$t1}', 104) <= " . \App\Support\SqlDate::any('sezonlar.tarih2') . "
             ) AS sezon ";
             $select = " sezon.gece, (CASE WHEN DATEDIFF(day, CONVERT(date, '{$t1}', 104), CONVERT(date, '{$t2}', 104)) >= sezon.gece THEN 0 ELSE 1 END) AS gecemax, sezon.gece AS sezongece, ";
+            if ($mimicFrontend && !$kisasureli) {
+                $where = " AND DATEDIFF(day, CONVERT(date, '{$t1}', 104), CONVERT(date, '{$t2}', 104)) >= sezon.gece ";
+            }
         }
 
         return [$select, $cross, $where];
@@ -1029,5 +1089,60 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
         }
 
         return array_values($allIds);
+    }
+
+    /**
+     * Villanin havuz isitmasi olup olmadigini kontrol eden SQL EXISTS ifadesi.
+     */
+    private function poolHeatingExistsSql(): string
+    {
+        return "EXISTS (
+            SELECT 1 
+            FROM sezonlar sz_isitma
+            WHERE sz_isitma.islem_id = h.id
+              AND sz_isitma.islem = 'emlak'
+              AND " . \App\Support\SqlDate::any('sz_isitma.tarih1') . " > CONVERT(date, GETDATE(), 104)
+              AND ISNULL(sz_isitma.isitmaFiyat, 0) > 0
+        )";
+    }
+
+    /**
+     * Verilen tip kimlikleri icin [id => title] haritasi doner.
+     *
+     * @param array<int> $ids
+     * @return array<int,string>
+     */
+    private function fetchTipTitles(PDO $pdo, array $ids, string $dbt): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $titleCol = 'baslik';
+        if ($dbt !== '') {
+            try {
+                $colCheck = strtolower('baslik' . $dbt);
+                $stmtCol = $pdo->prepare("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE LOWER(TABLE_NAME) = 'tip' AND LOWER(COLUMN_NAME) = :col");
+                $stmtCol->execute([':col' => $colCheck]);
+                if ($stmtCol->fetchColumn() !== false) {
+                    $titleCol = "COALESCE(NULLIF(baslik{$dbt}, ''), baslik, '')";
+                }
+            } catch (\Throwable $e) {
+                $titleCol = 'baslik';
+            }
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $sql = "SELECT id, {$titleCol} AS title FROM dbo.tip WHERE id IN ({$placeholders})";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute(array_values($ids));
+
+        $map = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $map[(int) $row['id']] = trim((string) ($row['title'] ?? ''));
+        }
+
+        return $map;
     }
 }
