@@ -187,6 +187,96 @@ final class HomesManagementPricesController extends Controller
     }
 
     /**
+     * Ek ucret tipi hasar depozitosu mu (HomesExtraPaymentTypes.Code ya da HomeColumnBase "hasar").
+     *
+     * @param array{id:int,code:string,name:string,home_column_base:string,is_included:int} $type
+     */
+    private function isDamageDepositType(array $type): bool
+    {
+        return ($type['code'] ?? '') === 'hasar' || ($type['home_column_base'] ?? '') === 'hasar';
+    }
+
+    private function isDamageDepositTypeId(PDO $pdo, int $typeId): bool
+    {
+        if ($typeId <= 0) {
+            return false;
+        }
+        $stmt = $pdo->prepare('SELECT Code, HomeColumnBase FROM dbo.HomesExtraPaymentTypes WHERE ExtraPaymentTypeId = :id');
+        $stmt->execute([':id' => $typeId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!is_array($row)) {
+            return false;
+        }
+
+        return strtolower(trim((string) ($row['Code'] ?? ''))) === 'hasar'
+            || strtolower(trim((string) ($row['HomeColumnBase'] ?? ''))) === 'hasar';
+    }
+
+    /**
+     * Villanin hasar depozitosu (eski panel emlak_duzenle.asp / sezonlar.asp: homes.hasar{sites.dbtable}, sayi).
+     * Kolon yoksa yazilmaz.
+     */
+    private function updateHomeDamageDeposit(PDO $pdo, int $homeId, float $value): void
+    {
+        $column = $this->homeDamageDepositColumn($pdo);
+        if ($column === '') {
+            return;
+        }
+        $formatted = abs($value - round($value)) < 0.00001 ? (string) (int) round($value) : number_format($value, 2, '.', '');
+        $stmt = $pdo->prepare("UPDATE homes SET [{$column}] = :value WHERE id = :id");
+        $stmt->execute([':value' => $formatted, ':id' => $homeId]);
+    }
+
+    /**
+     * Hasar depozitosu fiyat satiri silindikten sonra: villanin kalan son hasar satiri homes.hasar'a yazilir, yoksa 0.
+     */
+    private function syncHomeDamageDepositFromPrices(PDO $pdo, int $homeId, int $typeId): void
+    {
+        $stmt = $pdo->prepare(
+            'SELECT TOP 1 Value FROM dbo.HomesExtraPaymentPrices
+             WHERE HomesId = :home AND ExtraPaymentTypeId = :type AND ISNULL(IsDeleted, 0) = 0
+             ORDER BY ExtraPaymentPriceId DESC'
+        );
+        $stmt->execute([':home' => $homeId, ':type' => $typeId]);
+        $remaining = $stmt->fetchColumn();
+        $this->updateHomeDamageDeposit($pdo, $homeId, $remaining === false ? 0.0 : (float) str_replace(',', '.', (string) $remaining));
+    }
+
+    /** Villanin homes.hasar degeri (kolon yoksa ya da sayi degilse null). */
+    private function currentHomeDamageDeposit(PDO $pdo, int $homeId): ?float
+    {
+        $column = $this->homeDamageDepositColumn($pdo);
+        if ($column === '' || $homeId <= 0) {
+            return null;
+        }
+        $stmt = $pdo->prepare("SELECT [{$column}] FROM homes WHERE id = :id");
+        $stmt->execute([':id' => $homeId]);
+        $raw = str_replace(',', '.', trim((string) $stmt->fetchColumn()));
+
+        return is_numeric($raw) ? (float) $raw : null;
+    }
+
+    /** homes.hasar kolonu, istekteki sitenin sonekiyle (sites.dbtable; site 1 / tanimsiz: "hasar"). */
+    private function homeDamageDepositColumn(PDO $pdo): string
+    {
+        $suffix = '';
+        $siteId = $this->siteId($this->payload());
+        try {
+            $stmt = $pdo->prepare('SELECT TOP 1 dbtable FROM sites WHERE id = :id');
+            $stmt->execute([':id' => $siteId]);
+            $value = trim((string) ($stmt->fetchColumn() ?: ''));
+            if (preg_match('/^_[A-Za-z0-9]+$/', $value) === 1) {
+                $suffix = $value;
+            }
+        } catch (\Throwable $e) {
+            $suffix = '';
+        }
+        $column = 'hasar' . $suffix;
+
+        return $this->columnExists($pdo, 'dbo', 'homes', $column) ? $column : '';
+    }
+
+    /**
      * Sezon isitma alani bu sitede kullaniliyor mu: config acik (isitmaFiyat: homes_season_heating,
      * isitmaHizmetDisi: homes_season_heating_off) ve sezonlar'da kolon var.
      *
@@ -283,6 +373,9 @@ final class HomesManagementPricesController extends Controller
             $legacyDeleted = 0;
             $skipped = [];
 
+            // Silinecek fiyat satirlarinin villa / tipi (hasar depozitosu ise homes.hasar sonradan esitlenir)
+            $affectedPrices = [];
+
             if ($rowId > 0 || $priceId > 0) {
                 try {
                     $conditions = [];
@@ -299,6 +392,13 @@ final class HomesManagementPricesController extends Controller
                         $conditions[] = 'ExtraPaymentPriceId = :priceId';
                         $params[':priceId'] = $priceId;
                     }
+
+                    $stmt = $pdo->prepare(
+                        'SELECT HomesId, ExtraPaymentTypeId FROM dbo.HomesExtraPaymentPrices
+                         WHERE ' . implode(' OR ', $conditions)
+                    );
+                    $stmt->execute($params);
+                    $affectedPrices = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                     $stmt = $pdo->prepare(
                         'DELETE FROM dbo.HomesExtraPaymentPrices
@@ -333,6 +433,21 @@ final class HomesManagementPricesController extends Controller
                 throw new HttpException('Secilen ekstra ucret bulunamadi.', 'NOT_FOUND', 404);
             }
 
+            // Hasar depozitosu silindiyse homes.hasar kalan son hasar satirina, hic kalmadiysa 0'a cekilir.
+            if ($priceDeleted > 0) {
+                $synced = [];
+                foreach ($affectedPrices as $affected) {
+                    $affectedHome = (int) ($affected['HomesId'] ?? 0);
+                    $affectedType = (int) ($affected['ExtraPaymentTypeId'] ?? 0);
+                    $key = $affectedHome . '-' . $affectedType;
+                    if ($affectedHome <= 0 || isset($synced[$key]) || !$this->isDamageDepositTypeId($pdo, $affectedType)) {
+                        continue;
+                    }
+                    $synced[$key] = true;
+                    $this->syncHomeDamageDepositFromPrices($pdo, $affectedHome, $affectedType);
+                }
+            }
+
             $pdo->commit();
         } catch (HttpException $e) {
             if ($pdo->inTransaction()) {
@@ -359,6 +474,7 @@ final class HomesManagementPricesController extends Controller
                 'legacy_ekstra_ucretler' => $legacyDeleted,
             ],
             'skipped_related_rows' => $skipped,
+            'hasar_depozitosu' => $this->resolveId($payload) > 0 ? $this->currentHomeDamageDeposit($pdo, $this->resolveId($payload)) : null,
         ]);
     }
 
@@ -420,6 +536,8 @@ final class HomesManagementPricesController extends Controller
             'ekstra_ucretler' => $result['ekstra_ucretler'],
             'legacy_ekstra_ucretler' => $result['legacy_ekstra_ucretler'],
             'skipped_related_rows' => $result['skipped'],
+            // Villanin guncel hasar depozitosu (homes.hasar); ilan formu bununla esitlenir (Kaydet eski degeri yazmasin)
+            'hasar_depozitosu' => $this->currentHomeDamageDeposit($pdo, $id),
         ]);
     }
 
@@ -1429,6 +1547,12 @@ final class HomesManagementPricesController extends Controller
                 $rowUpdated++;
                 $legacyStartDate = $legacyStartDate === '' ? $rowStart : $this->minDate($legacyStartDate, $rowStart);
                 $legacyEndDate = $legacyEndDate === '' ? $rowEnd : $this->maxDate($legacyEndDate, $rowEnd);
+            }
+
+            // Hasar depozitosu villa geneli bir degerdir: eski panel gibi homes.hasar{site soneki} kolonuna da yazilir
+            // (site bu kolondan okur). Ek ucret tablolarina yazma aynen devam eder.
+            if ($rowUpdated > 0 && $this->isDamageDepositType($type)) {
+                $this->updateHomeDamageDeposit($pdo, $homeId, $value);
             }
 
             if (!$usesSeasonColumn && $hasLegacyTable && $rowUpdated > 0 && $legacyStartDate !== '' && $legacyEndDate !== '') {
