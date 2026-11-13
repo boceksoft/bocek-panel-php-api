@@ -412,9 +412,6 @@ final class HomesController extends Controller
             if (isset($row['fiyat'])) {
                 $row['fiyat'] = (int) round((float) $row['fiyat']);
             }
-            if (isset($row['temizlik_ucreti'])) {
-                $row['temizlik_ucreti'] = (int) round((float) $row['temizlik_ucreti']);
-            }
             if (isset($row['girisbosluk']) && (int) $row['girisbosluk'] === 999) {
                 $row['girisbosluk'] = null;
             }
@@ -526,13 +523,12 @@ OUTER APPLY (
           OR
           ({$endDateSql} >= " . \App\Support\SqlDate::any('sz_cl.tarih1') . " AND {$endDateSql} <= " . \App\Support\SqlDate::any('sz_cl.tarih2') . ")
       )
-    ORDER BY sz_cl.id DESC
+    ORDER BY (CASE WHEN {$startDateSql} >= " . \App\Support\SqlDate::any('sz_cl.tarih1') . " AND {$startDateSql} <= " . \App\Support\SqlDate::any('sz_cl.tarih2') . " THEN 1 ELSE 0 END) DESC, sz_cl.id DESC
 ) AS cleaning
 CROSS APPLY (
     SELECT CASE
         WHEN cleaning.temizlikgece > 0
-             AND ({$nightSql} <= cleaning.temizlikgece)
-             AND ({$nightSql} >= cleaning.gece OR cleaning.gece = 0" . ($kisasureli ? " OR 1 = 1" : "") . ")
+             AND ({$nightSql} < cleaning.temizlikgece)
              AND cleaning.temizlikFiyat > 0
         THEN cleaning.temizlikFiyat
         ELSE 0
@@ -572,14 +568,6 @@ SELECT
             ELSE ({$price} * (CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE {$currencyRate} END) / NULLIF({$c['hedefKur']}, 0))
         END), 0
     ) AS INT) AS fiyat, 
-    CAST(ROUND( 
-        (CASE
-            WHEN h.doviz = '{$c['doviz']}' THEN cleaning_fee.val
-            WHEN h.doviz = 'tl' THEN (cleaning_fee.val / NULLIF({$c['hedefKur']}, 0))
-            WHEN '{$c['doviz']}' = 'tl' THEN (cleaning_fee.val * (CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE {$currencyRate} END))
-            ELSE (cleaning_fee.val * (CASE WHEN {$homeRate} > 0 THEN {$homeRate} ELSE {$currencyRate} END) / NULLIF({$c['hedefKur']}, 0))
-        END), 0
-    ) AS INT) AS temizlik_ucreti,
     {$c['ksqlx']}   
     h.banyo, 
     " . (empty($c['includeInactive']) ? '' : "h.aktif{$c['dbt']} AS aktif,") . "
