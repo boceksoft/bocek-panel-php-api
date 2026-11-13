@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\LegacySql;
 use PDO;
 
 /*
@@ -12,11 +13,31 @@ use PDO;
  *   GET  /gavel-management          ozet sayilar + kayitli belge numaralari
  *   GET  /gavel-management/export   belge sorgu servisine (BulkSaveData) gonderilecek ilan verileri
  *   POST /gavel-management          Bulkcheckv2 sonuclarini kanun7464'e yazar (eski: ?islem=kaydet)
+ *   GET  /gavel-management/settings  Gavel secenekleri (eski: genel_ayarlar.asp > Gavel sekmesi)
+ *   POST /gavel-management/settings  Gavel seceneklerini kaydeder (yalnizca bu kolonlar)
+ *   Ayarlar yalnizca site 1'in genel tablosundan okunur/yazilir; diger sitelerin genel{dbtable} tablolari kullanilmaz.
  *
  * Bakanlik sorgusu ve BulkSaveData istegi Web.Api uzerinden yapilir (servis token'i orada durur).
  */
 final class GavelManagementController extends Controller
 {
+    use LegacySql;
+
+    /**
+     * Gavel sekmesi alanlari: istek anahtari => genel tablosu kolonu.
+     * Secenek alanlarinda izin verilen degerler eski paneldeki select'lerle aynidir.
+     */
+    private const SETTING_OPTIONS = [
+        'explode_option' => ['column' => 'gavelExplodeOption', 'values' => ['0', '1']],
+        'owner_option' => ['column' => 'gavelOwnerOption', 'values' => ['0', '1', '2']],
+        'detail_option' => ['column' => 'gavelDetailOption', 'values' => ['0', '1']],
+        'listing_option' => ['column' => 'gavelListingOption', 'values' => ['0', '1']],
+        'search_option' => ['column' => 'gavelSearchOption', 'values' => ['0', '1']],
+    ];
+    private const SETTINGS_TABLE = 'genel';
+    private const SETTING_DATE_COLUMN = 'gavelExplodeDate';
+    private const SETTING_MESSAGE_COLUMN = 'stopSellMessage';
+
     private const NOT_FOUND_STATUS = 'Kayıt bulunamadı';
     private const DB_FALLBACK_MESSAGE = 'Bakanlık sitesinde kayıt bulunamadı, veritabanından sonuçlar getirildi.';
 
@@ -305,6 +326,183 @@ final class GavelManagementController extends Controller
         }
 
         return $best;
+    }
+
+    /**
+     * Gavel secenekleri (genel tablosu). Tabloda olmayan kolon null doner (available listesinde yer almaz).
+     *
+     * @Get("settings")
+     */
+    public function settings(): void
+    {
+        $pdo = $this->db->pdo();
+        $table = self::SETTINGS_TABLE;
+        $columns = $this->tableColumns($pdo, $table);
+        if ($columns === []) {
+            throw new HttpException($table . ' tablosu bulunamadi.', 'NOT_FOUND', 404);
+        }
+
+        $row = $pdo->query('SELECT TOP 1 * FROM dbo.[' . $table . '] WHERE id = 1')->fetch(PDO::FETCH_ASSOC);
+        if (!is_array($row)) {
+            $row = $pdo->query('SELECT TOP 1 * FROM dbo.[' . $table . '] ORDER BY id')->fetch(PDO::FETCH_ASSOC);
+        }
+        if (!is_array($row)) {
+            throw new HttpException('Genel ayar kaydi bulunamadi.', 'NOT_FOUND', 404);
+        }
+        $row = array_change_key_case($row, CASE_LOWER);
+
+        $data = [];
+        $available = [];
+        foreach (self::SETTING_OPTIONS as $key => $option) {
+            $column = strtolower($option['column']);
+            $data[$key] = array_key_exists($column, $row) ? $this->optionValue($row[$column]) : null;
+            if (in_array($column, $columns, true)) {
+                $available[] = $key;
+            }
+        }
+
+        $dateColumn = strtolower(self::SETTING_DATE_COLUMN);
+        $data['explode_date'] = array_key_exists($dateColumn, $row) ? $this->dateValue($row[$dateColumn]) : null;
+        if (in_array($dateColumn, $columns, true)) {
+            $available[] = 'explode_date';
+        }
+
+        $messageColumn = strtolower(self::SETTING_MESSAGE_COLUMN);
+        $data['stop_sell_message'] = array_key_exists($messageColumn, $row) ? (string) ($row[$messageColumn] ?? '') : null;
+        if (in_array($messageColumn, $columns, true)) {
+            $available[] = 'stop_sell_message';
+        }
+
+        $data['available'] = $available;
+        $this->response->success($data);
+    }
+
+    /**
+     * Gavel seceneklerini kaydeder. Yalnizca gonderilen ve tabloda bulunan kolonlar guncellenir;
+     * genel tablosunun diger alanlarina dokunulmaz.
+     *
+     * @Post("settings")
+     * @body explode_option string 0 satisa kapali / 1 satisa acik
+     * @body explode_date string Y-m-d, bos birakilabilir
+     * @body owner_option string 0 kayitli evsahibi / 1 belgeye ait evsahibi / 2 belge sahibi unvani
+     * @body detail_option string 0 kisitli goster / 1 rezervasyon sayfasina yonlendir
+     * @body listing_option string 0 gosterme / 1 goster
+     * @body search_option string 0 gosterme / 1 goster
+     * @body stop_sell_message string Satisa durdur mesaji
+     */
+    public function saveSettings(): void
+    {
+        $pdo = $this->db->pdo();
+        $table = self::SETTINGS_TABLE;
+        $columns = $this->tableColumns($pdo, $table);
+        if ($columns === []) {
+            throw new HttpException($table . ' tablosu bulunamadi.', 'NOT_FOUND', 404);
+        }
+
+        $sets = [];
+        $params = [];
+        foreach (self::SETTING_OPTIONS as $key => $option) {
+            $value = $this->request->input($key);
+            if ($value === null) {
+                continue;
+            }
+            $value = $this->optionValue($value);
+            if (!in_array($value, $option['values'], true)) {
+                throw new HttpException('Gecersiz deger: ' . $key, 'VALIDATION', 422);
+            }
+            if (!in_array(strtolower($option['column']), $columns, true)) {
+                continue;
+            }
+            $sets[] = '[' . $option['column'] . '] = :' . $key;
+            $params[':' . $key] = (int) $value;
+        }
+
+        $date = $this->request->input('explode_date');
+        if ($date !== null && in_array(strtolower(self::SETTING_DATE_COLUMN), $columns, true)) {
+            $date = trim((string) $date);
+            if ($date !== '' && $this->dateValue($date) !== $date) {
+                throw new HttpException('Gecersiz belge bitis tarihi.', 'VALIDATION', 422);
+            }
+            // Eski panel formdaki degeri (yyyy-mm-dd ya da bos) aynen yazar; tarih kolonunda bos deger NULL olur
+            $isText = $this->isTextColumn($pdo, $table, self::SETTING_DATE_COLUMN);
+            $sets[] = '[' . self::SETTING_DATE_COLUMN . '] = :explode_date';
+            $params[':explode_date'] = $date === '' && !$isText ? null : $date;
+        }
+
+        $message = $this->request->input('stop_sell_message');
+        if ($message !== null && in_array(strtolower(self::SETTING_MESSAGE_COLUMN), $columns, true)) {
+            $message = trim((string) $message);
+            if ($message === '') {
+                throw new HttpException('Satışa durdur mesajı zorunludur.', 'VALIDATION', 422);
+            }
+            $sets[] = '[' . self::SETTING_MESSAGE_COLUMN . '] = :stop_sell_message';
+            $params[':stop_sell_message'] = $message;
+        }
+
+        if ($sets === []) {
+            throw new HttpException('Kaydedilecek ayar bulunamadi.', 'VALIDATION', 422);
+        }
+
+        // Eski panel genel{dbtable} tablosunun tek satirini (id = 1) kullanir
+        $hasIdOne = (int) $pdo->query('SELECT COUNT(*) FROM dbo.[' . $table . '] WHERE id = 1')->fetchColumn() > 0;
+        $where = $hasIdOne ? 'id = 1' : 'id = (SELECT MIN(id) FROM dbo.[' . $table . '])';
+
+        try {
+            $stmt = $pdo->prepare('UPDATE dbo.[' . $table . '] SET ' . implode(', ', $sets) . ' WHERE ' . $where);
+            $stmt->execute($params);
+        } catch (\Throwable $e) {
+            throw new HttpException('Gavel ayarlari kaydedilemedi.', 'DB_UPDATE_FAILED', 500, $e);
+        }
+
+        $this->settings();
+    }
+
+    /** bit / int / metin kolonlardaki secenek degerini '0' / '1' / '2' bicimine getirir. */
+    private function optionValue($value): string
+    {
+        if ($value === null || $value === '') {
+            return '0';
+        }
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+        $text = strtolower(trim((string) $value));
+        if ($text === 'true') {
+            return '1';
+        }
+        if ($text === 'false') {
+            return '0';
+        }
+
+        return is_numeric($text) ? (string) (int) $text : $text;
+    }
+
+    /** Tarih degerini Y-m-d olarak doner (kolon datetime ya da metin olabilir); gecersizse bos. */
+    private function dateValue($value): string
+    {
+        $text = trim((string) ($value ?? ''));
+        if ($text === '') {
+            return '';
+        }
+        foreach (['Y-m-d', 'Y-m-d H:i:s', 'Y-m-d H:i:s.u', 'd.m.Y', 'd/m/Y'] as $format) {
+            $date = \DateTime::createFromFormat('!' . $format, $text);
+            if ($date !== false && $date->format($format) === $text) {
+                return $date->format('Y-m-d');
+            }
+        }
+        $time = strtotime($text);
+
+        return $time === false ? '' : date('Y-m-d', $time);
+    }
+
+    private function isTextColumn(PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            "SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = :t AND COLUMN_NAME = :c"
+        );
+        $stmt->execute([':t' => $table, ':c' => $column]);
+
+        return in_array(strtolower((string) $stmt->fetchColumn()), ['varchar', 'nvarchar', 'char', 'nchar', 'text', 'ntext'], true);
     }
 
     private function assertTable(PDO $pdo): void

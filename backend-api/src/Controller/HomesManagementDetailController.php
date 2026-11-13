@@ -655,6 +655,14 @@ final class HomesManagementDetailController extends Controller
             ]
         );
 
+        // Sezon isitma alanlari: config homes_season_heating / homes_season_heating_off acik VE kolon varsa
+        // (kolon bazi sitelerde kullanilmadan duruyor; varsayilan kapali).
+        $hasHeating = !empty($this->app['homes_season_heating'])
+            && $this->columnExists($pdo, 'dbo', 'sezonlar', 'isitmaFiyat');
+        $hasHeatingOff = !empty($this->app['homes_season_heating_off'])
+            && $this->columnExists($pdo, 'dbo', 'sezonlar', 'isitmaHizmetDisi');
+        $weekendPrices = \App\Support\HomesPriceTable::weekendEnabled($pdo, $this->app);
+
         $sezonlar = [];
         foreach ($rows as $row) {
             $fiyat = $this->firstNonEmptyValue($row, ['fiyat']);
@@ -674,6 +682,9 @@ final class HomesManagementDetailController extends Controller
                 'minKonaklama' => $this->firstNonEmptyValue($row, ['gece']),
                 'temizlik_gece' => $this->firstNonEmptyValue($row, ['temizlikGece']),
                 'temizlik_fiyat' => $this->firstNonEmptyValue($row, ['temizlikFiyat']),
+                // Isitma (kolon sitede yoksa null): fiyat ve pasif (hizmet disi) 0/1
+                'isitma_fiyat' => $hasHeating ? $this->firstNonEmptyValue($row, ['isitmaFiyat']) : null,
+                'isitma_hizmet_disi' => $hasHeatingOff ? (in_array(strtolower(trim((string) ($row['isitmaHizmetDisi'] ?? ''))), ['1', 'true'], true) ? 1 : 0) : null,
             ];
         }
 
@@ -695,6 +706,11 @@ final class HomesManagementDetailController extends Controller
                 ['id' => 'haftalik', 'title' => 'Haftalik'],
             ],
             'calendar_settings' => $calendarLinked ? $this->calendarSettings($calendarHome) : [],
+            // Hafta sonu fiyatlari: config homes_weekend_prices acik ve dbo.haftasonu varsa; degilse bolum gorunmez
+            'haftasonu_var' => $weekendPrices,
+            'haftasonu' => $weekendPrices ? \App\Support\HomesPriceTable::weekendRowsForHome($pdo, $homeId, $siteId) : [],
+            'sezon_isitma' => $hasHeating,
+            'sezon_isitma_hizmet_disi' => $hasHeatingOff,
             'sezonlar' => $sezonlar,
         ];
     }

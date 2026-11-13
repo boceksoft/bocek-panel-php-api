@@ -16,6 +16,7 @@ use PDO;
  *   POST /backend-api/reservation-operations/note-add     -> Reservation.ReservationNotes ekle
  *   POST /backend-api/reservation-operations/note-update  -> Reservation.ReservationNotes düzenle
  *   POST /backend-api/reservation-operations/note-delete  -> Reservation.ReservationNotes yumuşak sil (IsDeleted = 1)
+ *   POST /backend-api/reservation-operations/ip-block     -> dbo.blockList (müşterinin talep IP'si, kayitlar.ip; panel ajax.asp islm=blockList)
  *
  * Kurulum: kolonlar setup/collums, not tablosu setup/reservation-notes. Eksikse 409 SETUP_REQUIRED.
  * Her işlem kullanici_log_kaydi'na yazılır (degisiklikler JSON: islem, alanlar[{alan, eski, yeni}]); not metni log'da
@@ -27,6 +28,8 @@ final class ReservationOperationsController extends Controller
 {
     private const NOTES_TABLE = 'Reservation.ReservationNotes';
     private const LOG_TEXT_LIMIT = 1000;
+    /** blockList.minute üst sınırı: 10 yıl (dakika). */
+    private const IP_BLOCK_MAX_MINUTES = 5256000;
 
     /** @var bool|null */
     private $hasLogDetailsColumn = null;
@@ -287,6 +290,127 @@ final class ReservationOperationsController extends Controller
         });
 
         $this->response->success(['id' => $id, 'notId' => $noteId]);
+    }
+
+    /**
+     * Müşterinin talep gönderdiği IP'yi (kayitlar.ip) engeller / engelini bitirir. Eski panelle aynı tablo ve mantık:
+     * dbo.blockList (ip, minute, modifiedDate); engel bitişi = DATEADD(MINUTE, minute, modifiedDate). Sitenin ön yüzü
+     * bu tabloya bakarak 403 döner (baglanti.asp). IP frontend'den alınmaz, rezervasyondan okunur.
+     * Tablo sitede yoksa eski panel şemasıyla oluşturulur (var olan tabloya dokunulmaz). Kayıt silinmez:
+     * dakika 0 engeli bitirir (minute = 0), panelin "Engeli Bitir"i ile aynı.
+     *
+     * @Post("ip-block")
+     * @body id int required Rezervasyon kimliği
+     * @body dakika int required Engel süresi (dakika). 0: engeli bitir
+     */
+    public function ipBlock(): void
+    {
+        $pdo = $this->db->pdo();
+        $id = $this->reservationId($pdo);
+        $minutes = (int) $this->request->input('dakika', -1);
+        if ($minutes < 0 || $minutes > self::IP_BLOCK_MAX_MINUTES) {
+            throw new HttpException('Geçerli bir engel süresi seçin.', 'VALIDATION', 422);
+        }
+
+        $row = $this->fetchOne($pdo, 'SELECT ip FROM kayitlar WHERE id = :id', [':id' => $id]) ?: [];
+        $ip = trim((string) ($row['ip'] ?? ''));
+        if ($ip === '') {
+            throw new HttpException('Bu rezervasyonda kayıtlı IP adresi yok.', 'VALIDATION', 422);
+        }
+
+        $this->ensureBlockListTable($pdo);
+        $before = $this->ipBlockInfo($pdo, $ip);
+        if ($minutes === 0 && !$before['engelli']) {
+            $this->response->success(['id' => $id, 'ipEngel' => $before, 'degisti' => false]);
+            return;
+        }
+
+        $this->transaction($pdo, function () use ($pdo, $id, $ip, $minutes, $before) {
+            $exists = $this->fetchOne($pdo, 'SELECT TOP 1 1 AS x FROM blockList WHERE ip = :ip', [':ip' => $ip]);
+            if ($exists) {
+                $this->execute(
+                    $pdo->prepare('UPDATE blockList SET [minute] = :m, modifiedDate = GETDATE() WHERE ip = :ip'),
+                    [':m' => $minutes, ':ip' => $ip]
+                );
+            } else {
+                $this->execute(
+                    $pdo->prepare('INSERT INTO blockList (ip, [minute], modifiedDate) VALUES (:ip, :m, GETDATE())'),
+                    [':ip' => $ip, ':m' => $minutes]
+                );
+            }
+
+            $after = $this->ipBlockInfo($pdo, $ip);
+            $old = $before['engelli'] ? 'Engelli (' . $before['bitis'] . ' bitiş)' : 'Engelsiz';
+            $new = $minutes === 0 ? 'Engelsiz' : 'Engelli (' . $after['bitis'] . ' bitiş)';
+            $this->log(
+                $pdo,
+                $id,
+                $minutes === 0
+                    ? $ip . ' IP adresinin engelini bitirdi.'
+                    : $ip . ' IP adresini ' . $this->durationText($minutes) . ' engelledi.',
+                'ip-engel',
+                [['alan' => 'IP engeli (' . $ip . ')', 'eski' => $old, 'yeni' => $new]]
+            );
+        });
+
+        $this->response->success(['id' => $id, 'ipEngel' => $this->ipBlockInfo($pdo, $ip), 'degisti' => true]);
+    }
+
+    /** blockList yoksa eski panel şemasıyla (setup-collums.sql ile aynı) oluşturur. Var olan tabloya dokunmaz. */
+    private function ensureBlockListTable(PDO $pdo): void
+    {
+        $pdo->exec("
+IF OBJECT_ID(N'[dbo].[blockList]', N'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[blockList]
+    (
+        [id]           int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_blockList] PRIMARY KEY,
+        [ip]           nvarchar(200) NULL,
+        [minute]       int NULL,
+        [createdDate]  datetime NULL CONSTRAINT [DF_blockList_createdDate] DEFAULT GETDATE(),
+        [modifiedDate] datetime NULL CONSTRAINT [DF_blockList_modifiedDate] DEFAULT GETDATE()
+    );
+END;");
+    }
+
+    /**
+     * IP'nin engel durumu (reservationdetail detay.ipEngel ile aynı biçim).
+     *
+     * @return array{ip:string,tabloVar:bool,engelli:bool,bitis:?string,dakika:int}
+     */
+    private function ipBlockInfo(PDO $pdo, string $ip): array
+    {
+        $row = $this->fetchOne(
+            $pdo,
+            "SELECT TOP 1 ISNULL([minute], 0) AS dakika,
+                    CONVERT(varchar(19), DATEADD(MINUTE, ISNULL([minute], 0), modifiedDate), 120) AS bitis,
+                    CASE WHEN DATEADD(MINUTE, ISNULL([minute], 0), modifiedDate) >= GETDATE() AND ISNULL([minute], 0) > 0
+                         THEN 1 ELSE 0 END AS engelli
+             FROM blockList WHERE ip = :ip
+             ORDER BY DATEADD(MINUTE, ISNULL([minute], 0), modifiedDate) DESC",
+            [':ip' => $ip]
+        ) ?: [];
+        $blocked = (int) ($row['engelli'] ?? 0) === 1;
+
+        return [
+            'ip' => $ip,
+            'tabloVar' => true,
+            'engelli' => $blocked,
+            'bitis' => $blocked ? (string) $row['bitis'] : null,
+            'dakika' => (int) ($row['dakika'] ?? 0),
+        ];
+    }
+
+    private function durationText(int $minutes): string
+    {
+        $units = [[525600, 'yıl'], [43200, 'ay'], [10080, 'hafta'], [1440, 'gün'], [60, 'saat']];
+        foreach ($units as [$size, $label]) {
+            if ($minutes % $size === 0) {
+                return ($minutes / $size) . ' ' . $label;
+            }
+        }
+
+        return $minutes . ' dakika';
     }
 
     // ---------------------------------------------------------------- yardımcılar

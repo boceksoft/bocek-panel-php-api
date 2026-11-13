@@ -138,14 +138,21 @@ final class ReservationdetailController extends Controller
             );
         }
 
+        // IP engeli (dbo.blockList, eski panel). Tablo olmayan sitede boş; ilk engellemede oluşturulur (reservation-operations/ip-block).
         $blockInfo = [];
-        if (!empty($reservation['ip'])) {
+        $reservationIp = trim((string) ($reservation['ip'] ?? ''));
+        $blockListExists = $this->tableColumns($pdo, 'dbo', 'blockList') !== [];
+        if ($reservationIp !== '' && $blockListExists) {
             $blockInfo = $this->fetchAll(
                 $pdo,
-                'SELECT DATEADD(MINUTE, [minute], modifiedDate) AS blockEndDate, *
+                "SELECT DATEADD(MINUTE, [minute], modifiedDate) AS blockEndDate,
+                        CONVERT(varchar(19), DATEADD(MINUTE, ISNULL([minute], 0), modifiedDate), 120) AS natsisaBitis,
+                        CASE WHEN ISNULL([minute], 0) > 0 AND DATEADD(MINUTE, [minute], modifiedDate) >= GETDATE()
+                             THEN 1 ELSE 0 END AS natsisaAktif,
+                        *
                  FROM blockList
-                 WHERE ip = :ip',
-                [':ip' => (string) $reservation['ip']]
+                 WHERE ip = :ip",
+                [':ip' => $reservationIp]
             );
         }
 
@@ -180,6 +187,10 @@ final class ReservationdetailController extends Controller
         $detailSections['operasyon'] = $this->operationInfo($reservation);
         // Notlar: panelin tek notu (kayitlar.OzNot) + Reservation.ReservationNotes (birden fazla, silinmemişler).
         $detailSections['notlar'] = $this->reservationNotes($pdo, $id, $reservation);
+        // IP engeli: müşterinin talep IP'si (kayitlar.ip) ve blockList durumu. Yazma: reservation-operations/ip-block.
+        $detailSections['ipEngel'] = $this->ipBlockInfo($reservationIp, $blockListExists, $blockInfo);
+        // Oluşturulma: tarih (kayitlar.islem_tarihi) ve oluşturan (Natsisa'dan açıldıysa log'daki kullanıcı).
+        $detailSections['olusturma'] = $this->creationInfo($pdo, $id);
 
         $this->response->success([
             'detay' => $detailSections,
@@ -213,6 +224,68 @@ final class ReservationdetailController extends Controller
             // (indirimi kim karşılar). Kolon adları config reservation_discount ile eşlenir.
             'indirim' => $this->discountInfo($pdo, $reservation, $villa ?: []),
         ]);
+    }
+
+    /**
+     * Rezervasyonun oluşturulma bilgisi. Eski panel ve site oluşturmayı loglamaz; oluşturan sadece Natsisa'dan
+     * (reservations-create, log islem = rezervasyon-olustur) açılan rezervasyonlarda bilinir.
+     *
+     * @return array{tarih:?string,olusturan:?string,kaynak:string}
+     */
+    private function creationInfo(PDO $pdo, int $id): array
+    {
+        $row = $this->fetchOne(
+            $pdo,
+            'SELECT CONVERT(varchar(19), islem_tarihi, 120) AS tarih FROM kayitlar WHERE id = :id',
+            [':id' => $id]
+        ) ?: [];
+        $date = trim((string) ($row['tarih'] ?? ''));
+        $info = ['tarih' => $date !== '' ? $date : null, 'olusturan' => null, 'kaynak' => 'site-panel'];
+
+        if (!$this->columnExists($pdo, 'dbo.kullanici_log_kaydi', 'degisiklikler')) {
+            return $info;
+        }
+        $log = $this->fetchOne(
+            $pdo,
+            "SELECT TOP 1 CONVERT(varchar(19), tarih, 120) AS tarih, degisiklikler
+             FROM kullanici_log_kaydi
+             WHERE islm = 'rezervasyon' AND islm_id = :id AND degisiklikler LIKE :pattern
+             ORDER BY id ASC",
+            [':id' => (string) $id, ':pattern' => '%"islem":"rezervasyon-olustur"%']
+        );
+        if ($log) {
+            $details = json_decode((string) $log['degisiklikler'], true);
+            $name = is_array($details) ? trim((string) ($details['kullaniciAdi'] ?? '')) : '';
+            $info['kaynak'] = 'natsisa';
+            $info['olusturan'] = $name !== '' ? $name : null;
+            if ($info['tarih'] === null && !empty($log['tarih'])) {
+                $info['tarih'] = (string) $log['tarih'];
+            }
+        }
+
+        return $info;
+    }
+
+    /**
+     * IP engel özeti. engelli: bitiş (DATEADD(MINUTE, minute, modifiedDate)) GETDATE()'ten sonra ve minute > 0.
+     *
+     * @param array<int,array<string,mixed>> $rows blockList satırları
+     * @return array{ip:string,tabloVar:bool,engelli:bool,bitis:?string,dakika:int}
+     */
+    private function ipBlockInfo(string $ip, bool $tableExists, array $rows): array
+    {
+        $info = ['ip' => $ip, 'tabloVar' => $tableExists, 'engelli' => false, 'bitis' => null, 'dakika' => 0];
+        foreach ($rows as $row) {
+            // Aktiflik DB saatiyle (GETDATE) hesaplanır; sitenin ön yüzü de öyle bakar.
+            $end = (string) ($row['natsisaBitis'] ?? '');
+            if ((int) ($row['natsisaAktif'] ?? 0) === 1 && ($info['bitis'] === null || strcmp($end, $info['bitis']) > 0)) {
+                $info['engelli'] = true;
+                $info['bitis'] = $end;
+                $info['dakika'] = (int) ($row['minute'] ?? 0);
+            }
+        }
+
+        return $info;
     }
 
     /** reservation_discount varsayılanları (villavillam / boceksoft-vv paneli). */

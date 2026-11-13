@@ -56,7 +56,7 @@ try {
     if (backendApiIsCalculateImageRequest($request)) {
         backendApiSendErrorSvg($message);
     }
-    $response->error($message, $e->errorCode(), $e->httpStatus());
+    $response->error($message, $e->errorCode(), $e->httpStatus(), $e->details());
 } catch (\Throwable $e) {
     $message = $app['debug'] ? $e->getMessage() : 'Beklenmeyen bir hata oluştu.';
     if (backendApiIsCalculateImageRequest($request)) {
