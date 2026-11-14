@@ -233,12 +233,39 @@ final class HomesController extends Controller
 
         if ($hasDate && $netTarih !== '0') {
             if (!$kisasureli) {
-                $sql .= " AND (SELECT TOP 1 COUNT(dolu.id) FROM dolu
-                    WHERE dolu.emlak = h.id AND dolu.durum = 3
-                      AND (('{$nd2}' BETWEEN dolu.tarih AND dolu.tarih2)
-                        OR ('{$nd1}' BETWEEN dolu.tarih AND dolu.tarih2)
-                        OR (dolu.tarih BETWEEN '{$nd1}' AND '{$nd2}')
-                        OR (dolu.tarih2 BETWEEN '{$nd1}' AND '{$nd2}'))) = 0";
+                $inDate = $tarih1 ? $tarih1->format('Y-m-d') : '';
+                $outDate = $tarih2 ? $tarih2->format('Y-m-d') : '';
+                if ($inDate !== '' && $outDate !== '') {
+                    $doluDate1 = "COALESCE(TRY_CONVERT(date, dolu.tarih, 104), TRY_CONVERT(date, dolu.tarih, 23), TRY_CONVERT(date, dolu.tarih, 103), TRY_CONVERT(date, dolu.tarih))";
+                    $doluDate2 = "COALESCE(TRY_CONVERT(date, dolu.tarih2, 104), TRY_CONVERT(date, dolu.tarih2, 23), TRY_CONVERT(date, dolu.tarih2, 103), TRY_CONVERT(date, dolu.tarih2))";
+                    $durumSql = $mimicFrontend ? 'dolu.durum IN (1, 3)' : 'dolu.durum = 3';
+
+                    $sql .= " AND NOT EXISTS (
+                        SELECT 1 FROM dolu
+                        WHERE dolu.emlak = h.id
+                          AND {$durumSql}
+                          AND {$doluDate1} < CONVERT(date, '{$outDate}', 23)
+                          AND {$doluDate2} > CONVERT(date, '{$inDate}', 23)
+                    )";
+
+                    if ($mimicFrontend) {
+                        try {
+                            $hasDoluFake = (int) $pdo->query("SELECT CASE WHEN OBJECT_ID('dbo.dolu_fake') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
+                            if ($hasDoluFake) {
+                                $dfDate1 = "COALESCE(TRY_CONVERT(date, df.tarih, 104), TRY_CONVERT(date, df.tarih, 23), TRY_CONVERT(date, df.tarih, 103), TRY_CONVERT(date, df.tarih))";
+                                $dfDate2 = "COALESCE(TRY_CONVERT(date, df.tarih2, 104), TRY_CONVERT(date, df.tarih2, 23), TRY_CONVERT(date, df.tarih2, 103), TRY_CONVERT(date, df.tarih2))";
+                                $sql .= " AND NOT EXISTS (
+                                    SELECT 1 FROM dolu_fake df
+                                    WHERE df.emlak = h.id
+                                      AND df.durum = 3
+                                      AND {$dfDate1} < CONVERT(date, '{$outDate}', 23)
+                                      AND {$dfDate2} > CONVERT(date, '{$inDate}', 23)
+                                )";
+                            }
+                        } catch (\Throwable $e) {
+                        }
+                    }
+                }
             } else {
                 $sql .= " AND (('{$nd2}' BETWEEN kisasureli.tarih AND kisasureli.tarih2)
                     OR ('{$nd1}' BETWEEN kisasureli.tarih AND kisasureli.tarih2)
