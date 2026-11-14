@@ -96,8 +96,8 @@ final class HomesExtraFields
     public static function enabledKeys(array $app): array
     {
         $configured = $app['homes_extra_fields'] ?? [];
-        if (!is_array($configured) || $configured === []) {
-            return [];
+        if (!is_array($configured)) {
+            $configured = [];
         }
 
         $wanted = [];
@@ -105,6 +105,14 @@ final class HomesExtraFields
             if (is_string($key) && $key !== '') {
                 $wanted[strtolower($key)] = true;
             }
+        }
+        // Config homes_real_name_orj_ad: gercek villa adi orj_ad'da tutuluyor (ASP panel "Villanin Orjinal Adi").
+        // Ek alanlarda secilmese de ilan ekleme / duzenleme ekraninda gosterilir ve orj_ad'a yazilir.
+        if (!empty($app['homes_real_name_orj_ad'])) {
+            $wanted['orj_ad'] = true;
+        }
+        if ($wanted === []) {
+            return [];
         }
 
         $keys = [];

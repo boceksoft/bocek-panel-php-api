@@ -72,7 +72,8 @@ return [
 
     // Gercek villa adi kolonu. false (varsayilan): homes.baslik (homes_code "Baslik ve adres" ise once homes.villaadi).
     // true: once homes.orj_ad (eski panelin "Villanin Orjinal Adi"; orn. KVK'da baslik uzun ilan basligi), bossa yukaridaki.
-    // Ilan listesindeki "Villa Adi (Gercek)" kolonu ve rezervasyonlardaki gercek villa adi bunu kullanir; kayda etkisi yok.
+    // Ilan listesindeki "Villa Adi (Gercek)" kolonu ve rezervasyonlardaki gercek villa adi bunu kullanir.
+    // Acikken ilan ekleme / duzenlemede (ASP panel gibi) "Villanin Orjinal Adi" alani ek alanlarda secilmese de cikar, orj_ad'a yazilir.
     'homes_real_name_orj_ad' => false,
 
     // Villa indirim turleri (indirimler.discountType); degerlerin anlami siteye gore degisir. Bkz. src/Support/HomesDiscountTypes.php
