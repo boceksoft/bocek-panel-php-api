@@ -382,6 +382,8 @@ final class HomesManagementDetailUpdateController extends Controller
             'onodemeyontemi' => 'FirstPaymentTypeId',
             'paymentType' => 'paymentType',
             'payment_type' => 'paymentType',
+            // Taslak (homes.template): yeni ilan ekrani taslagi 1 ile olusturur, "Kaydet" ile 0 gonderir (kolon yoksa atlanir).
+            'template' => 'template',
             'bolge' => 'emlak_bolgesi',
             'n_bolge' => 'n_emlak_bolgesi',
             'n_emlak_bolgesi' => 'n_emlak_bolgesi',

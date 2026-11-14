@@ -275,14 +275,17 @@ final class HomesManagementController extends Controller
             $urlColumn = 'url';
         }
         $urlSql = $this->homesColumnExists($pdo, $urlColumn) ? "ISNULL(CONVERT(nvarchar(1000), h.[{$urlColumn}]), N'')" : "N''";
+        // Taslak: yeni ilan ekraninda olusturulup "Kaydet" ile tamamlanmamis ilan (homes.template = 1).
+        $draftSql = $this->homesColumnExists($pdo, 'template') ? 'CAST(ISNULL(h.template, 0) AS int)' : 'CAST(0 AS int)';
 
-        $sql = "
+        $sql = " 
 SELECT
     COUNT(*) OVER() AS totalCount,
     h.id,
     {$siteId} AS site_id,
     h.evkodu AS code,
     {$urlSql} AS url,
+    {$draftSql} AS is_draft,
     " . $this->homeTitleSql('h', $titleColumn) . " AS title,
     {$titleColumn} AS gavel_title,
     " . $this->homeRealNameSql($pdo, 'h', $titleColumn) . " AS real_title,
@@ -380,6 +383,7 @@ WHERE {$whereSql}
                 'site_id' => (int) $row['site_id'],
                 'code' => (string) $row['code'],
                 'url' => (string) ($row['url'] ?? ''),
+                'is_draft' => (int) ($row['is_draft'] ?? 0) === 1,
                 'title' => (string) $row['title'],
                 'gavel_title' => (string) $row['gavel_title'],
                 // Gercek villa adi (config homes_code: kod basliga yaziliyorsa homes.villaadi)

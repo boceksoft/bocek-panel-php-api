@@ -156,6 +156,9 @@ final class HomesController extends Controller
         if ($gKuraliParam === '') {
             $gKuraliParam = '1';
         }
+        // Katalog detayli filtre: belge durumu (asagida) ve sadece fiyati olan villalar.
+        $belgeDurumu = $this->p('belgeDurumu');
+        $sadeceFiyatli = $this->p('sadeceFiyatli') === '1';
 
         $takvimKuraliReq = $this->p('takvimkurali');
         $geceRaw    = $this->p('gece', '');
@@ -170,7 +173,7 @@ final class HomesController extends Controller
 
         // Dinamik SQL parçaları
         [$takvimSelect, $takvimCross, $takvimWhere] = $this->takvimParts($hasDate, $takvimKuraliReq, $gun, $t1, $t2, $mimicFrontend, $kisasureli);
-        $dsql2       = $this->fiyatParcasi($hasDate, $netTarih, $kisasureli, $siteId, $t1, $t2);
+        $dsql2       = $this->fiyatParcasi($hasDate, $netTarih, $kisasureli, $siteId, $t1, $t2, $sadeceFiyatli);
         [$ksqlx, $ksql] = $this->kisasureliParts($hasDate, $kisasureli, $geceSql);
         $nettarihSql = $this->nettarihParcasi($hasDate, $netTarih, $minTL, $maxTL, $season, (int) $now->format('Y'), $siteId);
 
@@ -210,8 +213,22 @@ final class HomesController extends Controller
                     $sql .= " AND {$durationExpr} IN (0, 1)";
                 }
             }
-        } elseif ($gKuraliParam === '1') {
+        } elseif ($belgeDurumu === '' && $gKuraliParam === '1') {
             $sql .= ' AND ISNULL(kanun.gavel, 0) = 0 ';
+        }
+
+        // Katalog detayli filtre "Belge Durumu" (FiltersController gavel_rules): belge no dolu ve belge pasif degil = belgeli.
+        //   1: sureli belgeli, 2: suresiz belgeli, 3: belgesiz (belge no yok / belge pasif), 0 veya bos: filtre yok.
+        // gavelkurali'den ayri: onu gondermeyen ekranlarin varsayilani (gavelkurali=1) degismez.
+        if ($belgeDurumu === '1' || $belgeDurumu === '2' || $belgeDurumu === '3') {
+            $hasDocument = "(kanun.homeId IS NOT NULL AND LTRIM(RTRIM(ISNULL(CONVERT(nvarchar(255), kanun.gavelBelgeNo), N''))) <> N'' AND ISNULL(kanun.gavel, 0) = 0)";
+            if ($belgeDurumu === '3') {
+                $sql .= " AND NOT {$hasDocument}";
+            } else {
+                // Sure tipi: 2 sureli, 1 suresiz (gavelDurationSql ayardaki kolona gore cevirir).
+                $duration = $belgeDurumu === '1' ? 2 : 1;
+                $sql .= " AND {$hasDocument} AND ISNULL(" . $this->gavelDurationSql('kanun') . ", 1) = {$duration}";
+            }
         }
 
         if ($hasDate && $netTarih !== '0') {
@@ -700,9 +717,15 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
         return [$select, $cross, $where];
     }
 
-    private function fiyatParcasi(bool $hasDate, string $netTarih, bool $kisasureli, int $siteId, string $t1, string $t2): string
+    private function fiyatParcasi(bool $hasDate, string $netTarih, bool $kisasureli, int $siteId, string $t1, string $t2, bool $sadeceFiyatli = false): string
     {
         if (!$hasDate) {
+            // sadeceFiyatli (katalog): sezon fiyati olmayan villa 0 alir ve "sqfiyat > 0" ile elenir;
+            // eski davranista fiyatsiz villa 1 fiyatla listelenir (diger ekranlar degismez).
+            if ($sadeceFiyatli) {
+                $num = "TRY_CONVERT(decimal(18, 6), NULLIF(CONVERT(varchar(64), fiyat), ''))";
+                return "SELECT ISNULL((SELECT MIN({$num}) FROM sezonlar WHERE islem_id = h.id AND site = 1 AND islem = 'emlak' AND {$num} > 0), 0) AS sqfiyat";
+            }
             return 'SELECT ISNULL((SELECT TOP 1 fiyat FROM sezonlar WHERE islem_id = h.id AND site = 1 ORDER BY fiyat ASC), 1) AS sqfiyat';
         }
         if ($netTarih === '0') {

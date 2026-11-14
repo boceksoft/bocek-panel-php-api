@@ -67,7 +67,13 @@ abstract class Controller
     protected function homeRealNameSql(\PDO $pdo, string $alias, string $titleExpr): string
     {
         $parts = [];
-        foreach (\App\Support\HomesCode::nameColumns($this->app) as $column) {
+        // Config homes_real_name_orj_ad: gercek villa adi once homes.orj_ad'dan (eski panel "Villanin Orjinal Adi";
+        // orn. KVK'da baslik uzun ilan basligi). orj_ad bossa ("ayniysa bos birakin") asagidaki kolonlara duser.
+        $columns = \App\Support\HomesCode::nameColumns($this->app);
+        if (!empty($this->app['homes_real_name_orj_ad'])) {
+            array_unshift($columns, 'orj_ad');
+        }
+        foreach ($columns as $column) {
             if ($column === 'baslik') {
                 $parts[] = "NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(500), {$titleExpr}))), '')";
                 continue;
@@ -84,13 +90,15 @@ abstract class Controller
     }
 
     /**
-     * WhatsApp grup adinin tutuldugu homes kolonu: sitenin config'indeki WhatsappColumnName sabiti
-     * (or. '[rez_takip_yeri_adi]', koseli parantezsiz dondurulur); tanimli degil / gecersizse null.
+     * WhatsApp grup adinin tutuldugu homes kolonu:
+     *   1) sitenin config'indeki WhatsappColumnName sabiti (or. '[rez_takip_yeri_adi]', koseli parantezsiz dondurulur);
+     *   2) sabit yoksa config homes_whatsapp_rez_takip true ise rez_takip_yeri_adi (Villahanem / KVK eski paneli);
+     *   3) ikisi de yoksa null (yazarken whatsapp_grup; okurken whatsapp_grup, bossa rez_takip_yeri_adi).
      */
     protected function whatsappColumn(): ?string
     {
         if (!defined('WhatsappColumnName')) {
-            return null;
+            return !empty($this->app['homes_whatsapp_rez_takip']) ? 'rez_takip_yeri_adi' : null;
         }
         $column = trim((string) constant('WhatsappColumnName'), " \t[]");
 
