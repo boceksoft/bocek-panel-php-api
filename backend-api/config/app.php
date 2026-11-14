@@ -65,6 +65,11 @@ return [
     // Bkz. App\Support\HomesGoneRedirect. Villa Kiralama > Config ekranindan degistirilir.
     'homes_gone_redirect' => true,
 
+    // WhatsApp grup adi kolonu. false (varsayilan): yazarken homes.whatsapp_grup, okurken whatsapp_grup (bossa rez_takip_yeri_adi).
+    // true: hem okuma hem yazma homes.rez_takip_yeri_adi (eski panelin "Whatsapp Grubu Adi"; orn. Villahanem).
+    // Sitenin config'inde WhatsappColumnName sabiti tanimliysa bu ayar yok sayilir. Villa Kiralama > Config ekranindan degistirilir.
+    'homes_whatsapp_rez_takip' => false,
+
     // Villa indirim turleri (indirimler.discountType); degerlerin anlami siteye gore degisir. Bkz. src/Support/HomesDiscountTypes.php
     //   options: value, label, payer (rezervasyonda kim karsilar: site | ev_sahibi | genel),
     //            base (price | commission: fiyat x KO x oran | owner_share: fiyat x (100 - KO) x oran).
@@ -431,6 +436,7 @@ return [
         'homes_fake_discount' => 'bool',
         'homes_featured_features' => 'bool',
         'homes_gone_redirect' => 'bool',
+        'homes_whatsapp_rez_takip' => 'bool',
         'homes_extra_fields' => 'array',
         'homes_code' => 'array',
         'homes_empty_seasons' => 'array',

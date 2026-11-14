@@ -84,13 +84,15 @@ abstract class Controller
     }
 
     /**
-     * WhatsApp grup adinin tutuldugu homes kolonu: sitenin config'indeki WhatsappColumnName sabiti
-     * (or. '[rez_takip_yeri_adi]', koseli parantezsiz dondurulur); tanimli degil / gecersizse null.
+     * WhatsApp grup adinin tutuldugu homes kolonu:
+     *   1) sitenin config'indeki WhatsappColumnName sabiti (or. '[rez_takip_yeri_adi]', koseli parantezsiz dondurulur);
+     *   2) sabit yoksa config homes_whatsapp_rez_takip true ise rez_takip_yeri_adi (Villahanem / KVK eski paneli);
+     *   3) ikisi de yoksa null (yazarken whatsapp_grup; okurken whatsapp_grup, bossa rez_takip_yeri_adi).
      */
     protected function whatsappColumn(): ?string
     {
         if (!defined('WhatsappColumnName')) {
-            return null;
+            return !empty($this->app['homes_whatsapp_rez_takip']) ? 'rez_takip_yeri_adi' : null;
         }
         $column = trim((string) constant('WhatsappColumnName'), " \t[]");
 
