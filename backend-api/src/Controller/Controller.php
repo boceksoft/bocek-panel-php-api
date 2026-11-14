@@ -67,7 +67,13 @@ abstract class Controller
     protected function homeRealNameSql(\PDO $pdo, string $alias, string $titleExpr): string
     {
         $parts = [];
-        foreach (\App\Support\HomesCode::nameColumns($this->app) as $column) {
+        // Config homes_real_name_orj_ad: gercek villa adi once homes.orj_ad'dan (eski panel "Villanin Orjinal Adi";
+        // orn. KVK'da baslik uzun ilan basligi). orj_ad bossa ("ayniysa bos birakin") asagidaki kolonlara duser.
+        $columns = \App\Support\HomesCode::nameColumns($this->app);
+        if (!empty($this->app['homes_real_name_orj_ad'])) {
+            array_unshift($columns, 'orj_ad');
+        }
+        foreach ($columns as $column) {
             if ($column === 'baslik') {
                 $parts[] = "NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(500), {$titleExpr}))), '')";
                 continue;
