@@ -535,10 +535,6 @@ final class HomesController extends Controller
             }
             $row['categories'] = $itemCategories;
             unset($row['emlak_tipi'], $row['kategori']);
-
-            if (empty($row['title']) && !empty($row['baslik'])) {
-                $row['title'] = $row['baslik'];
-            }
         }
         unset($row);
 
@@ -568,10 +564,10 @@ final class HomesController extends Controller
         if ($mimicFrontend) {
             foreach ($rows as &$row) {
                 if (isset($row['isAvailable']) && $row['isAvailable'] === false) {
-                    $villaTitle = !empty($row['title']) ? (string) $row['title'] : (!empty($row['baslik']) ? (string) $row['baslik'] : '');
+                    $villaBaslik = !empty($row['baslik']) ? (string) $row['baslik'] : (!empty($row['title']) ? (string) $row['title'] : '');
                     $row = [
                         'id'          => (int) $row['id'],
-                        'title'       => $villaTitle,
+                        'baslik'      => $villaBaslik,
                         'isAvailable' => false,
                     ];
                 }
