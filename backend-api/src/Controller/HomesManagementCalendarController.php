@@ -53,7 +53,7 @@ final class HomesManagementCalendarController extends Controller
 
     /** @var string|null dolu tablosundaki rezervasyon id kolonu (kayitid / kayitId) */
     private $kayitIdColumn = null;
-
+ 
     private const DURUM_TEXT = [
         0 => 'Onay Bekliyor',
         1 => 'Ödeme Bekliyor',
@@ -279,7 +279,9 @@ final class HomesManagementCalendarController extends Controller
 
         // Secilen tarihlerde Kiralama Takvimi'nden gelmis bir opsiyon varsa yeni rezervasyon acilmaz;
         // islem o opsiyonun ReservationId'si ile yapilir.
-        $reservationId = $this->existingKtOptionReservationId($pdo, $emlakId, $start, $end);
+        // Sadece secilen tarihlerle birebir ayni, aktif KT opsiyonu (Durum 1) onaylanir. Eskiden cakisan herhangi bir KT
+        // kaydi (iptal edilmis / baska tarihli kapatma dahil) bulunuyor, secilen yer yerine o kaydin tarihleri kapaniyordu.
+        $reservationId = $this->exactKtOptionReservationId($pdo, $emlakId, $start, $end);
         $isExisting = $reservationId > 0;
 
         if (!$isExisting) {
@@ -343,6 +345,12 @@ final class HomesManagementCalendarController extends Controller
             );
         }
 
+        // Panel API'si (Reservation/Create) customerFullName'i yazmiyor, KT'de kayit "." adiyla aciliyordu.
+        // Yeni acilan kayitta ad dogrudan KT'ye (reservation/update) yazilir; hata kapatmayi bozmaz.
+        if (!$isExisting) {
+            $this->setKtCustomerName($pdo, $emlakId, $reservationId, $title);
+        }
+
         // KT'de kapatma onayli bir rezervasyon olarak acilir; panelin dolu satirinda tip olmadigi icin takvimde
         // "rezervasyon" gorunuyordu. Satir (ReservationId) varsa rez_tip 'kapali' yazilir.
         if (!$isOption) {
@@ -353,6 +361,44 @@ final class HomesManagementCalendarController extends Controller
             'message' => $isOption ? 'Kiralama Takvimi\'nde opsiyona alindi' : 'Kiralama Takvimi\'nde tarih kapatildi',
             'kiralamaTakvimi' => ['reservationId' => $reservationId, 'estateId' => $estateId, 'existing' => $isExisting],
         ], 201);
+    }
+
+    /**
+     * Yeni acilan KT kaydinin adini (customerFullName) dogrudan KT API'si ile yazar; diger alanlar KT'deki haliyle kalir.
+     * WhatsApp grubuna ikinci bildirim gitmesin diye sendWhatsappGroup false. Panelin dolu satiri da ayni adla guncellenir.
+     */
+    private function setKtCustomerName(PDO $pdo, int $emlakId, int $reservationId, string $title): void
+    {
+        if ($reservationId <= 0 || $title === '') {
+            return;
+        }
+        try {
+            $item = $this->ktApi('GET', 'reservation/item', null, ['reservationId' => $reservationId]);
+            if (trim((string) ($this->rowValue($item, 'customerFullName') ?? '')) !== $title) {
+                $this->ktApi('POST', 'reservation/update', [
+                    'reservationId' => $reservationId,
+                    'customerFullName' => $title,
+                    'customerPhone' => (string) ($this->rowValue($item, 'customerPhone') ?? ''),
+                    'customerEmail' => (string) ($this->rowValue($item, 'customerEmail') ?? ''),
+                    'adultGuestCount' => (int) ($this->rowValue($item, 'adultGuestCount') ?? 0),
+                    'childGuestCount' => (int) ($this->rowValue($item, 'childGuestCount') ?? 0),
+                    'callbackParam' => (int) ($this->rowValue($item, 'callbackParam') ?? 0),
+                    'description' => (string) ($this->rowValue($item, 'description') ?? ''),
+                    'sendWhatsappGroup' => false,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            error_log('KT kayit adi yazilamadi: ' . $e->getMessage());
+        }
+        // KT'nin dolu'ya yazdigi satir (ReservationId) varsa takvimde de ad gorunsun.
+        if ($this->hasColumn($pdo, 'dbo.dolu', 'ReservationId')) {
+            try {
+                $pdo->prepare('UPDATE dbo.dolu SET musteri = :musteri WHERE emlak = :emlak AND ReservationId = :rid')
+                    ->execute([':musteri' => $title, ':emlak' => $emlakId, ':rid' => $reservationId]);
+            } catch (\Throwable $e) {
+                error_log('KT kayit adi dolu satirina yazilamadi: ' . $e->getMessage());
+            }
+        }
     }
 
     /**
@@ -503,13 +549,38 @@ final class HomesManagementCalendarController extends Controller
             return 0;
         }
 
+        // Iptal / silinmis satirlar sayilmaz (takvim listesiyle ayni); tarihleri birebir ayni olan kayit once secilir.
+        $deletedStatus = $this->deletedStatus();
+        $stmt = $pdo->prepare(
+            "SELECT TOP 1 ReservationId FROM dbo.dolu
+             WHERE emlak = :emlak AND ReservationId > 0
+               AND tarih < :end AND tarih2 > :start
+               AND ISNULL(Durum, -99) NOT IN (2, 4, 5, {$deletedStatus})
+             ORDER BY CASE WHEN CONVERT(date, tarih) = :start2 AND CONVERT(date, tarih2) = :end2 THEN 0 ELSE 1 END, tarih"
+        );
+        $stmt->execute([':emlak' => $emlakId, ':start' => $start, ':end' => $end, ':start2' => $start, ':end2' => $end]);
+
+        return (int) ($stmt->fetchColumn() ?: 0);
+    }
+
+    /**
+     * Secilen tarihlerle birebir ayni (giris ve cikis), aktif Kiralama Takvimi opsiyonunun ReservationId'si; yoksa 0.
+     * Kapatma / opsiyon olustururken mevcut opsiyon onaylanacaksa kullanilir.
+     */
+    private function exactKtOptionReservationId(PDO $pdo, int $emlakId, string $start, string $end): int
+    {
+        if (!$this->hasColumn($pdo, 'dbo.dolu', 'ReservationId')) {
+            return 0;
+        }
+
         $stmt = $pdo->prepare(
             'SELECT TOP 1 ReservationId FROM dbo.dolu
              WHERE emlak = :emlak AND ReservationId > 0
-               AND tarih < :end AND tarih2 > :start
-             ORDER BY tarih'
+               AND Durum = :durum
+               AND CONVERT(date, tarih) = :start AND CONVERT(date, tarih2) = :end
+             ORDER BY id DESC'
         );
-        $stmt->execute([':emlak' => $emlakId, ':start' => $start, ':end' => $end]);
+        $stmt->execute([':emlak' => $emlakId, ':durum' => self::OPTION_DURUM, ':start' => $start, ':end' => $end]);
 
         return (int) ($stmt->fetchColumn() ?: 0);
     }
