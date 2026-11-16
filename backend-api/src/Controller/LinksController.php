@@ -66,17 +66,14 @@ final class LinksController extends Controller
 
         // 3) Sıradaki id'den eşsiz link üret
         $originalLink = $this->uniqueOriginalLink($pdo);
-        $directSearchPageUrl = trim((string) ($this->app['links_search_page_url'] ?? ''));
 
-        // 4) Yönlendirme hedefini homes.id ile sayfa URL'sine kur
-        $searchPageQuery = trim((string) ($this->app['links_search_page_query'] ?? 'SELECT url FROM tip WHERE id = 1'));
-        $urlRow = $directSearchPageUrl === '' ? $pdo->query($searchPageQuery)->fetch() : ['url' => $directSearchPageUrl];
-        $aramaSayfasi = trim((string) ($urlRow['url'] ?? ''));
+        // 4) Yönlendirme hedefini kur (site_search_url -> links_search_page_url -> query)
+        $aramaSayfasi = $this->searchPageUrl($pdo, $siteId);
         if ($aramaSayfasi === '') {
             throw new HttpException('Link sayfa URL ayarı bulunamadı.', 'CONFIG_ERROR', 500);
         }
         $domain = $this->siteDomain($pdo, $siteId);
-        $redirectTo = $this->reservationRedirectUrl($domain, $aramaSayfasi, $validIds, $start, $end, $poolFee);
+        $redirectTo = $this->reservationRedirectUrl($domain, $aramaSayfasi, $validIds, $start, $end, $poolFee, $siteId);
 
         // 5) Süre verildiyse son kullanma tarihini hesapla
         $expiredMode = 0;
@@ -148,10 +145,48 @@ final class LinksController extends Controller
         throw new HttpException('Benzersiz link olusturulamadi.', 'LINK_COLLISION', 500);
     }
 
+    private function searchPageUrl(\PDO $pdo, int $siteId): string
+    {
+        $searchUrls = $this->app['site_search_url'] ?? [];
+        $searchUrl = '';
+        if (is_array($searchUrls)) {
+            $val = $searchUrls[$siteId] ?? ($searchUrls[(string) $siteId] ?? '');
+            if (is_array($val)) {
+                $searchUrl = (string) ($val['url'] ?? ($val['path'] ?? ''));
+            } else {
+                $searchUrl = (string) $val;
+            }
+        } elseif (is_string($searchUrls)) {
+            $searchUrl = $searchUrls;
+        }
+        $searchUrl = trim($searchUrl);
+
+        if ($searchUrl !== '') {
+            return $searchUrl;
+        }
+
+        $directSearchPageUrl = trim((string) ($this->app['links_search_page_url'] ?? ''));
+        if ($directSearchPageUrl !== '') {
+            return $directSearchPageUrl;
+        }
+
+        $searchPageQuery = trim((string) ($this->app['links_search_page_query'] ?? 'SELECT url FROM tip WHERE id = 1'));
+        try {
+            $row = $pdo->query($searchPageQuery)->fetch(\PDO::FETCH_ASSOC);
+            $url = trim((string) ($row['url'] ?? ''));
+            if ($url !== '') {
+                return $url;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        return '';
+    }
+
     /**
      * @param int[] $entityIds
      */
-    private function reservationRedirectUrl(string $domain, string $pageUrl, array $entityIds, string $start, string $end, string $poolFee): string
+    private function reservationRedirectUrl(string $domain, string $pageUrl, array $entityIds, string $start, string $end, string $poolFee, int $siteId = 1): string
     {
         $domain = $this->normalizeDomain($domain);
 
@@ -159,17 +194,50 @@ final class LinksController extends Controller
             ? $this->app['links_reservation_url']
             : [];
         $params = is_array($config['params'] ?? null) ? $config['params'] : [];
-        $dateFormat = trim((string) ($config['date_format'] ?? 'Y-m-d'));
-        $dateFormat = $dateFormat !== '' ? $dateFormat : 'Y-m-d';
+
+        // site_search_params (config/app.php:L160-L178)
+        $searchParamsConfig = $this->app['site_search_params'] ?? ($this->app['site_search_queries'] ?? []);
+        $siteCfg = [];
+        if (is_array($searchParamsConfig)) {
+            $siteCfg = $searchParamsConfig[$siteId] ?? ($searchParamsConfig[(string) $siteId] ?? []);
+            if (!is_array($siteCfg)) {
+                $siteCfg = [];
+            }
+        }
+
+        $startKey = isset($siteCfg['start']) && trim((string) $siteCfg['start']) !== ''
+            ? trim((string) $siteCfg['start'])
+            : $this->queryParamName($params, 'start', 'start');
+
+        $endKey = isset($siteCfg['end']) && trim((string) $siteCfg['end']) !== ''
+            ? trim((string) $siteCfg['end'])
+            : $this->queryParamName($params, 'end', 'end');
+
+        $startFormat = trim((string) ($siteCfg['formatting']['start'] ?? ''));
+        if ($startFormat === '') {
+            $startFormat = trim((string) ($config['date_format'] ?? 'Y-m-d'));
+        }
+        if ($startFormat === '') {
+            $startFormat = 'Y-m-d';
+        }
+
+        $endFormat = trim((string) ($siteCfg['formatting']['end'] ?? ''));
+        if ($endFormat === '') {
+            $endFormat = trim((string) ($config['date_format'] ?? 'Y-m-d'));
+        }
+        if ($endFormat === '') {
+            $endFormat = 'Y-m-d';
+        }
 
         $query = [
-            $this->queryParamName($params, 'entity_id', 'ids') => implode(',', $entityIds),
+            'ids' => implode(',', $entityIds),
         ];
-        if ($start !== '') {
-            $query[$this->queryParamName($params, 'start', 'start')] = $this->formatDate($start, $dateFormat);
+
+        if ($start !== '' && $startKey !== '') {
+            $query[$startKey] = $this->formatDate($start, $startFormat);
         }
-        if ($end !== '') {
-            $query[$this->queryParamName($params, 'end', 'end')] = $this->formatDate($end, $dateFormat);
+        if ($end !== '' && $endKey !== '') {
+            $query[$endKey] = $this->formatDate($end, $endFormat);
         }
         if ($poolFee === '1') {
             $query[$this->queryParamName($params, 'pool_fee', 'buyPool')] = 1;
@@ -289,7 +357,25 @@ final class LinksController extends Controller
 
     private function formatDate(string $date, string $format): string
     {
+        $date = trim($date);
+        if ($date === '') {
+            return '';
+        }
+
         $dateTime = \DateTime::createFromFormat('Y-m-d', $date);
+        if (!$dateTime instanceof \DateTime) {
+            $dateTime = \DateTime::createFromFormat('d.m.Y', $date);
+        }
+        if (!$dateTime instanceof \DateTime) {
+            $dateTime = \DateTime::createFromFormat('d-m-Y', $date);
+        }
+        if (!$dateTime instanceof \DateTime) {
+            $ts = strtotime($date);
+            if ($ts !== false) {
+                $dateTime = (new \DateTime())->setTimestamp($ts);
+            }
+        }
+
         if (!$dateTime instanceof \DateTime) {
             return $date;
         }

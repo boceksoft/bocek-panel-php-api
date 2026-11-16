@@ -11,7 +11,7 @@ final class CategoriesController extends Controller
     /**
      * @Get
      * @query site int Site kimliği
-     * @query minimize int 1: sadece id ve name döner
+     * @query minimize int 1: sadece aktif kategorilerin id ve name alanlarını döner
      */ 
     public function index(): void
     {
@@ -19,7 +19,8 @@ final class CategoriesController extends Controller
         
         $siteId = $this->siteId();
         $titleColumn = $this->titleColumn($siteId);
-        $minimize = (int) ($this->request->query('minimize') ?? $this->request->input('minimize', 0)) === 1;
+        $minimizeRaw = $this->request->query('minimize') ?? $this->request->input('minimize');
+        $minimize = ($minimizeRaw === '1' || $minimizeRaw === 1 || strtolower((string) $minimizeRaw) === 'true');
 
         if ($minimize) {
             $categoriesQuery = "
@@ -28,6 +29,7 @@ final class CategoriesController extends Controller
                     {$titleColumn} AS name,
                     cat
                 FROM tip 
+                WHERE ISNULL(aktif, 0) = 1
                 ORDER BY siralama ASC, id ASC
             ";
             $categories = $pdo->query($categoriesQuery)->fetchAll();

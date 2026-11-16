@@ -35,8 +35,8 @@ final class HomesController extends Controller
      * @query sadecebizde int 1: sadece homes.sadece_bizde = 1 villalar (Config'de Sadece Bizde secili ise)
      * @query pasifler int 1: aktif olmayan villalar da gelir (sadece Ozel Listeler villa ekrani)
      * @query indirim int 1: secilen tarihlerde indirimi olan villalar (sitede gosterilen indirimler)
-     * @query mimicFrontend int 1: frontend kurallarını (gavel, izin süresi, min. gece kontrolü, alt bölge & alt kategori açılımı) uygular
-     * @query order_by int Sıralama (0-6)
+     * @query mimicFrontend int 1: frontend kurallarını (gavel, izin süresi, min. gece kontrolü, alt bölge & alt kategori açılımı, havuz ısıtma & doluluk isAvailable kontrolü) uygular
+     * @query order_by int Sıralama (0/7: özel sıralama / siralama ASC, 1: id ASC, 2: id DESC, 3: fiyat ASC, 4: fiyat DESC, 5: kişi ASC, 6: kişi DESC)
      * @query page int Sayfa
      * @query per_page int Sayfa başına kayıt
      */
@@ -180,10 +180,48 @@ final class HomesController extends Controller
         // pasifler=1: aktif olmayan villalar da gelir. Sadece Ozel Listeler villa ekrani gonderir; Teklif vb. etkilenmez.
         $includeInactive = $this->p('pasifler') === '1';
 
+        $inDate = $tarih1 ? $tarih1->format('Y-m-d') : '';
+        $outDate = $tarih2 ? $tarih2->format('Y-m-d') : '';
+
+        $availabilitySelect = '';
+        if ($mimicFrontend) {
+            if ($hasDate && $inDate !== '' && $outDate !== '' && !$kisasureli) {
+                $doluDate1 = "COALESCE(TRY_CONVERT(date, dolu.tarih, 104), TRY_CONVERT(date, dolu.tarih, 23), TRY_CONVERT(date, dolu.tarih, 103), TRY_CONVERT(date, dolu.tarih))";
+                $doluDate2 = "COALESCE(TRY_CONVERT(date, dolu.tarih2, 104), TRY_CONVERT(date, dolu.tarih2, 23), TRY_CONVERT(date, dolu.tarih2, 103), TRY_CONVERT(date, dolu.tarih))";
+
+                $fakeCheck = '';
+                try {
+                    $hasDoluFake = (int) $pdo->query("SELECT CASE WHEN OBJECT_ID('dbo.dolu_fake') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
+                    if ($hasDoluFake) {
+                        $dfDate1 = "COALESCE(TRY_CONVERT(date, df.tarih, 104), TRY_CONVERT(date, df.tarih, 23), TRY_CONVERT(date, df.tarih, 103), TRY_CONVERT(date, df.tarih))";
+                        $dfDate2 = "COALESCE(TRY_CONVERT(date, df.tarih2, 104), TRY_CONVERT(date, df.tarih2, 23), TRY_CONVERT(date, df.tarih2, 103), TRY_CONVERT(date, df.tarih))";
+                        $fakeCheck = " OR EXISTS (
+                            SELECT 1 FROM dolu_fake df
+                            WHERE df.emlak = h.id
+                              AND df.durum = 3
+                              AND {$dfDate1} < CONVERT(date, '{$outDate}', 23)
+                              AND {$dfDate2} > CONVERT(date, '{$inDate}', 23)
+                        )";
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                $availabilitySelect = "(CASE WHEN EXISTS (
+                    SELECT 1 FROM dolu
+                    WHERE dolu.emlak = h.id
+                      AND dolu.durum IN (1, 3)
+                      AND {$doluDate1} < CONVERT(date, '{$outDate}', 23)
+                      AND {$doluDate2} > CONVERT(date, '{$inDate}', 23)
+                ){$fakeCheck} THEN 0 ELSE 1 END) AS is_available_flag, ";
+            } else {
+                $availabilitySelect = "1 AS is_available_flag, ";
+            }
+        }
+
         $sql = $this->buildSql(compact(
             'dbt', 'doviz', 'takvimSelect', 'hedefKur', 'ksqlx', 'ksql', 'nettarihSql',
             'takvimCross', 'hasDate', 't1', 't2', 'dsql2', 'takvimWhere', 'includeInactive',
-            'gun', 'kisasureli'
+            'gun', 'kisasureli', 'availabilitySelect'
         ));
 
         // Dinamik WHERE
@@ -233,37 +271,19 @@ final class HomesController extends Controller
 
         if ($hasDate && $netTarih !== '0') {
             if (!$kisasureli) {
-                $inDate = $tarih1 ? $tarih1->format('Y-m-d') : '';
-                $outDate = $tarih2 ? $tarih2->format('Y-m-d') : '';
                 if ($inDate !== '' && $outDate !== '') {
                     $doluDate1 = "COALESCE(TRY_CONVERT(date, dolu.tarih, 104), TRY_CONVERT(date, dolu.tarih, 23), TRY_CONVERT(date, dolu.tarih, 103), TRY_CONVERT(date, dolu.tarih))";
                     $doluDate2 = "COALESCE(TRY_CONVERT(date, dolu.tarih2, 104), TRY_CONVERT(date, dolu.tarih2, 23), TRY_CONVERT(date, dolu.tarih2, 103), TRY_CONVERT(date, dolu.tarih2))";
-                    $durumSql = $mimicFrontend ? 'dolu.durum IN (1, 3)' : 'dolu.durum = 3';
 
-                    $sql .= " AND NOT EXISTS (
-                        SELECT 1 FROM dolu
-                        WHERE dolu.emlak = h.id
-                          AND {$durumSql}
-                          AND {$doluDate1} < CONVERT(date, '{$outDate}', 23)
-                          AND {$doluDate2} > CONVERT(date, '{$inDate}', 23)
-                    )";
-
-                    if ($mimicFrontend) {
-                        try {
-                            $hasDoluFake = (int) $pdo->query("SELECT CASE WHEN OBJECT_ID('dbo.dolu_fake') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
-                            if ($hasDoluFake) {
-                                $dfDate1 = "COALESCE(TRY_CONVERT(date, df.tarih, 104), TRY_CONVERT(date, df.tarih, 23), TRY_CONVERT(date, df.tarih, 103), TRY_CONVERT(date, df.tarih))";
-                                $dfDate2 = "COALESCE(TRY_CONVERT(date, df.tarih2, 104), TRY_CONVERT(date, df.tarih2, 23), TRY_CONVERT(date, df.tarih2, 103), TRY_CONVERT(date, df.tarih2))";
-                                $sql .= " AND NOT EXISTS (
-                                    SELECT 1 FROM dolu_fake df
-                                    WHERE df.emlak = h.id
-                                      AND df.durum = 3
-                                      AND {$dfDate1} < CONVERT(date, '{$outDate}', 23)
-                                      AND {$dfDate2} > CONVERT(date, '{$inDate}', 23)
-                                )";
-                            }
-                        } catch (\Throwable $e) {
-                        }
+                    // mimicFrontend=1 olduğunda dolu villalar elenmez; isAvailable=false olarak döner.
+                    if (!$mimicFrontend) {
+                        $sql .= " AND NOT EXISTS (
+                            SELECT 1 FROM dolu
+                            WHERE dolu.emlak = h.id
+                              AND dolu.durum = 3
+                              AND {$doluDate1} < CONVERT(date, '{$outDate}', 23)
+                              AND {$doluDate2} > CONVERT(date, '{$inDate}', 23)
+                        )";
                     }
                 }
             } else {
@@ -416,7 +436,11 @@ final class HomesController extends Controller
             $bolge !== '' || $this->p('ozellik') !== '' || $this->p('villaadi') !== '' ||
             in_array($poolHeatingVal, ['1', 'true', 'var', 'yes', 'evet', '0', 'false', 'yok', 'no', 'hayir'], true)
         );
-        $sql .= "\nORDER BY " . $this->orderClause($orderBy, $orderByEk, $isFilterSelected);
+        $orderPrefix = '';
+        if ($mimicFrontend && $hasDate) {
+            $orderPrefix = 'is_available_flag DESC, ';
+        }
+        $sql .= "\nORDER BY " . $orderPrefix . $this->orderClause($orderBy, $orderByEk, $isFilterSelected);
         $sql .= "\nOFFSET {$offset} ROWS FETCH NEXT {$perPage} ROWS ONLY";
 
         $stmt = $pdo->prepare($sql);
@@ -453,6 +477,28 @@ final class HomesController extends Controller
 
         foreach ($rows as $idx => &$row) {
             unset($row['totalCount']);
+
+            $row['siralama'] = (int) ($row['siralama'] ?? 0);
+
+            $isAvailable = true;
+            if ($mimicFrontend) {
+                if (isset($row['is_available_flag'])) {
+                    $isAvailable = ((int) $row['is_available_flag'] === 1);
+                }
+                if (isset($row['gecemax']) && (int) $row['gecemax'] === 1) {
+                    $isAvailable = false;
+                }
+            }
+            unset($row['is_available_flag']);
+
+            $hasPoolHeating = (isset($row['havuzisitma']) && ($row['havuzisitma'] === 'var' || $row['havuzisitma'] === true || $row['havuzisitma'] === 1 || $row['havuzisitma'] === '1'));
+            $row['poolHeating'] = $hasPoolHeating;
+            $row['hasPoolHeating'] = $hasPoolHeating;
+
+            if ($mimicFrontend) {
+                $row['isAvailable'] = $isAvailable;
+            }
+
             if (isset($row['fiyat'])) {
                 $row['fiyat'] = (int) round((float) $row['fiyat']);
             }
@@ -497,6 +543,9 @@ final class HomesController extends Controller
         if ($discountOnly && $rows) {
             $discounts = $this->matchingDiscounts($pdo, array_map('intval', array_column($rows, 'id')), $discountWhere, $discountParams);
             foreach ($rows as &$row) {
+                if (isset($row['isAvailable']) && $row['isAvailable'] === false) {
+                    continue;
+                }
                 $row['indirim'] = $discounts[(int) $row['id']] ?? null;
             }
             unset($row);
@@ -506,7 +555,25 @@ final class HomesController extends Controller
         if ($rows) {
             $calendarHomes = $this->calendarHomeIds($pdo, array_map('intval', array_column($rows, 'id')));
             foreach ($rows as &$row) {
+                if (isset($row['isAvailable']) && $row['isAvailable'] === false) {
+                    continue;
+                }
                 $row['kiralama_takvimi'] = isset($calendarHomes[(int) $row['id']]);
+            }
+            unset($row);
+        }
+
+        if ($mimicFrontend) {
+            foreach ($rows as &$row) {
+                if (isset($row['isAvailable']) && $row['isAvailable'] === false) {
+                    $villaBaslik = !empty($row['baslik']) ? (string) $row['baslik'] : (!empty($row['title']) ? (string) $row['title'] : '');
+                    $row = [
+                        'id'          => (int) $row['id'],
+                        'baslik'      => $villaBaslik,
+                        'isAvailable' => false,
+                        'siralama'    => (int) ($row['siralama'] ?? 0),
+                    ];
+                }
             }
             unset($row);
         }
@@ -589,6 +656,7 @@ CROSS APPLY (
 SELECT
     COUNT(*) OVER() AS totalCount,
     h.yatak_odasi, h.id, h.gavelBelgeNo,
+    ISNULL(h.siralama, 0) AS siralama,
     h.url{$c['dbt']} AS url,
     h.title{$c['dbt']} AS title,
     h.kisa_icerik{$c['dbt']} AS kisa_icerik,
@@ -604,6 +672,7 @@ SELECT
     '{$c['doviz']}' AS doviz,
     d2.baslik{$c['dbt']} AS d2baslik,
     {$c['takvimSelect']}
+    " . (!empty($c['availabilitySelect']) ? $c['availabilitySelect'] : '') . "
     CAST(ROUND( 
         (CASE
             WHEN h.doviz = '{$c['doviz']}' THEN {$price}
@@ -814,8 +883,10 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
             case 6:
                 $clause = $gelismis . ' h.kisi DESC, h.siralama ASC';
                 break;
+            case 0:
+            case 7:
             default:
-                $clause = ' h.kisi ASC, ' . $gelismis . ' h.siralama ASC, h.id ASC';
+                $clause = $orderByEk . $gelismis . ' h.siralama ASC, h.id ASC';
                 break;
         }
 
