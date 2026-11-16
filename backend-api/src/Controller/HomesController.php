@@ -36,6 +36,7 @@ final class HomesController extends Controller
      * @query pasifler int 1: aktif olmayan villalar da gelir (sadece Ozel Listeler villa ekrani)
      * @query indirim int 1: secilen tarihlerde indirimi olan villalar (sitede gosterilen indirimler)
      * @query mimicFrontend int 1: frontend kurallarını (gavel, izin süresi, min. gece kontrolü, alt bölge & alt kategori açılımı, havuz ısıtma & doluluk isAvailable kontrolü) uygular
+     * @query availability string mimicFrontend=1 için müsaitlik filtresi (available: sadece müsait villalar, notavailable: sadece dolu villalar, boş/all: her ikisi)
      * @query order_by int Sıralama (0/7: özel sıralama / siralama ASC, 1: id ASC, 2: id DESC, 3: fiyat ASC, 4: fiyat DESC, 5: kişi ASC, 6: kişi DESC)
      * @query page int Sayfa
      * @query per_page int Sayfa başına kayıt
@@ -183,7 +184,16 @@ final class HomesController extends Controller
         $inDate = $tarih1 ? $tarih1->format('Y-m-d') : '';
         $outDate = $tarih2 ? $tarih2->format('Y-m-d') : '';
 
+        $availabilityRaw = strtolower(trim($this->p('availability', $this->p('musaitlik', ''))));
+        $availabilityFilter = '';
+        if (in_array($availabilityRaw, ['available', 'musait', '1', 'true', 'yes'], true)) {
+            $availabilityFilter = 'available';
+        } elseif (in_array($availabilityRaw, ['notavailable', 'not_available', 'not-available', 'unavailable', 'dolu', '0', 'false', 'no'], true)) {
+            $availabilityFilter = 'notavailable';
+        }
+
         $availabilitySelect = '';
+        $isOccupiedCondition = '';
         if ($mimicFrontend) {
             if ($hasDate && $inDate !== '' && $outDate !== '' && !$kisasureli) {
                 $doluDate1 = "COALESCE(TRY_CONVERT(date, dolu.tarih, 104), TRY_CONVERT(date, dolu.tarih, 23), TRY_CONVERT(date, dolu.tarih, 103), TRY_CONVERT(date, dolu.tarih))";
@@ -206,13 +216,15 @@ final class HomesController extends Controller
                 } catch (\Throwable $e) {
                 }
 
-                $availabilitySelect = "(CASE WHEN EXISTS (
+                $isOccupiedCondition = "(EXISTS (
                     SELECT 1 FROM dolu
                     WHERE dolu.emlak = h.id
                       AND dolu.durum IN (1, 3)
                       AND {$doluDate1} < CONVERT(date, '{$outDate}', 23)
                       AND {$doluDate2} > CONVERT(date, '{$inDate}', 23)
-                ){$fakeCheck} THEN 0 ELSE 1 END) AS is_available_flag, ";
+                ){$fakeCheck})";
+
+                $availabilitySelect = "(CASE WHEN {$isOccupiedCondition} THEN 0 ELSE 1 END) AS is_available_flag, ";
             } else {
                 $availabilitySelect = "1 AS is_available_flag, ";
             }
@@ -276,6 +288,7 @@ final class HomesController extends Controller
                     $doluDate2 = "COALESCE(TRY_CONVERT(date, dolu.tarih2, 104), TRY_CONVERT(date, dolu.tarih2, 23), TRY_CONVERT(date, dolu.tarih2, 103), TRY_CONVERT(date, dolu.tarih2))";
 
                     // mimicFrontend=1 olduğunda dolu villalar elenmez; isAvailable=false olarak döner.
+                    // Ancak availability=available|notavailable filtresi gönderilmişse filtre uygulanır.
                     if (!$mimicFrontend) {
                         $sql .= " AND NOT EXISTS (
                             SELECT 1 FROM dolu
@@ -284,6 +297,16 @@ final class HomesController extends Controller
                               AND {$doluDate1} < CONVERT(date, '{$outDate}', 23)
                               AND {$doluDate2} > CONVERT(date, '{$inDate}', 23)
                         )";
+                    } elseif ($availabilityFilter === 'available') {
+                        if ($isOccupiedCondition !== '') {
+                            $sql .= " AND NOT {$isOccupiedCondition}";
+                        }
+                    } elseif ($availabilityFilter === 'notavailable') {
+                        if ($isOccupiedCondition !== '') {
+                            $sql .= " AND {$isOccupiedCondition}";
+                        } else {
+                            $sql .= " AND 1 = 2";
+                        }
                     }
                 }
             } else {
@@ -292,6 +315,8 @@ final class HomesController extends Controller
                     OR (kisasureli.tarih BETWEEN '{$nd1}' AND '{$nd2}')
                     OR (kisasureli.tarih2 BETWEEN '{$nd1}' AND '{$nd2}'))";
             }
+        } elseif ($mimicFrontend && $availabilityFilter === 'notavailable') {
+            $sql .= " AND 1 = 2";
         }
 
         if ($maxTL > 0) {
@@ -434,6 +459,7 @@ final class HomesController extends Controller
         $isFilterSelected = (
             $hasDate || $this->pInt('kisi') > 0 || $tipx !== '' ||
             $bolge !== '' || $this->p('ozellik') !== '' || $this->p('villaadi') !== '' ||
+            $availabilityFilter !== '' ||
             in_array($poolHeatingVal, ['1', 'true', 'var', 'yes', 'evet', '0', 'false', 'yok', 'no', 'hayir'], true)
         );
         $orderPrefix = '';
