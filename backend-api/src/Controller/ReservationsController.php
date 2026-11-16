@@ -68,6 +68,23 @@ final class ReservationsController extends Controller
 
         $rezTarih1   = $this->parseTrDate($this->p('rezTarih1'));
         $rezTarih2   = $this->parseTrDate($this->p('rezTarih2'));
+
+        // Operasyon (Natsisa) rezTarih1/rezTarih2 gonderir; eski surum startDate/endDate gonderebilir.
+        // startDate/endDate islem tarihine (rezTarih) uygulanir, endDate haric: 1-30 secimi startDate=1, endDate=31.
+        $operationStartDate = $this->p('rezTarih1') === '' ? $this->guestStyleDate(['startDate', 'start_date']) : null;
+        if ($operationStartDate !== null) {
+            $rezTarih1 = $operationStartDate->format('d.m.Y');
+            if ($this->p('rezTarih2') === '') {
+                $operationEndDate = $this->guestStyleDate(['endDate', 'end_date']);
+                $rangeEnd = $operationEndDate !== null && $operationEndDate > $operationStartDate
+                    ? (clone $operationEndDate)->modify('-1 day')
+                    : $operationStartDate;
+                $rezTarih2 = $rangeEnd->format('d.m.Y');
+            }
+        }
+        // Islem tarihi araligi verildiyse giris tarihine varsayilan "bugun ve sonrasi" uygulanmaz
+        // (yoksa gecmis aylarin rezervasyonlari gelmez). 21.10.2026 merge'unde kaybolmustu, geri eklendi.
+        $hasRezTarihFilter = $rezTarih1 || $rezTarih2;
         $cikisTarih1 = $this->parseTrDate($this->p('cikisTarih1'));
         $cikisTarih2 = $this->parseTrDate($this->p('cikisTarih2'));
 
@@ -80,7 +97,7 @@ final class ReservationsController extends Controller
 
         // girisTarih1 hiç gelmezse varsayılan bugün; boş gelirse (girisTarih1=) panel gibi tarih filtresi yok.
         $girisTarih1P = $this->p('girisTarih1');
-        if (!$hasDurum6 && $girisTarih1P === '' && $this->requestValues('girisTarih1') === []) {
+        if (!$hasDurum6 && !$hasRezTarihFilter && $girisTarih1P === '' && $this->requestValues('girisTarih1') === []) {
             $girisTarih1P = date('d.m.Y');
         }
         $girisTarih1 = $this->parseTrDate($girisTarih1P);
@@ -179,11 +196,13 @@ final class ReservationsController extends Controller
         }
         // Filtrede 5 (Silindi) siteye özel silinme koduna çevrilir (örn. -1);
         // 7 sanal filtredir (onaydan sonra iptal edilenler).
+        // Durum filtreleri ayri tutulur: onayli / onaydan iptal toplamlari durum filtresinden bagimsiz sayilir.
+        $statusWhere = [];
         if ($rezDurumu !== '') {
-            $where[] = $this->statusFilterSql($rezDurumu);
+            $statusWhere[] = $this->statusFilterSql($rezDurumu);
         }
         if ($durum !== '') {
-            $where[] = $this->statusFilterSql($durum);
+            $statusWhere[] = $this->statusFilterSql($durum);
         }
         if ($promosyon !== '') {
             $where[] = 'kayitlar.promotionCode = :promosyon';
@@ -206,6 +225,8 @@ final class ReservationsController extends Controller
             $where[] = 'ISNULL(kanun7464.gavel, 0) = 1';
         }
 
+        $whereNoStatusSql = $where ? ('WHERE 1=1 AND ' . implode(' AND ', $where)) : 'WHERE 1=1';
+        $where = array_merge($where, $statusWhere);
         $whereSql = $where ? ('WHERE 1=1 AND ' . implode(' AND ', $where)) : 'WHERE 1=1';
 
         // sadeceToplam=1: ayni filtrelerle sadece kayit sayisi (menu rozetleri); satir ve ciro hesaplanmaz.
@@ -265,11 +286,37 @@ final class ReservationsController extends Controller
             $toplamTemizlik = (float) $rows[0]['sumTemizlik'];
         }
 
+        // Ayar (reservation_filters_use_status_log) aciksa data.total_onayli, data.total_onaydan_iptal ve data.total_tumu doner:
+        // secili durum filtresi haric diger tum filtrelerle (tarih, site, acenta...) sayilir. Operasyon bunlari kullanir.
+        // Not: 21.10.2026 Tolga merge'unde kaybolmustu, geri eklendi.
+        $statusTotals = [];
+        if ($this->configBool('reservation_filters_use_status_log', false)) {
+            $statusTotalsStmt = $pdo->prepare($this->buildStatusTotalsSql(
+                $whereNoStatusSql,
+                $useAcentaUsers,
+                $kisibilgileri === '>' || $kisibilgileri === '='
+            ));
+            foreach ($params as $key => $value) {
+                $statusTotalsStmt->bindValue($key, $value);
+            }
+            $statusTotalsStmt->execute();
+            $statusTotalsRow = $statusTotalsStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $toplamOnayli       = (int) ($statusTotalsRow['countOnayli'] ?? 0);
+            $toplamOnaydanIptal = (int) ($statusTotalsRow['countOnaydanIptal'] ?? 0);
+            $statusTotals = [
+                'total_onayli'        => $toplamOnayli,
+                'total_onaydan_iptal' => $toplamOnaydanIptal,
+                // Onayli + onaydan iptal toplami (operasyonda "tumu").
+                'total_tumu'          => $toplamOnayli + $toplamOnaydanIptal,
+            ];
+        }
+
         $rows = $this->normalizeRows($rows);
 
         $this->response->success([
             'status'      => 'success',
             'total'       => $totalCount,
+        ] + $statusTotals + [
             'page'        => $allRows ? 1 : $page,
             'per_page'    => $allRows ? $totalCount : $perPage,
             'total_pages' => $allRows ? 1 : (int) ceil($totalCount / max(1, $perPage)),
@@ -590,6 +637,40 @@ $orderSql
     }
 
     /**
+     * Onayli (durum 3) ve onaydan iptal (durum 4 + status_log 3->4) sayilari.
+     * Liste sorgusundaki satiri eleyen join'ler (rate, sites, dolu) ve filtrelerin kullandigi tablolar ayni tutulur.
+     */
+    private function buildStatusTotalsSql(string $whereSql, bool $useAcentaUsers, bool $needKisi): string
+    {
+        $kisiSql = $needKisi
+            ? 'CROSS APPLY (SELECT COUNT(kb.id) AS total FROM kisi_bilgileri kb WHERE kb.siparis_kodu = kayitlar.id) AS kisi'
+            : '';
+        $acentaJoinSql = $useAcentaUsers
+            ? 'LEFT JOIN acenta_kayitlar a ON kayitlar.id = a.kayitId LEFT JOIN acenta_users au ON au.id = a.acentaId'
+            : '';
+
+        return "
+SELECT
+    SUM(CASE WHEN dolu.durum = 3 THEN 1 ELSE 0 END) AS countOnayli,
+    SUM(CASE WHEN dolu.durum = 4 AND onaydan_iptal.found = 1 THEN 1 ELSE 0 END) AS countOnaydanIptal
+FROM kayitlar
+{$kisiSql}
+OUTER APPLY (
+    SELECT TOP 1 1 AS found FROM dbo.reservations_status_log AS status_log
+    WHERE status_log.kayitlarId = kayitlar.id
+      AND status_log.old_status = 3
+      AND status_log.current_status = 4
+) AS onaydan_iptal
+INNER JOIN rate ON rate.CurrencyName = ISNULL(kayitlar.doviz, 'tl')
+LEFT  JOIN homes ON kayitlar.evid = homes.id
+INNER JOIN sites ON sites.id = ISNULL(kayitlar.site, 1)
+LEFT  JOIN kanun7464 ON kanun7464.homeId = homes.id
+INNER JOIN dolu ON dolu.kayitid = kayitlar.id
+{$acentaJoinSql}
+{$whereSql}";
+    }
+
+    /**
      * Liste sorgusuyla ayni satirlari sayar (sadeceToplam). Satir sayisini etkileyen join'ler
      * (rate, sites, dolu INNER JOIN) ve WHERE'de kullanilan tablolar ayni kalir; ciro/alt sorgular yok.
      */
@@ -846,6 +927,33 @@ INNER JOIN dolu ON dolu.kayitid = kayitlar.id
     /**
      * @return string|null
      */
+    /**
+     * YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY ve Natsisa'nin saatli bicimi (YYYY-MM-DDTHH:MM:SS, saat yok sayilir).
+     * Gecersiz veya bossa null.
+     *
+     * @param string[] $keys
+     */
+    private function guestStyleDate(array $keys): ?\DateTime
+    {
+        foreach ($keys as $key) {
+            $value = trim($this->p($key));
+            if ($value === '') {
+                continue;
+            }
+            if (preg_match('/^(\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}(:\d{2})?/', $value, $match) === 1) {
+                $value = $match[1];
+            }
+            foreach (['Y-m-d', 'd.m.Y', 'd/m/Y'] as $format) {
+                $date = \DateTime::createFromFormat('!' . $format, $value);
+                if ($date instanceof \DateTime && $date->format($format) === $value) {
+                    return $date;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private function parseTrDate(string $s)
     {
         $s = trim($s);
