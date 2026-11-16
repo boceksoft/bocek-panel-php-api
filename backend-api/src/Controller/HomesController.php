@@ -36,7 +36,7 @@ final class HomesController extends Controller
      * @query pasifler int 1: aktif olmayan villalar da gelir (sadece Ozel Listeler villa ekrani)
      * @query indirim int 1: secilen tarihlerde indirimi olan villalar (sitede gosterilen indirimler)
      * @query mimicFrontend int 1: frontend kurallarını (gavel, izin süresi, min. gece kontrolü, alt bölge & alt kategori açılımı, havuz ısıtma & doluluk isAvailable kontrolü) uygular
-     * @query order_by int Sıralama (0-6)
+     * @query order_by int Sıralama (0/7: özel sıralama / siralama ASC, 1: id ASC, 2: id DESC, 3: fiyat ASC, 4: fiyat DESC, 5: kişi ASC, 6: kişi DESC)
      * @query page int Sayfa
      * @query per_page int Sayfa başına kayıt
      */
@@ -478,6 +478,8 @@ final class HomesController extends Controller
         foreach ($rows as $idx => &$row) {
             unset($row['totalCount']);
 
+            $row['siralama'] = (int) ($row['siralama'] ?? 0);
+
             $isAvailable = true;
             if ($mimicFrontend) {
                 if (isset($row['is_available_flag'])) {
@@ -569,6 +571,7 @@ final class HomesController extends Controller
                         'id'          => (int) $row['id'],
                         'baslik'      => $villaBaslik,
                         'isAvailable' => false,
+                        'siralama'    => (int) ($row['siralama'] ?? 0),
                     ];
                 }
             }
@@ -653,6 +656,7 @@ CROSS APPLY (
 SELECT
     COUNT(*) OVER() AS totalCount,
     h.yatak_odasi, h.id, h.gavelBelgeNo,
+    ISNULL(h.siralama, 0) AS siralama,
     h.url{$c['dbt']} AS url,
     h.title{$c['dbt']} AS title,
     h.kisa_icerik{$c['dbt']} AS kisa_icerik,
@@ -879,8 +883,10 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
             case 6:
                 $clause = $gelismis . ' h.kisi DESC, h.siralama ASC';
                 break;
+            case 0:
+            case 7:
             default:
-                $clause = ' h.kisi ASC, ' . $gelismis . ' h.siralama ASC, h.id ASC';
+                $clause = $orderByEk . $gelismis . ' h.siralama ASC, h.id ASC';
                 break;
         }
 
