@@ -27,6 +27,8 @@ final class ReservationsController extends Controller
      * @query girisTarih1 string Giriş başlangıcı (gg.aa.yyyy). Hiç gönderilmezse bugün, boş gönderilirse filtre yok.
      * @query hizliArama int 1 ise sadece arama sonucu döner (üst bar araması): no, müşteri, villa, tarih, durum.
      * @query sadeceToplam int 1 ise ayni filtrelerle sadece {total} doner (menu rozetleri).
+     * @query telefonAra string Telefon numarasına göre (son 10 hane; telefon ve varsa 2. telefon) rezervasyonlar: önce
+     *        devam eden / yaklaşanlar, sonra geçmiş. Gelen arama kartı için; silinenler gelmez.
      */
     public function index(): void
     {
@@ -34,6 +36,10 @@ final class ReservationsController extends Controller
 
         if ($this->p('hizliArama') === '1') {
             $this->quickSearch($pdo);
+            return;
+        }
+        if ($this->p('telefonAra') !== '') {
+            $this->phoneSearch($pdo);
             return;
         }
         $useAcentaUsers = !empty($this->app['reservation_filters_use_acenta_users']);
@@ -443,6 +449,68 @@ final class ReservationsController extends Controller
 
         // 'data' yerine 'items': .NET getreservations yanitindaki data listesini rezervasyon senkron kuyruguna atar;
         // bu eksik alanli arama satirlari oraya girmesin.
+        $this->response->success(['items' => $rows, 'total' => count($rows)]);
+    }
+
+    /**
+     * Telefon numarasıyla rezervasyonlar (gelen arama kartı). Numara son 10 haneyle karşılaştırılır; kolondaki
+     * boşluk, +, -, ( ) karakterleri yok sayılır. Önce çıkışı bugün ya da sonra olanlar (girişe göre), sonra geçmiş.
+     */
+    private function phoneSearch(\PDO $pdo): void
+    {
+        $digits = preg_replace('/\D/', '', $this->p('telefonAra'));
+        $limit = min(10, max(1, $this->pInt('per_page', 5)));
+        if (strlen($digits) < 10) {
+            $this->response->success(['items' => [], 'total' => 0]);
+            return;
+        }
+        $last10 = substr($digits, -10);
+
+        $clean = static function (string $col): string {
+            return "RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ISNULL({$col}, ''), ' ', ''), '+', ''), '-', ''), '(', ''), ')', ''), 10)";
+        };
+        $phoneWhere = [$clean('kayitlar.telefon') . ' = :tel1'];
+        $params = [':tel1' => $last10];
+        foreach (['phone2', 'telefon2'] as $col) {
+            if ($this->columnExists($pdo, 'dbo', 'kayitlar', $col)) {
+                $phoneWhere[] = $clean('kayitlar.' . $col) . ' = :tel2';
+                $params[':tel2'] = $last10;
+                break;
+            }
+        }
+
+        $durumSql = $this->normalizedStatusSql('d.durum');
+        $sql = "SELECT TOP {$limit}
+                kayitlar.id,
+                kayitlar.musteri AS musteri_adi,
+                homes.id AS home_id,
+                " . $this->homeTitleSql('homes', 'homes.baslik') . " AS villa_adi,
+                kayitlar.adi AS silinen_emlak_adi,
+                CONVERT(varchar(10), kayitlar.rez_tarihi, 104) AS giris_tarihi,
+                CONVERT(varchar(10), kayitlar.gelecek_tarih, 104) AS cikis_tarihi,
+                {$durumSql} AS durum,
+                CASE {$durumSql} WHEN 0 THEN N'Onay Bekliyor' WHEN 1 THEN N'Ödeme Bekliyor' WHEN 2 THEN N'Süre Doldu' WHEN 3 THEN N'Onaylandı' WHEN 4 THEN N'İptal Edildi' WHEN 5 THEN N'Silindi' WHEN 6 THEN N'Açık Rezervasyon' ELSE N'-' END AS durum_text,
+                CASE WHEN kayitlar.gelecek_tarih >= CAST(GETDATE() AS date) THEN 1 ELSE 0 END AS guncel
+            FROM kayitlar
+            LEFT JOIN homes ON homes.id = kayitlar.evid
+            OUTER APPLY (SELECT TOP 1 dolu.durum FROM dolu WHERE dolu.kayitid = kayitlar.id ORDER BY dolu.id DESC) AS d
+            WHERE (" . implode(' OR ', $phoneWhere) . ")
+              AND ISNULL({$durumSql}, -1) <> 5
+            ORDER BY CASE WHEN kayitlar.gelecek_tarih >= CAST(GETDATE() AS date) THEN 0 ELSE 1 END,
+                     CASE WHEN kayitlar.gelecek_tarih >= CAST(GETDATE() AS date) THEN kayitlar.rez_tarihi END ASC,
+                     kayitlar.id DESC";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        foreach ($rows as &$row) {
+            $row['id'] = (int) $row['id'];
+            $row['durum'] = $row['durum'] !== null ? (int) $row['durum'] : null;
+            $row['guncel'] = (int) $row['guncel'] === 1;
+        }
+        unset($row);
+
+        // 'items': getreservations yanıtındaki 'data' listesi senkron kuyruğuna gider; bu kısa satırlar gitmesin.
         $this->response->success(['items' => $rows, 'total' => count($rows)]);
     }
 

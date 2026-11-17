@@ -4753,3 +4753,57 @@ END;';
 EXEC sys.sp_executesql @TriggerSql;
 END;
 GO
+
+-- Odeme ayarlari (Natsisa Tanimlamalar > Odeme Ayarlari; eski panel genel_ayarlar.asp "Odeme Ayarlari" sekmesi).
+-- React'e gecen sitelerin bir kisminin panelinde bu sekme yok; kolonlar eklenir, mevcut panellerin davranisi degismez (NULL).
+--   DefaultVirtualPosId: Finance.VirtualPos.Id, DefaultInstallment: taksite izin, DefaultInstallmentVirtualPosId: NULL = Otomatik.
+IF OBJECT_ID(N'[dbo].[genel]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel]', N'DefaultVirtualPosId') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel] ADD [DefaultVirtualPosId] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[genel]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel]', N'DefaultInstallment') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel] ADD [DefaultInstallment] bit NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[genel]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[genel]', N'DefaultInstallmentVirtualPosId') IS NULL
+BEGIN
+ALTER TABLE [dbo].[genel] ADD [DefaultInstallmentVirtualPosId] int NULL;
+END;
+GO
+
+-- Rezervasyonun POS / taksit secimi (site SendReservation genel varsayilanlarindan yazar; rezervasyon detayinda degistirilir).
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'VirtualPosId') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [VirtualPosId] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'InstallmentVirtualPosId') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [InstallmentVirtualPosId] int NULL;
+END;
+GO
+
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'taksit') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [taksit] bit NULL;
+END;
+GO
+
+-- Kart odeme formu (site API Garanti / Is Bankasi / Halkode CreateForm): bankanin 3D formu rezervasyonda saklanir.
+IF OBJECT_ID(N'[dbo].[kayitlar]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[kayitlar]', N'paymentHtml') IS NULL
+BEGIN
+ALTER TABLE [dbo].[kayitlar] ADD [paymentHtml] nvarchar(MAX) NULL;
+END;
+GO
