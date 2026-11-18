@@ -143,11 +143,34 @@ abstract class Controller
      */
     protected function homeTitleSql(string $alias, string $titleExpr): string
     {
+        // Config homes_site_name_orj_ad: villanin sitedeki adi homes.orj_ad doluysa orj_ad, bossa baslik
+        // (kolon sitede yoksa ayar yok sayilir).
+        if (!empty($this->app['homes_site_name_orj_ad']) && $this->homesHasOrjAd()) {
+            $titleExpr = "ISNULL(NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(500), {$alias}.orj_ad))), ''), {$titleExpr})";
+        }
         if (empty($this->app['homes_title_use_code'])) {
             return $titleExpr;
         }
 
         return "ISNULL(NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(255), {$alias}.evkodu))), ''), {$titleExpr})";
+    }
+
+    /** @var bool|null homes.orj_ad kolonu var mi (istek boyunca bir kez bakilir) */
+    private $homesHasOrjAdCache = null;
+
+    private function homesHasOrjAd(): bool
+    {
+        if ($this->homesHasOrjAdCache === null) {
+            try {
+                $this->homesHasOrjAdCache = (int) $this->db->pdo()->query(
+                    "SELECT CASE WHEN COL_LENGTH('dbo.homes', 'orj_ad') IS NULL THEN 0 ELSE 1 END"
+                )->fetchColumn() === 1;
+            } catch (\Throwable $e) {
+                $this->homesHasOrjAdCache = false;
+            }
+        }
+
+        return $this->homesHasOrjAdCache;
     }
 
     protected function gavelDurationSql(string $alias): string
