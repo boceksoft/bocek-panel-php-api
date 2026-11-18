@@ -358,6 +358,48 @@ final class KiralamatakvimiController extends Controller
     }
 
     /**
+     * Villanın Kiralama Takvimi ilanına bağlı WhatsApp grubu (ilan türü fark etmez; sadece okur).
+     * Rezervasyon durum pencerelerindeki "WhatsApp grubuna gönder" seçeneği yalnızca grup varsa gösterilir.
+     * hasGroup: true / false; Kiralama Takvimi'ne sorulamazsa null (bilinmiyor, seçenek eskisi gibi gösterilir).
+     *
+     * @Get("whatsapp/group")
+     * @query homesId int required Villa id'si
+     */
+    public function whatsappGroup(): void
+    {
+        $pdo = $this->db->pdo();
+        $connection = $this->connection($pdo, $this->homesId((int) $this->request->query('homesId', 0)));
+        if ($connection === null) {
+            $this->response->success(['connected' => false, 'hasGroup' => false, 'group' => null]);
+            return;
+        }
+
+        try {
+            $group = $this->ktApi($this->ktCredentials($pdo), 'GET', 'estate/whatsapp', ['estateId' => $connection['estateId']]);
+        } catch (HttpException $e) {
+            $this->response->success([
+                'connected' => true,
+                'estateId' => $connection['estateId'],
+                'hasGroup' => null,
+                'group' => null,
+                'error' => $e->getMessage(),
+            ]);
+            return;
+        }
+
+        $groupId = (int) ($group['WhatsappGroupId'] ?? $group['whatsappGroupId'] ?? 0);
+        $this->response->success([
+            'connected' => true,
+            'estateId' => $connection['estateId'],
+            'hasGroup' => $groupId > 0,
+            'group' => $groupId > 0 ? [
+                'whatsappGroupId' => $groupId,
+                'name' => (string) ($group['Name'] ?? $group['name'] ?? ''),
+            ] : null,
+        ]);
+    }
+
+    /**
      * Özel ilanın WhatsApp durumu: bağlı grup (yoksa null) ve grup listesini çekmek için seçilebilecek
      * numaralar (onaylı ve API key'i tanımlı olanlar; isMaster varsayılan seçimdir).
      *

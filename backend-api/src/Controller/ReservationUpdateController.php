@@ -89,6 +89,8 @@ final class ReservationUpdateController extends Controller
      * @body tur int 1 Ön ödeme, 2 Tamamı
      * @body odeme int Ödeme şekli 1-6
      * @body virtualPosId int Sanal POS (boş/0 = yok)
+     * @body taksit bool Taksite izin ver (kayitlar.taksit)
+     * @body taksitliVirtualPosId int Taksitli POS (kayitlar.InstallmentVirtualPosId; 0 = Otomatik, tüm bankalar)
      * @body listeFiyati number Liste (indirimsiz) fiyat (eskifiyat)
      * @body toplamTutar number Toplam (indirimli) fiyat
      * @body onOdeme number Ön ödeme
@@ -213,6 +215,15 @@ final class ReservationUpdateController extends Controller
             $pos = (int) $body['virtualPosId'];
             $set[$kayitlar['virtualposid']['name']] = $pos > 0 ? $pos : null;
             $labels[$kayitlar['virtualposid']['name']] = 'Sanal POS';
+        }
+        if (array_key_exists('taksit', $body) && isset($kayitlar['taksit'])) {
+            $set[$kayitlar['taksit']['name']] = filter_var($body['taksit'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+            $labels[$kayitlar['taksit']['name']] = 'Taksite izin';
+        }
+        if (array_key_exists('taksitliVirtualPosId', $body) && isset($kayitlar['installmentvirtualposid'])) {
+            // 0 = Otomatik: site taksit sorgusunda banka filtresi uygulamaz (NULL'da sorgu hata veriyordu).
+            $set[$kayitlar['installmentvirtualposid']['name']] = max(0, (int) $body['taksitliVirtualPosId']);
+            $labels[$kayitlar['installmentvirtualposid']['name']] = 'Taksitli POS';
         }
 
         // ------------------------------------------------------------ para birimi + tutarlar

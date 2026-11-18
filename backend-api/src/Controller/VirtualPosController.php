@@ -86,7 +86,52 @@ final class VirtualPosController extends Controller
             'seciliId' => $selectedId,
             'secenekler' => $options,
             'iyzico' => $iyzico,
+            'taksit' => $this->installmentOfReservation($reservation),
         ]);
+    }
+
+    /**
+     * Rezervasyonun taksit izni (kayitlar.taksit) ve taksitli POS'u (kayitlar.InstallmentVirtualPosId; 0/NULL = Otomatik).
+     * Kolonlardan biri yoksa null (ekranda gösterilmez).
+     *
+     * @return array{izin:bool,posId:int}|null
+     */
+    private function installmentOfReservation(array $reservation): ?array
+    {
+        $row = array_change_key_case($reservation, CASE_LOWER);
+        if (!array_key_exists('taksit', $row) || !array_key_exists('installmentvirtualposid', $row)) {
+            return null;
+        }
+
+        return [
+            'izin' => $this->truthy($row['taksit']),
+            'posId' => max(0, (int) ($row['installmentvirtualposid'] ?? 0)),
+        ];
+    }
+
+    /**
+     * Yeni rezervasyon: sitenin varsayılan taksit izni / taksitli POS'u (genel; Tanımlamalar > Ödeme Ayarları).
+     * kayitlar'da kolonlar yoksa null.
+     *
+     * @return array{izin:bool,posId:int}|null
+     */
+    private function installmentDefaults(PDO $pdo): ?array
+    {
+        $stmt = $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.kayitlar', 'taksit') IS NULL OR COL_LENGTH('dbo.kayitlar', 'InstallmentVirtualPosId') IS NULL THEN 0 ELSE 1 END");
+        if ((int) $stmt->fetchColumn() !== 1) {
+            return null;
+        }
+        $result = ['izin' => false, 'posId' => 0];
+        try {
+            $row = $pdo->query('SELECT TOP 1 * FROM genel')->fetch(PDO::FETCH_ASSOC) ?: [];
+        } catch (\Throwable $e) {
+            return $result;
+        }
+        $row = array_change_key_case($row, CASE_LOWER);
+        $result['izin'] = $this->truthy($row['defaultinstallment'] ?? null);
+        $result['posId'] = max(0, (int) ($row['defaultinstallmentvirtualposid'] ?? 0));
+
+        return $result;
     }
 
     /**
@@ -120,6 +165,7 @@ final class VirtualPosController extends Controller
             'seciliId' => $defaultId,
             'secenekler' => $options,
             'iyzico' => null,
+            'taksit' => $this->installmentDefaults($pdo),
         ]);
     }
 

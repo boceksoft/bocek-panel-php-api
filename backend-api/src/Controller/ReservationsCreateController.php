@@ -303,6 +303,14 @@ final class ReservationsCreateController extends Controller
         if ($defaultPos !== null) {
             $put('VirtualPosId', $defaultPos);
         }
+        // Taksit izni ve taksitli POS (genel; Tanımlamalar > Ödeme Ayarları). Ayar boşsa yazılmaz.
+        $installment = $this->defaultInstallmentSettings($pdo, $suffix);
+        if ($installment['taksit'] !== null) {
+            $put('taksit', $installment['taksit']);
+        }
+        if ($installment['pos'] !== null) {
+            $put('InstallmentVirtualPosId', $installment['pos']);
+        }
 
         // Tutarlar: panel biçiminde sıfır; fiyat hemen ardından reservation-update ile yazılır.
         $zero = $this->formatMoney(0, $currency);
@@ -441,6 +449,41 @@ final class ReservationsCreateController extends Controller
         }
 
         return null;
+    }
+
+    /**
+     * Varsayılan taksit izni (genel.DefaultInstallment) ve taksitli POS (genel.DefaultInstallmentVirtualPosId, NULL = Otomatik).
+     * defaultVirtualPos ile aynı kural: önce sitenin genel{dbtable}'ı, kolon yoksa genel.
+     *
+     * @return array{taksit:?int,pos:?int}
+     */
+    private function defaultInstallmentSettings(PDO $pdo, string $suffix): array
+    {
+        $result = ['taksit' => null, 'pos' => null];
+        foreach (array_unique([$suffix, '']) as $tableSuffix) {
+            $columns = $this->columns($pdo, 'dbo.genel' . $tableSuffix);
+            $hasInstallment = isset($columns['defaultinstallment']);
+            $hasPos = isset($columns['defaultinstallmentvirtualposid']);
+            if (!$hasInstallment && !$hasPos) {
+                continue;
+            }
+            try {
+                $row = $pdo->query('SELECT TOP 1 * FROM genel' . $tableSuffix)->fetch(PDO::FETCH_ASSOC) ?: [];
+            } catch (\PDOException $e) {
+                continue;
+            }
+            $row = array_change_key_case($row, CASE_LOWER);
+            if ($hasInstallment && $row['defaultinstallment'] !== null) {
+                $result['taksit'] = (int) $row['defaultinstallment'] === 1 ? 1 : 0;
+            }
+            if ($hasPos && (int) ($row['defaultinstallmentvirtualposid'] ?? 0) > 0) {
+                $result['pos'] = (int) $row['defaultinstallmentvirtualposid'];
+            }
+
+            return $result;
+        }
+
+        return $result;
     }
 
     /**
