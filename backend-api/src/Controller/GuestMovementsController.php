@@ -209,9 +209,11 @@ final class GuestMovementsController extends Controller
         $ownerNameSql = $this->ownerNameSql();
         $ownerPhoneSql = $this->ownerPhoneSql();
         $homeIdSql = $this->guestMovementsHomeIdSql();
+        $caretakerNameSql = $this->caretakerNameSql();
+        $caretakerPhoneSql = $this->caretakerPhoneSql();
 
         $sql = "  
-
+    
 SELECT
 
     d.id AS dolu_id,
@@ -245,6 +247,10 @@ CONCAT(k.id, ISNULL(REPLACE(CONVERT(varchar(5), k.islem_tarihi, 108), ':', ''), 
 LTRIM(RTRIM(CONCAT(ISNULL(es.ad, ''), ' ', ISNULL(es.soyad, '')))) AS villa_sahibi_ismi,
 
     REPLACE(ISNULL(es.tel, ''), ' ', '') AS villa_sahibi_teli,
+
+    {$caretakerNameSql} AS bakimci_adi,
+
+    {$caretakerPhoneSql} AS bakimci_teli,
 
     k.musteri AS musteri_adi,
 
@@ -331,6 +337,30 @@ ORDER BY
         unset($row);
 
         return $rows;
+    }
+
+    /**
+     * Villanin bakimci adi (homes.bakimciad). Kolon yoksa bos doner.
+     */
+    private function caretakerNameSql(): string
+    {
+        if (!$this->columnExists('dbo.homes', 'bakimciad')) {
+            return "N''";
+        }
+
+        return "LTRIM(RTRIM(ISNULL(CONVERT(nvarchar(255), h.bakimciad), N'')))";
+    }
+
+    /**
+     * Villanin bakimci telefonu (homes.bakimcitel, bosluklar silinir). Kolon yoksa bos doner.
+     */
+    private function caretakerPhoneSql(): string
+    {
+        if (!$this->columnExists('dbo.homes', 'bakimcitel')) {
+            return "''";
+        }
+
+        return "REPLACE(LTRIM(RTRIM(ISNULL(CONVERT(varchar(50), h.bakimcitel), ''))), ' ', '')";
     }
 
     private function ownerNameSql(): string
