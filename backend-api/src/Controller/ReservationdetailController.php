@@ -775,8 +775,18 @@ final class ReservationdetailController extends Controller
             $suffix,
             $this->pageIdSetting('reservation_my_reservations_page_id', $siteId, $suffix)
         );
-        if ($myReservationsPath === '') {
+        // Menü yer tutucusu ("#", "javascript:...") sayfa yolu değildir (kiralikvilladatatil: sayfalar id 3 = "#"
+        // → link https://site/#?authKey=... oluyordu, giriş yapılmıyordu).
+        $isPagePath = function (string $path): bool {
+            return $path !== '' && strpos($path, '#') === false && stripos($path, 'javascript:') !== 0;
+        };
+        if (!$isPagePath($myReservationsPath)) {
             $myReservationsPath = trim($g('rezervasyonlarimUrl'), '/');
+        }
+        if (!$isPagePath($myReservationsPath)) {
+            // Sabit yol yazılmaz: sayfa config'ten (reservation_my_reservations_page_id, ör. kiralikvilladatatil 694)
+            // ya da genel.rezervasyonlarimUrl'den gelmeli. Yoksa link boş kalır (WA butonu gönderilmez, hata görünür).
+            $myReservationsPath = '';
         }
         $linkDomain = $site['domain'] !== '' ? rtrim($site['domain'], '/') : $this->paymentDomain();
         $myReservationsLink = '';
