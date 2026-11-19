@@ -76,6 +76,11 @@ return [
     // Acikken ilan ekleme / duzenlemede (ASP panel gibi) "Villanin Orjinal Adi" alani ek alanlarda secilmese de cikar, orj_ad'a yazilir.
     'homes_real_name_orj_ad' => false,
 
+    // Villanin sitedeki adi (ilan listesindeki "Ad" kolonu, site aramasi / villa listesi basligi). false (varsayilan): homes.baslik.
+    // true: homes.orj_ad doluysa orj_ad, bossa homes.baslik. orj_ad kolonu sitede yoksa ayar yok sayilir.
+    // homes_title_use_code acikken kod yine once gelir.
+    'homes_site_name_orj_ad' => false,
+
     // Villa indirim turleri (indirimler.discountType); degerlerin anlami siteye gore degisir. Bkz. src/Support/HomesDiscountTypes.php
     //   options: value, label, payer (rezervasyonda kim karsilar: site | ev_sahibi | genel),
     //            base (price | commission: fiyat x KO x oran | owner_share: fiyat x (100 - KO) x oran).
@@ -444,6 +449,7 @@ return [
         'homes_gone_redirect' => 'bool',
         'homes_whatsapp_rez_takip' => 'bool',
         'homes_real_name_orj_ad' => 'bool',
+        'homes_site_name_orj_ad' => 'bool',
         'homes_extra_fields' => 'array',
         'homes_code' => 'array',
         'homes_empty_seasons' => 'array',
