@@ -821,11 +821,12 @@ final class HomesManagementDetailController extends Controller
         foreach ($rows as $row) {
             $extraPaymentPriceId = (int) ($row['ExtraPaymentPriceId'] ?? 0);
             $extraPaymentId = (int) ($row['legacy_extra_payment_id'] ?? 0);
-            $isOptional = (int) ($row['legacy_is_optional'] ?? 0);
+            // IsOptional: 0 zorunlu, 1 opsiyonel. Eski kayit yoksa opsiyonel sayilir (hesaba zaten girmez).
+            $isOptional = (int) ($row['legacy_is_optional'] ?? 1);
             $items[] = [
                 'extraPaymentPriceId' => $extraPaymentPriceId,
                 'extraPaymentId' => $extraPaymentId,
-                'durum' => $isOptional === 1 ? 'zorunlu' : 'opsiyonel',
+                'durum' => $isOptional === 0 ? 'zorunlu' : 'opsiyonel',
                 'season_id' => (int) ($row['SeasonId'] ?? 0),
                 'start_date' => $this->firstNonEmptyValue($row, ['start_date_formatted', 'StartDate']),
                 'end_date' => $this->firstNonEmptyValue($row, ['end_date_formatted', 'EndDate']),
