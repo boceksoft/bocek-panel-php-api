@@ -4576,7 +4576,7 @@ BEGIN
 
             /* firma kari = site kazanci (rezervasyon detayi hakedis onizlemesi ile ayni, 19.11.2026):
                liste fiyati x komisyon% - indirimin firmaya dusen kismi. Komisyon orani yoksa firma hakedisi (ovillam),
-               o da yoksa kayitlar.kar (0'dan buyukse). Eskiden kayitlar.kar onceydi: '0' yazilmis kayitlarda kar 0 cikiyordu. */
+               o da yoksa kayitlar.kar (sifirdan buyukse). Eskiden kayitlar.kar onceydi: sifir yazilmis kayitlarda kar 0 cikiyordu. */
             DECLARE @NEWkayitlarKar money       = isnull(TRY_CONVERT(money, replace(isnull(@kayitlarKar,''''),'','',''.'')),0);
             SET @kazancTutari                   = (case
                                                     when @kazancorani > 0 then @NEWsatisbedeli/100*@kazancorani-@indirimSite
