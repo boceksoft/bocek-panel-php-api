@@ -1,10 +1,11 @@
 /* =====================================================================================
    kayitlar_odeme TOPLU YENIDEN HESAPLAMA  —  SSMS'te ELLE calistirilir (Setup Calistir'a dahil degil)
    -------------------------------------------------------------------------------------
-   Mantik tutarAktar trigger'i ile birebir ayni (setup-collums.sql, 02.11.2026):
+   Mantik tutarAktar trigger'i ile birebir ayni (setup-collums.sql, 02.11.2026; kar kurali 19.11.2026):
      - indirim kim karsiladi: ayrik tutarlar (sitesahibi_indirimi / evsahibi_indirimi), toplamlari gercek indirime
        esitse (yuvarlama payi 2); degilse kayitlar.indirimevsahibi bayragi
-     - kar (kazanc_tutari): kayitlar.kar > evsahibi_hakedis (firma hakedisi) > satis x komisyon% - site indirimi
+     - kar (kazanc_tutari) = site kazanci (19.11.2026, rezervasyon detayi ile ayni):
+       komisyon% > 0 ise satis x komisyon% - site indirimi; yoksa evsahibi_hakedis (firma hakedisi) > kayitlar.kar (> 0)
      - evsahibi_kazanc_tutari = toplam_tutar - kar   (eskiden satis - kar; indirim kadar fazla cikiyordu)
      - evsahibi_kalan = on_odeme - kar
    Sitede olmayan kolonlar (orn. vv'de sitesahibi_indirimi) NULL sayilir; script her sitede calisir.
@@ -159,10 +160,12 @@ CROSS APPLY (SELECT
         when s.flag = 1 then i.ind
         else 0 end
 ) sh
+CROSS APPLY (SELECT kar_m = isnull(TRY_CONVERT(money, replace(isnull(s.kar, ''), ',', '.')), 0)) km
 CROSS APPLY (SELECT kazanc = case
-    when not isnull(s.kar, '') = '' then isnull(TRY_CONVERT(money, s.kar), 0)
+    when s.kazancorani > 0 then m.satis_m / 100 * s.kazancorani - sh.indirim_site
     when m.spHakedis > 0 then m.spHakedis
-    else m.satis_m / 100 * s.kazancorani - sh.indirim_site end
+    when km.kar_m > 0 then km.kar_m
+    else 0 - sh.indirim_site end
 ) kz;
 
 /* 5) Onizleme: degisecek kayitlar */

@@ -312,8 +312,8 @@ final class ReservationOperationsController extends Controller
             throw new HttpException('Geçerli bir engel süresi seçin.', 'VALIDATION', 422);
         }
 
-        $row = $this->fetchOne($pdo, 'SELECT ip FROM kayitlar WHERE id = :id', [':id' => $id]) ?: [];
-        $ip = trim((string) ($row['ip'] ?? ''));
+        $row = $this->fetchOne($pdo, 'SELECT * FROM kayitlar WHERE id = :id', [':id' => $id]) ?: [];
+        $ip = $this->reservationIpFromRow($row);
         if ($ip === '') {
             throw new HttpException('Bu rezervasyonda kayıtlı IP adresi yok.', 'VALIDATION', 422);
         }
@@ -371,6 +371,28 @@ BEGIN
         [modifiedDate] datetime NULL CONSTRAINT [DF_blockList_modifiedDate] DEFAULT GETDATE()
     );
 END;");
+    }
+
+    /**
+     * Rezervasyonun IP adresi: kayitlar.ip, bos ise kayitlar.ipAddress (ovillam vb. sitelerde IP bu kolonda).
+     * Virgullu liste gelirse (proxy zinciri) ilk adres alinir.
+     *
+     * @param array<string,mixed> $row
+     */
+    private function reservationIpFromRow(array $row): string
+    {
+        $values = [];
+        foreach ($row as $key => $value) {
+            $values[strtolower((string) $key)] = $value;
+        }
+        foreach (['ip', 'ipaddress'] as $key) {
+            $ip = trim(explode(',', (string) ($values[$key] ?? ''))[0]);
+            if ($ip !== '') {
+                return $ip;
+            }
+        }
+
+        return '';
     }
 
     /**

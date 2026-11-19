@@ -140,7 +140,10 @@ final class ReservationdetailController extends Controller
 
         // IP engeli (dbo.blockList, eski panel). Tablo olmayan sitede boş; ilk engellemede oluşturulur (reservation-operations/ip-block).
         $blockInfo = [];
-        $reservationIp = trim((string) ($reservation['ip'] ?? ''));
+        $reservationIp = is_array($reservation) ? $this->reservationIpFromRow($reservation) : '';
+        if (is_array($reservation) && $reservationIp !== '' && trim((string) ($reservation['ip'] ?? '')) === '') {
+            $reservation['ip'] = $reservationIp;
+        }
         $blockListExists = $this->tableColumns($pdo, 'dbo', 'blockList') !== [];
         if ($reservationIp !== '' && $blockListExists) {
             $blockInfo = $this->fetchAll(
@@ -1971,6 +1974,28 @@ final class ReservationdetailController extends Controller
         }
 
         return $missing;
+    }
+
+    /**
+     * Rezervasyonun IP adresi: kayitlar.ip, bos ise kayitlar.ipAddress (ovillam vb. sitelerde IP bu kolonda).
+     * Virgullu liste gelirse (proxy zinciri) ilk adres alinir.
+     *
+     * @param array<string,mixed> $row
+     */
+    private function reservationIpFromRow(array $row): string
+    {
+        $values = [];
+        foreach ($row as $key => $value) {
+            $values[strtolower((string) $key)] = $value;
+        }
+        foreach (['ip', 'ipaddress'] as $key) {
+            $ip = trim(explode(',', (string) ($values[$key] ?? ''))[0]);
+            if ($ip !== '') {
+                return $ip;
+            }
+        }
+
+        return '';
     }
 
     /**
