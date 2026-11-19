@@ -2550,6 +2550,9 @@ final class HomesManagementPricesController extends Controller
     /**
      * @param array<string,mixed> $row
      */
+    /**
+     * HomesExtraPayments.IsOptional: 0 zorunlu, 1 opsiyonel (eski panel doldur.asp ve CalculateController ile ayni).
+     */
     private function legacyExtraPaymentIsOptional(array $row, int $typeIsIncluded): int
     {
         foreach (['durum', 'status'] as $key) {
@@ -2559,10 +2562,10 @@ final class HomesManagementPricesController extends Controller
 
             $value = strtolower(trim((string) $row[$key]));
             if (in_array($value, ['zorunlu', 'required', 'mandatory', '1', 'true'], true)) {
-                return 1;
+                return 0;
             }
             if (in_array($value, ['opsiyonel', 'optional', '0', 'false'], true)) {
-                return 0;
+                return 1;
             }
         }
 

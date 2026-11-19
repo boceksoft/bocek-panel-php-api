@@ -4184,8 +4184,11 @@ WHERE k.odeme = {$paymentType}
         }
 
         if ($search !== '') {
-            $where[] = '(k.musteri LIKE :search OR k.adi LIKE :search OR CAST(k.id AS varchar) LIKE :search)';
-            $params[':search'] = '%' . $search . '%';
+            // sqlsrv aynı isimli parametrenin tekrarını desteklemez (COUNT field incorrect); her biri ayrı.
+            $where[] = '(k.musteri LIKE :search1 OR k.adi LIKE :search2 OR CAST(k.id AS varchar(20)) LIKE :search3)';
+            $params[':search1'] = '%' . $search . '%';
+            $params[':search2'] = '%' . $search . '%';
+            $params[':search3'] = '%' . $search . '%';
         }
 
         $whereSql = implode(' AND ', $where);
@@ -4393,23 +4396,28 @@ WHERE k.odeme = {$paymentType}
             }
             $kalanOdeme = round($kalanRaw * $kur, 2);
 
-            $karRaw = 0.0;
-            if (isset($r['ko_kazanc_tutari']) && is_numeric($r['ko_kazanc_tutari']) && (float) $r['ko_kazanc_tutari'] > 0) {
+            // Kar (site kazanci) ve hesap ev sahibi (on odeme - kar) kayitlar_odeme'den okunur; hesabi tutarAktar
+            // trigger'i yapar (liste x komisyon% - site indirimi, rezervasyon detayi ile ayni). Rapor yeniden hesaplamaz.
+            // kayitlar_odeme satiri yoksa (tablo yok / kayit henuz aktarilmamis) ayni kuralla yedek hesap.
+            $hasKoRow = isset($r['ko_kazanc_tutari']) && is_numeric($r['ko_kazanc_tutari']);
+            if ($hasKoRow) {
                 $karRaw = (float) $r['ko_kazanc_tutari'];
-            } elseif (isset($r['k_kar']) && is_numeric($r['k_kar']) && (float) $r['k_kar'] > 0) {
-                $karRaw = (float) $r['k_kar'];
+                $hesapEvsahibiRaw = isset($r['ko_evsahibi_kalan']) && is_numeric($r['ko_evsahibi_kalan'])
+                    ? (float) $r['ko_evsahibi_kalan']
+                    : $onOdemeRaw - $karRaw;
             } else {
                 $kazancOrani = (float) ($r['k_kazancorani'] ?? 0);
-                $karRaw = $toplamTutarRaw * ($kazancOrani / 100);
+                $indirimSiteRaw = $indirimKim === 'E' ? 0.0 : $indirimRaw;
+                if ($kazancOrani > 0) {
+                    $karRaw = round($asilFiyatiRaw * $kazancOrani / 100 - $indirimSiteRaw, 2);
+                } elseif (isset($r['k_kar']) && is_numeric($r['k_kar']) && (float) $r['k_kar'] > 0) {
+                    $karRaw = (float) $r['k_kar'];
+                } else {
+                    $karRaw = 0.0 - $indirimSiteRaw;
+                }
+                $hesapEvsahibiRaw = $onOdemeRaw - $karRaw;
             }
             $kar = round($karRaw * $kur, 2);
-
-            $hesapEvsahibiRaw = 0.0;
-            if (isset($r['ko_evsahibi_kalan']) && is_numeric($r['ko_evsahibi_kalan'])) {
-                $hesapEvsahibiRaw = (float) $r['ko_evsahibi_kalan'];
-            } else {
-                $hesapEvsahibiRaw = $toplamTutarRaw - $karRaw;
-            }
             $hesapEvsahibi = round($hesapEvsahibiRaw * $kur, 2);
 
             $odemeVal = (int) ($r['odeme'] ?? 0);

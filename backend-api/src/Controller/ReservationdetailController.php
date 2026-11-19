@@ -140,7 +140,10 @@ final class ReservationdetailController extends Controller
 
         // IP engeli (dbo.blockList, eski panel). Tablo olmayan sitede boş; ilk engellemede oluşturulur (reservation-operations/ip-block).
         $blockInfo = [];
-        $reservationIp = trim((string) ($reservation['ip'] ?? ''));
+        $reservationIp = is_array($reservation) ? $this->reservationIpFromRow($reservation) : '';
+        if (is_array($reservation) && $reservationIp !== '' && trim((string) ($reservation['ip'] ?? '')) === '') {
+            $reservation['ip'] = $reservationIp;
+        }
         $blockListExists = $this->tableColumns($pdo, 'dbo', 'blockList') !== [];
         if ($reservationIp !== '' && $blockListExists) {
             $blockInfo = $this->fetchAll(
@@ -775,8 +778,18 @@ final class ReservationdetailController extends Controller
             $suffix,
             $this->pageIdSetting('reservation_my_reservations_page_id', $siteId, $suffix)
         );
-        if ($myReservationsPath === '') {
+        // Menü yer tutucusu ("#", "javascript:...") sayfa yolu değildir (kiralikvilladatatil: sayfalar id 3 = "#"
+        // → link https://site/#?authKey=... oluyordu, giriş yapılmıyordu).
+        $isPagePath = function (string $path): bool {
+            return $path !== '' && strpos($path, '#') === false && stripos($path, 'javascript:') !== 0;
+        };
+        if (!$isPagePath($myReservationsPath)) {
             $myReservationsPath = trim($g('rezervasyonlarimUrl'), '/');
+        }
+        if (!$isPagePath($myReservationsPath)) {
+            // Sabit yol yazılmaz: sayfa config'ten (reservation_my_reservations_page_id, ör. kiralikvilladatatil 694)
+            // ya da genel.rezervasyonlarimUrl'den gelmeli. Yoksa link boş kalır (WA butonu gönderilmez, hata görünür).
+            $myReservationsPath = '';
         }
         $linkDomain = $site['domain'] !== '' ? rtrim($site['domain'], '/') : $this->paymentDomain();
         $myReservationsLink = '';
@@ -1961,6 +1974,28 @@ final class ReservationdetailController extends Controller
         }
 
         return $missing;
+    }
+
+    /**
+     * Rezervasyonun IP adresi: kayitlar.ip, bos ise kayitlar.ipAddress (ovillam vb. sitelerde IP bu kolonda).
+     * Virgullu liste gelirse (proxy zinciri) ilk adres alinir.
+     *
+     * @param array<string,mixed> $row
+     */
+    private function reservationIpFromRow(array $row): string
+    {
+        $values = [];
+        foreach ($row as $key => $value) {
+            $values[strtolower((string) $key)] = $value;
+        }
+        foreach (['ip', 'ipaddress'] as $key) {
+            $ip = trim(explode(',', (string) ($values[$key] ?? ''))[0]);
+            if ($ip !== '') {
+                return $ip;
+            }
+        }
+
+        return '';
     }
 
     /**
