@@ -583,7 +583,7 @@ SELECT
           AND '{$start}' BETWEEN {$anyTarih1} AND {$anyTarih2}
         ORDER BY id DESC
     ), 0) AS temizlikGece,
-    ISNULL((
+    ISNULL(( 
         SELECT TOP 1 temizlikFiyat
         FROM sezonlar
         WHERE site = {$priceSite}
@@ -591,12 +591,13 @@ SELECT
           AND islem = 'emlak'
           AND '{$start}' BETWEEN {$anyTarih1} AND {$anyTarih2}
         ORDER BY id DESC
-    ), 0) * COALESCE(RD2.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS temizlikFiyat,
+    ), 0) * COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS temizlikFiyat,
     CASE WHEN h.kur{$uzanti} > 0 THEN h.kur{$uzanti} ELSE 0 END AS kur,
     h.depozito{$depozitoSuffix} AS depozito,
     dbo.FnRandomSplit(h.resim{$uzanti}, ',') AS resim,
     " . $this->homeTitleSql('h', "h.baslik{$uzanti}") . " AS baslik,
-    h.hasar{$uzanti} AS hasar,
+    -- Temizlik ucreti ve hasar depozitosu villanin dovizinde girilir (fiyat gibi); hedef dovize cevrilir.
+    ISNULL(TRY_CONVERT(decimal(18, 2), NULLIF(CONVERT(varchar(64), h.hasar{$uzanti}), '')), 0) * COALESCE(RD.Buy, NULLIF(h.kur{$uzanti}, 0), 1) AS hasar,
     h.kazancorani{$uzanti} AS kazancorani,
     ISNULL(ToC.CurrencyName, h.doviz{$uzanti}) AS CurrencyName,
     ISNULL(ToC.CurrencyCode, h.doviz{$uzanti}) AS CurrencyCode,

@@ -8,10 +8,16 @@ declare(strict_types=1);
  * dosyasından gelir. Bu dosya repoya girebilir. test4
  */
 
-return [
+return [ 
     // true: ilan detayinda birden fazla kapak fotografi secilebilir; homes.resim'e virgulle yazilir ("a.jpg,b.jpg,c.jpg").
     // false (varsayilan): tek kapak. Villa Kiralama > Config ekranindan degistirilir.
     'homes_two_cover_images' => false,
+
+    // Teklif Al / katalog villa aramasinda kisi filtresi.
+    // true: secilen kisi sayisini alan tum villalar (kapasite >= kisi; 2 kisi -> 2, 3, 4, 5... kisilik).
+    // false (varsayilan): eski panel (ASP) araligi; 1 -> 1-2, cift -> kisi..kisi+2 (2 -> 2-4), tek -> kisi-1..kisi+1.
+    // Villa Kiralama > Config ekranindan degistirilir.
+    'homes_search_capacity_at_least' => false,
 
     // true: villa adi donen yerlerde (ilan listesi, katalog, rezervasyonlar, raporlar...) ad yerine homes.evkodu gosterilir;
     // evkodu bossa ad kullanilir. false (varsayilan): villa adi. Villa Kiralama > Config ekranindan degistirilir.
@@ -443,6 +449,7 @@ return [
     // deploy_secret, github_token ve DB bilgileri bilerek burada yok.
     'editable_local_settings' => [
         'homes_two_cover_images' => 'bool',
+        'homes_search_capacity_at_least' => 'bool',
         'homes_title_use_code' => 'bool',
         'homes_fake_discount' => 'bool',
         'homes_featured_features' => 'bool',

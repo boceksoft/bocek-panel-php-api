@@ -374,6 +374,8 @@ WHERE {$whereSql}
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $total = $rows ? (int) $rows[0]['totalCount'] : 0;
         $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
+        // Sitenin adresi (villa linki icin), HomesController ile ayni kaynak
+        $siteDomain = $this->siteDomain($pdo, $siteId);
         foreach ($rows as &$row) {
             unset($row['totalCount']);
             // Villa fotograflari yeni CDN yapisinda (/property/small/{villaId}/)
@@ -383,6 +385,8 @@ WHERE {$whereSql}
                 'site_id' => (int) $row['site_id'],
                 'code' => (string) $row['code'],
                 'url' => (string) ($row['url'] ?? ''),
+                // Villanin sitedeki tam linki (ilan listesindeki link butonu)
+                'link' => $this->homeLink((string) ($row['url'] ?? ''), $siteDomain),
                 'is_draft' => (int) ($row['is_draft'] ?? 0) === 1,
                 'title' => (string) $row['title'],
                 'gavel_title' => (string) $row['gavel_title'],
@@ -627,6 +631,58 @@ WHERE {$whereSql}
         }
 
         return defined('PRICE_SITE') ? max(1, (int) constant('PRICE_SITE')) : 1;
+    }
+
+    // Sitenin adresi (HomesController ile ayni): site 1 Domain sabiti, diger siteler config homes_site_domain_queries
+    // (orn. 2 => 'SELECT TOP 1 domain FROM genel_s2'); bos/hatali ise Domain.
+    private function siteDomain(PDO $pdo, int $siteId): string
+    {
+        $fallback = defined('Domain') ? $this->normalizeDomain((string) constant('Domain')) : '';
+        if ($siteId <= 1) {
+            return $fallback;
+        }
+
+        $queries = $this->app['homes_site_domain_queries'] ?? [];
+        $query = is_array($queries)
+            ? (string) ($queries[$siteId] ?? ($queries[(string) $siteId] ?? ''))
+            : '';
+        if (trim($query) === '') {
+            return $fallback;
+        }
+
+        try {
+            $row = $pdo->query($query)->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            return $fallback;
+        }
+        if (!is_array($row)) {
+            return $fallback;
+        }
+
+        $domain = trim((string) ($row['domain'] ?? reset($row)));
+
+        return $domain !== '' ? $this->normalizeDomain($domain) : $fallback;
+    }
+
+    private function normalizeDomain(string $domain): string
+    {
+        $domain = rtrim(trim($domain), '/');
+        if ($domain !== '' && preg_match('#^https?://#i', $domain) !== 1) {
+            $domain = 'https://' . $domain;
+        }
+
+        return $domain;
+    }
+
+    // Villa url'si (homes.url) -> sitedeki tam link; zaten tam adresse aynen doner.
+    private function homeLink(string $url, string $domain): string
+    {
+        $url = trim($url);
+        if ($url === '' || preg_match('#^https?://#i', $url) === 1) {
+            return $url;
+        }
+
+        return $domain !== '' ? $domain . '/' . ltrim($url, '/') : '';
     }
 
     private function siteSuffix(int $siteId): string

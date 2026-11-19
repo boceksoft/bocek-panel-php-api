@@ -123,20 +123,20 @@ final class HomesController extends Controller
             }
         }
 
-        // Fiyat aralığı (ASP birebir)
+        // Fiyat aralığı (ASP birebir): hazır aralıklar da min/max gibi seçilen dövizdedir, TL'ye çevrilir
+        // (ASP: doviz_cevir(min, doviz, "tl")).
         if ($priceType === 1) {
-            $minTL = 1;
-            $maxTL = 20000;
+            $min = 1;
+            $max = 20000;
         } elseif ($priceType === 2) {
-            $minTL = 20000;
-            $maxTL = 50000;
+            $min = 20000;
+            $max = 50000;
         } elseif ($priceType === 3) {
-            $minTL = 50000;
-            $maxTL = 100000;
-        } else {
-            $minTL = (int) round($min * $hedefKur);
-            $maxTL = (int) round($max * $hedefKur);
+            $min = 50000;
+            $max = 100000;
         }
+        $minTL = (int) round($min * $hedefKur);
+        $maxTL = (int) round($max * $hedefKur);
 
         $kisi = $this->pInt('kisi', 0);
         $tipx = $this->multiQuery('tip');
@@ -320,15 +320,19 @@ final class HomesController extends Controller
         }
 
         if ($maxTL > 0) {
-            $sql .= " AND (fiyatlar_num.sqfiyat + ISNULL(cleaning_fee.val, 0)) * rate_num.rate BETWEEN {$minTL} AND {$maxTL}";
+            // ASP ile ayni: sadece konaklama fiyati (temizlik ucreti dahil degil) x kur.
+            $sql .= " AND fiyatlar_num.sqfiyat * rate_num.rate BETWEEN {$minTL} AND {$maxTL}";
         }
 
         $orderByEk = '';
         if ($kisi > 0) {
             $orderByEk = ' h.kisi ASC, ';
 
-            // Kişi sayısı aralığı (ASP ile aynı mantık).
-            if ($kisi === 1) {
+            // Kişi filtresi: config homes_search_capacity_at_least açıksa kişi sayısını alan tüm villalar,
+            // kapalıysa kişi sayısı aralığı (ASP ile aynı mantık).
+            if (!empty($this->app['homes_search_capacity_at_least'])) {
+                $sql .= " AND h.kisi >= {$kisi}";
+            } elseif ($kisi === 1) {
                 $sql .= " AND (h.kisi = 1 OR h.kisi = 2)";
             } elseif ($kisi % 2 === 0) {
                 $kisiMax = $kisi + 2;
@@ -898,10 +902,10 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
                 $clause = $orderByEk . $gelismis . ' h.id DESC';
                 break;
             case 3:
-                $clause = $orderByEk . $gelismis . ' (fiyatlar_num.sqfiyat + ISNULL(cleaning_fee.val, 0)) * rate_num.rate ASC';
+                $clause = $orderByEk . $gelismis . ' fiyatlar_num.sqfiyat * rate_num.rate ASC';
                 break;
             case 4:
-                $clause = $orderByEk . $gelismis . ' (fiyatlar_num.sqfiyat + ISNULL(cleaning_fee.val, 0)) * rate_num.rate DESC';
+                $clause = $orderByEk . $gelismis . ' fiyatlar_num.sqfiyat * rate_num.rate DESC';
                 break;
             case 5:
                 $clause = $gelismis . ' h.kisi ASC, h.siralama ASC';

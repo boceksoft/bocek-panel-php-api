@@ -344,7 +344,14 @@ final class HomesManagementPoolsController extends Controller
 
             $param = ':p_' . $valueKey;
             $updates[] = $column . ' = ' . $param;
-            $params[$param] = $values[$valueKey] ?? null;
+            $value = $values[$valueKey] ?? null;
+            // Olculer havuztanimlamari'na metin olarak yazilir (orn. "4 M", "1.20-1.80 M"). homes'taki eski kolon
+            // bazi panellerde sayisal olabilir: oraya metnin icindeki ilk sayi yazilir, sayi yoksa NULL.
+            if (in_array($valueKey, ['uzunluk', 'genislik', 'derinlik'], true) && is_string($value)
+                && $this->isNumericColumn($pdo, 'homes', $column)) {
+                $value = preg_match('/\d+(?:[.,]\d+)?/', $value, $m) === 1 ? str_replace(',', '.', $m[0]) : null;
+            }
+            $params[$param] = $value;
         }
 
         if ($updates === []) {
@@ -534,6 +541,18 @@ final class HomesManagementPoolsController extends Controller
         ]);
 
         return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function isNumericColumn(PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            "SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = :table AND COLUMN_NAME = :column"
+        );
+        $stmt->execute([':table' => $table, ':column' => $column]);
+        $type = strtolower((string) $stmt->fetchColumn());
+
+        return in_array($type, ['int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney'], true);
     }
 
     private function columnExists(PDO $pdo, string $schema, string $table, string $column): bool
