@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Core\HttpException;
+use App\Support\ReservationDiscountModel;
 use DateTime;
 use PDO;
 
@@ -4332,6 +4333,9 @@ WHERE k.odeme = {$paymentType}
         $sumKalan = 0.0;
         $sumKar = 0.0;
 
+        $netCommissionBase = ReservationDiscountModel::commissionBase(
+            ReservationDiscountModel::config(is_array($this->app['reservation_discount'] ?? null) ? $this->app['reservation_discount'] : [])
+        ) === 'net';
         foreach ($rows as $r) {
             $kur = 1.0;
             if (isset($r['ko_kur']) && is_numeric($r['ko_kur']) && (float) $r['ko_kur'] > 0) {
@@ -4365,7 +4369,27 @@ WHERE k.odeme = {$paymentType}
                 : max(0.0, $asilFiyatiRaw - $toplamTutarRaw);
             $indirim = round($indirimRaw * $kur, 2);
 
-            $indirimKim = ((int) ($r['k_indirimevsahibi'] ?? 0) === 1 || $indirimEvsahibi > 0) ? 'E' : ($indirimSite > 0 ? 'S' : '');
+            // Indirimin taraflara dagilimi (kayitlar_odeme.indirim_site / indirim_evsahibi; ikisi birden olabilir).
+            // kayitlar_odeme yoksa indirimevsahibi bayragi: tamami ev sahibi ya da tamami site.
+            if (($indirimSite + $indirimEvsahibi) > 0) {
+                $indirimSitePay = $indirimSite;
+                $indirimEvsahibiPay = $indirimEvsahibi;
+            } elseif ((int) ($r['k_indirimevsahibi'] ?? 0) === 1) {
+                $indirimSitePay = 0.0;
+                $indirimEvsahibiPay = $indirimRaw;
+            } else {
+                $indirimSitePay = $indirimRaw;
+                $indirimEvsahibiPay = 0.0;
+            }
+            // Net komisyon tabani (kayakoyvillas): S = acente indirimi, E = ev sahibi indirimi (liste fiyatindan); kayitli
+            // paylar (site = ev sahibi ind. x KO% + acente) girilen tutarlara cevrilir, "firma indirimi" gibi gorunmez.
+            if ($netCommissionBase && $indirimSitePay + $indirimEvsahibiPay > 0) {
+                $view = ReservationDiscountModel::netView($indirimSitePay, $indirimEvsahibiPay, (float) ($r['k_kazancorani'] ?? 0));
+                $indirimSitePay = $view['agency'];
+                $indirimEvsahibiPay = $view['owner_list'];
+            }
+            $indirimKim = $indirimRaw <= 0 ? ''
+                : ($indirimSitePay > 0 && $indirimEvsahibiPay > 0 ? 'S+E' : ($indirimEvsahibiPay > 0 ? 'E' : 'S'));
             $indirimYuzde = ($asilFiyati > 0 && $indirim > 0) ? (int) round(($indirim / $asilFiyati) * 100) : 0;
             $indirimFormatted = number_format($indirim, 0, ',', '.') . ' TL';
             if ($indirimYuzde > 0) {
@@ -4407,7 +4431,7 @@ WHERE k.odeme = {$paymentType}
                     : $onOdemeRaw - $karRaw;
             } else {
                 $kazancOrani = (float) ($r['k_kazancorani'] ?? 0);
-                $indirimSiteRaw = $indirimKim === 'E' ? 0.0 : $indirimRaw;
+                $indirimSiteRaw = $indirimSitePay;
                 if ($kazancOrani > 0) {
                     $karRaw = round($asilFiyatiRaw * $kazancOrani / 100 - $indirimSiteRaw, 2);
                 } elseif (isset($r['k_kar']) && is_numeric($r['k_kar']) && (float) $r['k_kar'] > 0) {
@@ -4495,6 +4519,8 @@ WHERE k.odeme = {$paymentType}
                 'indirim_formatted' => $indirimFormatted,
                 'indirim_kim' => $indirimKim,
                 'indirim_yuzde' => $indirimYuzde,
+                'indirim_site' => round($indirimSitePay * $kur, 2),
+                'indirim_evsahibi' => round($indirimEvsahibiPay * $kur, 2),
                 'on_odeme' => $onOdeme,
                 'on_odeme_formatted' => number_format($onOdeme, 0, ',', '.') . ' TL',
                 'kalan_odeme' => $kalanOdeme,

@@ -326,6 +326,11 @@ return [
             'firm_payout' => 'evsahibi_hakedis',    // firma hakedişi = liste × komisyon% − firma indirimi
             'owner_payable' => 'evsahibi_odenecek', // ev sahibine ödenecek = ön ödeme − firma hakedişi
         ],
+        // Komisyon tabanı: 'gross' (varsayılan) komisyon indirimsiz liste fiyatından. 'net' (kayakoyvillas): ev sahibi
+        // indirimi önce liste fiyatından düşer, komisyon kalandan alınır; acente indirimi komisyondan düşer. Ekranda
+        // kutular "Ev sahibi indirimi" / "Acente indirimi" olur; kayıt (sitesahibi_indirimi / evsahibi_indirimi,
+        // kayitlar_odeme) ortak modelle aynı: firma = ev sahibi ind. × KO% + acente ind. Tutar kolonları gerekir.
+        'owner_discount_commission_base' => 'gross',
         'commission_column' => 'kazancorani',
         'villa_commission_column' => 'kazancorani', // rezervasyonda oran yoksa villanın (homes, site sonekli) oranı
         'villa_down_payment_column' => 'depozito',  // villanın ön ödeme oranı (homes; site_field_suffixes.depozito)

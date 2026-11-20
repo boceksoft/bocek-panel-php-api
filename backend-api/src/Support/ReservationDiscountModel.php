@@ -35,6 +35,12 @@ final class ReservationDiscountModel
             'firm_payout' => 'evsahibi_hakedis',    // (ovillam) firma hakedisi = liste x KO% - firma indirimi
             'owner_payable' => 'evsahibi_odenecek', // (ovillam) ev sahibine odenecek = on odeme - firma hakedisi
         ],
+        // Komisyon tabani (sadece gosterim / giris; kayit ve kayitlar_odeme ayni kalir):
+        //   gross: komisyon indirimsiz liste fiyatindan (varsayilan).
+        //   net  : ev sahibi indirimi once liste fiyatindan duser, komisyon kalandan; acente indirimi komisyondan
+        //          (kayakoyvillas). Kayit: site = ev sahibi ind. x KO% + acente ind., owner = ev sahibi ind. x (1 - KO%).
+        //          Ekranda / raporda netView ile girilen iki tutara geri cevrilir.
+        'owner_discount_commission_base' => 'gross',
     ];
 
     private const KEYS = [self::SITE => 'site', self::OWNER => 'ev_sahibi', self::GENERAL => 'genel'];
@@ -199,6 +205,31 @@ final class ReservationDiscountModel
         $cols = is_array($cfg['split_columns'] ?? null) ? $cfg['split_columns'] : [];
 
         return $has((string) ($cols['site'] ?? '')) && $has((string) ($cols['owner'] ?? ''));
+    }
+
+    /** 'net' | 'gross'. Net ancak tutar kolonlari varsa anlamli (cagiran supportsAmounts ile kontrol eder). */
+    public static function commissionBase(array $cfg): string
+    {
+        return ($cfg['owner_discount_commission_base'] ?? 'gross') === 'net' ? 'net' : 'gross';
+    }
+
+    /**
+     * Net komisyon tabaninda kayitli paylardan girilen tutarlara: ev sahibi indirimi (liste fiyatindan) ve acente
+     * indirimi (komisyondan). Ornek KO %20, site 1.200 / owner 800 -> ev sahibi 1.000, acente 1.000. Toplam korunur.
+     *
+     * @return array{owner_list:float,agency:float}
+     */
+    public static function netView(float $site, float $owner, float $commissionRate): array
+    {
+        $site = max(0.0, $site);
+        $owner = max(0.0, $owner);
+        $r = min(1.0, max(0.0, $commissionRate / 100));
+        if ($r >= 1.0) {
+            return ['owner_list' => $owner, 'agency' => $site];
+        }
+        $ownerList = round($owner / (1 - $r), 2);
+
+        return ['owner_list' => $ownerList, 'agency' => max(0.0, round($site + $owner - $ownerList, 2))];
     }
 
     /** Eski fiyat - toplam (eski fiyat bos/0 ise 0). */

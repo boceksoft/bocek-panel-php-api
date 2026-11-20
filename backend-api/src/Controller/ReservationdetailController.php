@@ -361,6 +361,8 @@ final class ReservationdetailController extends Controller
                 // Yeni indirimin baslangic bolusumu: villa indirim turu kapaliysa (homes_discount_type = false, ovillam)
                 // site gibi orantili (genel), degilse tamami firma.
                 'varsayilanKarsilayan' => $supportsGeneral && !($this->app['homes_discount_type'] ?? true) ? 'genel' : 'site',
+                // net: kutular ev sahibi / acente indirimi, komisyon ev sahibi indirimi sonrasi (tutar kolonlari gerekir).
+                'komisyonTabani' => $supportsGeneral ? ReservationDiscountModel::commissionBase($cfg) : 'gross',
             ],
             'toplamTutar' => $total,
             // eskifiyat boş/0 ise indirim yok sayılır (panel: boşsa toplam_tutar yazılır).

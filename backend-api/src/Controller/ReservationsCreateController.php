@@ -154,6 +154,7 @@ final class ReservationsCreateController extends Controller
                     'genel' => $supportsGeneral,
                     'tutarlar' => $supportsGeneral,
                     'varsayilanKarsilayan' => $supportsGeneral && !($this->app['homes_discount_type'] ?? true) ? 'genel' : 'site',
+                    'komisyonTabani' => $supportsGeneral ? ReservationDiscountModel::commissionBase($discount) : 'gross',
                 ],
             ],
         ]);
