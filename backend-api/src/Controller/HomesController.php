@@ -30,7 +30,7 @@ final class HomesController extends Controller
      * @query bolge string Bölge kimlik(ler)i
      * @query ozellik string Özellik kimlik(ler)i
      * @query havuzisitma string Havuz ısıtma filtresi (1/var/true: ısıtmalı, 0/yok/false: ısıtmasız, boş/all: hepsi)
-     * @query villaadi string Villa adı / ev kodu / gavel belge no araması
+     * @query villaadi string Villa adı / orijinal ad / ev kodu / gavel belge no araması
      * @query ozelliste int Sadece bu ozel listeye (CustomListHomes.ListId) eklenmis villalar
      * @query sadecebizde int 1: sadece homes.sadece_bizde = 1 villalar (Config'de Sadece Bizde secili ise)
      * @query pasifler int 1: aktif olmayan villalar da gelir (sadece Ozel Listeler villa ekrani)
@@ -412,13 +412,24 @@ final class HomesController extends Controller
                 'h.baslik LIKE :villa_baslik',
                 'CONVERT(varchar(128), h.gavelBelgeNo) LIKE :villa_belge',
             ];
+            if ($dbt !== '' && $this->homesHasColumn($pdo, 'baslik' . $dbt)) {
+                $params[':villa_baslik_site'] = "%{$villaadi}%";
+                $searchParts[] = "h.baslik{$dbt} LIKE :villa_baslik_site";
+            }
+            $villaadiNoSpace = preg_replace('/\s+/', '', $villaadi) ?? '';
             if ($this->homesHasColumn($pdo, 'evkodu')) {
                 $params[':villa_evkodu'] = "%{$villaadi}%";
                 $searchParts[] = 'CONVERT(nvarchar(255), h.evkodu) LIKE :villa_evkodu';
-                $villaadiNoSpace = preg_replace('/\s+/', '', $villaadi) ?? '';
                 if ($villaadiNoSpace !== '') {
                     $params[':villa_evkodu_nospace'] = "%{$villaadiNoSpace}%";
                     $searchParts[] = "REPLACE(REPLACE(REPLACE(REPLACE(CONVERT(nvarchar(255), h.evkodu), CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '') LIKE :villa_evkodu_nospace";
+                }
+            }
+            foreach (['orj_ad', 'villaadi'] as $extraNameColumn) {
+                if ($this->homesHasColumn($pdo, $extraNameColumn)) {
+                    $param = ':villa_' . $extraNameColumn;
+                    $params[$param] = "%{$villaadi}%";
+                    $searchParts[] = "ISNULL(CONVERT(nvarchar(500), h.[{$extraNameColumn}]), N'') LIKE {$param}";
                 }
             }
             $sql .= ' AND (' . implode(' OR ', $searchParts) . ')';

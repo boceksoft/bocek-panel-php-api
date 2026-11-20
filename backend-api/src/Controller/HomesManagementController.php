@@ -19,8 +19,8 @@ final class HomesManagementController extends Controller
      * @Get
      * @query page int Page number
      * @query per_page int Rows per page
-     * @query keyword string Search by title, code, document number or id
-     * @query title string Search by title, code or document number
+     * @query keyword string Search by title, code, original name, document number or id
+     * @query title string Search by title, code, original name or document number
      * @query region string Region id
      * @query type int Home type id
      * @query active int Active status
@@ -81,12 +81,20 @@ final class HomesManagementController extends Controller
 
         $search = $this->p('keyword') !== '' ? $this->p('keyword') : $this->p('kelime');
         $title = $this->p('title') !== '' ? $this->p('title') : $this->p('baslik');
+        $extraNameColumns = [];
+        if ($title !== '' || $search !== '') {
+            foreach (['orj_ad', 'villaadi'] as $extraNameColumn) {
+                if ($this->homesColumnExists($pdo, $extraNameColumn)) {
+                    $extraNameColumns[] = "ISNULL(CONVERT(nvarchar(500), h.[{$extraNameColumn}]), N'')";
+                }
+            }
+        }
         if ($title !== '') {
-            $this->addTextSearchFilter($where, $params, $titleColumn, $title, 'title', false);
+            $this->addTextSearchFilter($where, $params, $titleColumn, $title, 'title', false, '', $extraNameColumns);
         }
         if ($search !== '') {
             // Genel arama WhatsApp grup adinda da yapilir.
-            $this->addTextSearchFilter($where, $params, $titleColumn, $search, 'keyword', true, $whatsappColumn);
+            $this->addTextSearchFilter($where, $params, $titleColumn, $search, 'keyword', true, $whatsappColumn, $extraNameColumns);
         }
 
         $typeRaw = $this->p('type') !== '' ? $this->p('type') : $this->p('tip');
@@ -817,6 +825,7 @@ WHERE {$whereSql}
 
     /**
      * @param array<int,string> $where
+     * @param array<int,string> $extraColumns
      */
     private function addTextSearchFilter(
         array &$where,
@@ -825,7 +834,8 @@ WHERE {$whereSql}
         string $value,
         string $prefix,
         bool $includeExactId,
-        string $whatsappColumn = ''
+        string $whatsappColumn = '',
+        array $extraColumns = []
     ): void {
         $tokens = preg_split('/\s+/', $value) ?: [];
         $tokens = array_values(array_filter(array_map('trim', $tokens), function ($token) {
@@ -846,16 +856,25 @@ WHERE {$whereSql}
             $titleParam = ':' . $prefix . 'Name' . $index;
             $codeParam = ':' . $prefix . 'Code' . $index;
             $documentParam = ':' . $prefix . 'DocumentNo' . $index;
-            $whatsappPart = '';
-            if ($whatsappColumn !== '') {
-                $whatsappParam = ':' . $prefix . 'Whatsapp' . $index;
-                $whatsappPart = " OR {$whatsappColumn} LIKE {$whatsappParam}";
-                $params[$whatsappParam] = '%' . $token . '%';
-            }
-            $parts[] = "({$titleColumn} LIKE {$titleParam} OR h.evkodu LIKE {$codeParam} OR {$documentNo} LIKE {$documentParam}{$whatsappPart})";
+            $tokenClauses = [
+                "{$titleColumn} LIKE {$titleParam}",
+                "h.evkodu LIKE {$codeParam}",
+                "{$documentNo} LIKE {$documentParam}",
+            ];
             $params[$titleParam] = '%' . $token . '%';
             $params[$codeParam] = '%' . $token . '%';
             $params[$documentParam] = '%' . $token . '%';
+            foreach ($extraColumns as $colIndex => $extraColumn) {
+                $extraParam = ':' . $prefix . 'Extra' . $colIndex . '_' . $index;
+                $tokenClauses[] = "{$extraColumn} LIKE {$extraParam}";
+                $params[$extraParam] = '%' . $token . '%';
+            }
+            if ($whatsappColumn !== '') {
+                $whatsappParam = ':' . $prefix . 'Whatsapp' . $index;
+                $tokenClauses[] = "{$whatsappColumn} LIKE {$whatsappParam}";
+                $params[$whatsappParam] = '%' . $token . '%';
+            }
+            $parts[] = '(' . implode(' OR ', $tokenClauses) . ')';
         }
 
         $textWhere = '(' . implode(' AND ', $parts) . ')';
@@ -863,10 +882,21 @@ WHERE {$whereSql}
             $titleNoSpaceParam = ':' . $prefix . 'TitleNoSpace';
             $codeNoSpaceParam = ':' . $prefix . 'CodeNoSpace';
             $documentNoSpaceParam = ':' . $prefix . 'DocumentNoSpace';
-            $textWhere = "({$textWhere} OR {$titleNoSpace} LIKE {$titleNoSpaceParam} OR {$codeNoSpace} LIKE {$codeNoSpaceParam} OR {$documentNoSpace} LIKE {$documentNoSpaceParam})";
+            $noSpaceClauses = [
+                "{$titleNoSpace} LIKE {$titleNoSpaceParam}",
+                "{$codeNoSpace} LIKE {$codeNoSpaceParam}",
+                "{$documentNoSpace} LIKE {$documentNoSpaceParam}",
+            ];
             $params[$titleNoSpaceParam] = '%' . $valueNoSpace . '%';
             $params[$codeNoSpaceParam] = '%' . $valueNoSpace . '%';
             $params[$documentNoSpaceParam] = '%' . $valueNoSpace . '%';
+            foreach ($extraColumns as $colIndex => $extraColumn) {
+                $extraNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE({$extraColumn}, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
+                $extraNoSpaceParam = ':' . $prefix . 'ExtraNoSpace' . $colIndex;
+                $noSpaceClauses[] = "{$extraNoSpace} LIKE {$extraNoSpaceParam}";
+                $params[$extraNoSpaceParam] = '%' . $valueNoSpace . '%';
+            }
+            $textWhere = "({$textWhere} OR " . implode(' OR ', $noSpaceClauses) . ')';
         }
         if ($includeExactId) {
             $exactIdParam = ':' . $prefix . 'Exact';
