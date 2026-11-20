@@ -59,6 +59,8 @@ final class BankAccountsController extends Controller
                 'ibanDolar' => trim((string) ($row['iban_dolar'] ?? '')),
                 'ibanPound' => trim((string) ($row['iban_pound'] ?? '')),
                 'siralama' => (int) ($row['siralama'] ?? 0),
+                // hesaplar.site (varsa): hesabın ait olduğu site (1 = ana site, 2 = ikinci site); yoksa 0.
+                'site' => (int) ($row['site'] ?? 0),
                 'resim' => $logo,
                 'logoUrl' => $logo !== '' ? $logoBase . rawurlencode($logo) : '',
             ];

@@ -89,6 +89,7 @@ final class ReservationUpdateController extends Controller
      * @body tur int 1 Ön ödeme, 2 Tamamı
      * @body odeme int Ödeme şekli 1-6
      * @body virtualPosId int Sanal POS (boş/0 = yok)
+     * @body bankaId int Havale banka hesabı (kayitlar.banka = hesaplar.id; boş/0 = seçilmemiş; WhatsApp / SMS'te tek hesap bu olur)
      * @body taksit bool Taksite izin ver (kayitlar.taksit)
      * @body taksitliVirtualPosId int Taksitli POS (kayitlar.InstallmentVirtualPosId; 0 = Otomatik, tüm bankalar)
      * @body listeFiyati number Liste (indirimsiz) fiyat (eskifiyat)
@@ -215,6 +216,18 @@ final class ReservationUpdateController extends Controller
             $pos = (int) $body['virtualPosId'];
             $set[$kayitlar['virtualposid']['name']] = $pos > 0 ? $pos : null;
             $labels[$kayitlar['virtualposid']['name']] = 'Sanal POS';
+        }
+        if (array_key_exists('bankaId', $body) && isset($kayitlar['banka'])) {
+            // Panel kayitlar.banka: hesaplar.id, 0 = seçilmemiş (aktif_pasif.asp "not bocek("banka")=0").
+            $bank = (int) $body['bankaId'];
+            if ($bank > 0) {
+                $account = $this->fetchOne($pdo, 'SELECT id FROM hesaplar WHERE id = :id AND kullanici = 0', [':id' => $bank]);
+                if (!$account) {
+                    throw new HttpException('Seçilen banka hesabı bulunamadı.', 'VALIDATION', 422);
+                }
+            }
+            $set[$kayitlar['banka']['name']] = max(0, $bank);
+            $labels[$kayitlar['banka']['name']] = 'Banka hesabı';
         }
         if (array_key_exists('taksit', $body) && isset($kayitlar['taksit'])) {
             $set[$kayitlar['taksit']['name']] = filter_var($body['taksit'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;

@@ -894,7 +894,7 @@ final class ReservationdetailController extends Controller
             'odemeSatirlariHtml' => $this->mailPaymentRowsHtml($pdo, $reservation, $siteId, $english, $doviz, $partial),
             // Sitenin tüm banka hesapları, her biri panelin mail kutusu (HTML) ile. Hangilerinin maile gireceği
             // Natsisa bildirim ayarında seçilir (seçim yoksa hepsi).
-            'bankaHesaplari' => $this->mailBankAccounts($pdo, $english, $site['cdn'], $mailSettings),
+            'bankaHesaplari' => $this->mailBankAccounts($pdo, $english, $site['cdn'], $mailSettings, $siteId),
             // Panelde rezervasyona seçilmiş banka hesabı (kayitlar.banka; 0 = seçilmemiş).
             'seciliBankaId' => (int) ($reservation['banka'] ?? 0),
         ];
@@ -1277,7 +1277,7 @@ final class ReservationdetailController extends Controller
      * @param array{bank_html_style:string,active_bank_accounts_only:bool,relative_url_base:string,signature_url:string}|null $settings
      * @return array<int,array<string,mixed>> id, banka, hesapAdi, html, subeKodu, hesapNo, ibanTl, ibanEuro, ibanDolar, ibanPound
      */
-    private function mailBankAccounts(PDO $pdo, bool $english, string $cdn, ?array $settings = null): array
+    private function mailBankAccounts(PDO $pdo, bool $english, string $cdn, ?array $settings = null, int $siteId = 0): array
     {
         $settings = $settings ?? $this->mailSettings();
         $sql = 'SELECT * FROM hesaplar WHERE kullanici = 0'
@@ -1287,6 +1287,17 @@ final class ReservationdetailController extends Controller
             $accounts = $this->fetchAll($pdo, $sql);
         } catch (\PDOException $e) {
             return [];
+        }
+        // hesaplar.site (varsa): rezervasyonun sitesine ait hesaplar. O siteye atanmış hesap yoksa (site kolonu hep 1 olan
+        // kurulumlar) liste süzülmez; böylece tek siteli panellerin davranışı değişmez.
+        if ($siteId > 0 && $accounts !== [] && array_key_exists('site', array_change_key_case($accounts[0], CASE_LOWER))) {
+            $forSite = array_values(array_filter($accounts, function ($a) use ($siteId) {
+                $a = array_change_key_case($a, CASE_LOWER);
+                return (int) ($a['site'] ?? 0) === $siteId;
+            }));
+            if ($forSite !== []) {
+                $accounts = $forSite;
+            }
         }
         if ($settings['bank_html_style'] === 'classic') {
             return $this->mailBankAccountsClassic($accounts, $english, $cdn);
@@ -1714,6 +1725,8 @@ final class ReservationdetailController extends Controller
                     'id' => $this->intValue($this->firstValueFrom([$reservation], ['odeme', 'odeme_sekli'])),
                     'text' => $this->paymentMethodText($this->intValue($this->firstValueFrom([$reservation], ['odeme', 'odeme_sekli']))),
                 ],
+                // Rezervasyona seçilmiş banka hesabı (kayitlar.banka = hesaplar.id; 0 = seçilmemiş).
+                'bankaId' => (int) ($reservation['banka'] ?? 0),
                 'paraBirimi' => $this->firstValueFrom([$reservation], ['btrans_para_birimi', 'doviz']),
                 'toplamUcret' => $this->moneyValue($this->firstValueFrom([$reservation], ['toplam_tutar'])),
                 'onOdeme' => $this->moneyValue($this->firstValueFrom([$reservation], ['on_odeme'])),
