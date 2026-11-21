@@ -297,6 +297,7 @@ SELECT
     " . $this->homeTitleSql('h', $titleColumn) . " AS title,
     {$titleColumn} AS gavel_title,
     " . $this->homeRealNameSql($pdo, 'h', $titleColumn) . " AS real_title,
+    " . ($this->homesColumnExists($pdo, 'orj_ad') ? "ISNULL(CONVERT(nvarchar(500), h.orj_ad), N'')" : "N''") . " AS original_name,
 {$extraTitleSql}    h.siralama AS sort_order, 
     {$imageColumn} AS image,
     h.yatak_odasi AS bedroom_count,
@@ -400,6 +401,8 @@ WHERE {$whereSql}
                 'gavel_title' => (string) $row['gavel_title'],
                 // Gercek villa adi (config homes_code: kod basliga yaziliyorsa homes.villaadi)
                 'real_title' => (string) ($row['real_title'] ?? ''),
+                // "Villanin Orjinal Adi" (homes.orj_ad); kolon yoksa bos
+                'original_name' => trim((string) ($row['original_name'] ?? '')),
                 // Diger sitelerdeki villa adlari [{id, name, title}]; baslik kolonu olmayan site yok
                 'site_titles' => array_map(function (array $extraSite) use ($row): array {
                     return [
@@ -846,6 +849,16 @@ WHERE {$whereSql}
             return;
         }
 
+        // Turkce harmanlamada (Turkish_CI) "i" ile "I", "ı" ile "i" farkli sayilir: "sinem" araninca "VILLA SINEM" gelmez.
+        // Kolon ve aranan metin ı/İ -> i/I cevrilip Latin1_General_CI_AI ile karsilastirilir (buyuk/kucuk ve s/ş, c/ç... farki yok).
+        $ci = function (string $expr): string {
+            return "REPLACE(REPLACE(CONVERT(nvarchar(max), {$expr}) COLLATE Latin1_General_CI_AI, N'ı', N'i'), N'İ', N'I')";
+        };
+        $value = strtr($value, ['ı' => 'i', 'İ' => 'I']);
+        $tokens = array_map(function (string $token): string {
+            return strtr($token, ['ı' => 'i', 'İ' => 'I']);
+        }, $tokens);
+
         $parts = [];
         $titleNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE({$titleColumn}, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
         $codeNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE(h.evkodu, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
@@ -857,21 +870,21 @@ WHERE {$whereSql}
             $codeParam = ':' . $prefix . 'Code' . $index;
             $documentParam = ':' . $prefix . 'DocumentNo' . $index;
             $tokenClauses = [
-                "{$titleColumn} LIKE {$titleParam}",
-                "h.evkodu LIKE {$codeParam}",
-                "{$documentNo} LIKE {$documentParam}",
+                $ci($titleColumn) . " LIKE {$titleParam}",
+                $ci('h.evkodu') . " LIKE {$codeParam}",
+                $ci($documentNo) . " LIKE {$documentParam}",
             ];
             $params[$titleParam] = '%' . $token . '%';
             $params[$codeParam] = '%' . $token . '%';
             $params[$documentParam] = '%' . $token . '%';
             foreach ($extraColumns as $colIndex => $extraColumn) {
                 $extraParam = ':' . $prefix . 'Extra' . $colIndex . '_' . $index;
-                $tokenClauses[] = "{$extraColumn} LIKE {$extraParam}";
+                $tokenClauses[] = $ci($extraColumn) . " LIKE {$extraParam}";
                 $params[$extraParam] = '%' . $token . '%';
             }
             if ($whatsappColumn !== '') {
                 $whatsappParam = ':' . $prefix . 'Whatsapp' . $index;
-                $tokenClauses[] = "{$whatsappColumn} LIKE {$whatsappParam}";
+                $tokenClauses[] = $ci($whatsappColumn) . " LIKE {$whatsappParam}";
                 $params[$whatsappParam] = '%' . $token . '%';
             }
             $parts[] = '(' . implode(' OR ', $tokenClauses) . ')';
@@ -883,9 +896,9 @@ WHERE {$whereSql}
             $codeNoSpaceParam = ':' . $prefix . 'CodeNoSpace';
             $documentNoSpaceParam = ':' . $prefix . 'DocumentNoSpace';
             $noSpaceClauses = [
-                "{$titleNoSpace} LIKE {$titleNoSpaceParam}",
-                "{$codeNoSpace} LIKE {$codeNoSpaceParam}",
-                "{$documentNoSpace} LIKE {$documentNoSpaceParam}",
+                $ci($titleNoSpace) . " LIKE {$titleNoSpaceParam}",
+                $ci($codeNoSpace) . " LIKE {$codeNoSpaceParam}",
+                $ci($documentNoSpace) . " LIKE {$documentNoSpaceParam}",
             ];
             $params[$titleNoSpaceParam] = '%' . $valueNoSpace . '%';
             $params[$codeNoSpaceParam] = '%' . $valueNoSpace . '%';
@@ -893,7 +906,7 @@ WHERE {$whereSql}
             foreach ($extraColumns as $colIndex => $extraColumn) {
                 $extraNoSpace = "REPLACE(REPLACE(REPLACE(REPLACE({$extraColumn}, CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', '')";
                 $extraNoSpaceParam = ':' . $prefix . 'ExtraNoSpace' . $colIndex;
-                $noSpaceClauses[] = "{$extraNoSpace} LIKE {$extraNoSpaceParam}";
+                $noSpaceClauses[] = $ci($extraNoSpace) . " LIKE {$extraNoSpaceParam}";
                 $params[$extraNoSpaceParam] = '%' . $valueNoSpace . '%';
             }
             $textWhere = "({$textWhere} OR " . implode(' OR ', $noSpaceClauses) . ')';
