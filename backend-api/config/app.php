@@ -19,6 +19,10 @@ return [
     // Villa Kiralama > Config ekranindan degistirilir.
     'homes_search_capacity_at_least' => false,
 
+    // Ilan tamamlanma yuzdesinde (SEO bolumu) meta basligin en az karakter sayisi. Varsayilan 10; KVK'da 5.
+    // Villa Kiralama > Config ekranindan degistirilir. (Frontend'de calisma alani 47 icin 5.)
+    'homes_meta_title_min_length' => 10,
+
     // true: villa adi donen yerlerde (ilan listesi, katalog, rezervasyonlar, raporlar...) ad yerine homes.evkodu gosterilir;
     // evkodu bossa ad kullanilir. false (varsayilan): villa adi. Villa Kiralama > Config ekranindan degistirilir.
     'homes_title_use_code' => false,
@@ -455,6 +459,7 @@ return [
     'editable_local_settings' => [
         'homes_two_cover_images' => 'bool',
         'homes_search_capacity_at_least' => 'bool',
+        'homes_meta_title_min_length' => 'int',
         'homes_title_use_code' => 'bool',
         'homes_fake_discount' => 'bool',
         'homes_featured_features' => 'bool',

@@ -106,9 +106,10 @@ final class HomesExtraFields
                 $wanted[strtolower($key)] = true;
             }
         }
-        // Config homes_real_name_orj_ad: gercek villa adi orj_ad'da tutuluyor (ASP panel "Villanin Orjinal Adi").
-        // Ek alanlarda secilmese de ilan ekleme / duzenleme ekraninda gosterilir ve orj_ad'a yazilir.
-        if (!empty($app['homes_real_name_orj_ad'])) {
+        // Config homes_real_name_orj_ad (gercek villa adi) veya homes_site_name_orj_ad (sitedeki ad) orj_ad'dan okunuyorsa
+        // (ASP panel "Villanin Orjinal Adi"): ek alanlarda secilmese de ilan ekleme / duzenleme ekraninda (Genel Bilgiler)
+        // gosterilir ve orj_ad'a yazilir.
+        if (!empty($app['homes_real_name_orj_ad']) || !empty($app['homes_site_name_orj_ad'])) {
             $wanted['orj_ad'] = true;
         }
         if ($wanted === []) {

@@ -14,7 +14,7 @@ use PDO;
  *   Fiyat: en az 1 sezon (site 1)
  *   Konum: bolge, enlem, boylam
  *   Medya: en az 3 fotograf
- *   SEO: meta baslik >= 10, meta aciklama >= 50, url >= 3 karakter
+ *   SEO: meta baslik >= 10 (config homes_meta_title_min_length), meta aciklama >= 50, url >= 3 karakter
  *
  * Ayni geciste SEO puani da (homes.seo_yuzdesi) hesaplanir; bkz. HomesSeoScore.
  */
@@ -115,7 +115,7 @@ final class HomesCompletion
         while (($row = $stmt->fetch(PDO::FETCH_ASSOC)) !== false) {
             $id = (int) $row['id'];
             if ($hasCompletion) {
-                $percent = self::percent($row, $features, $rules, isset($seasonHomes[$id]), $imageCounts[$id] ?? 0);
+                $percent = self::percent($row, $features, $rules, isset($seasonHomes[$id]), $imageCounts[$id] ?? 0, self::metaTitleMin($app));
                 if ($row['stored_percent'] === null || (int) $row['stored_percent'] !== $percent) {
                     $completionChanges[$id] = $percent;
                 }
@@ -166,7 +166,20 @@ final class HomesCompletion
      * @param array<int,string> $features
      * @param array<int,bool> $rules
      */
-    private static function percent(array $row, array $features, array $rules, bool $hasSeason, int $imageCount): int
+    /**
+     * Meta baslik en az karakter: config homes_meta_title_min_length (varsayilan 10; KVK'da 5).
+     * Frontend listingCompletion.ts metaTitleMinLength ile ayni olmali.
+     *
+     * @param array<string,mixed> $app
+     */
+    public static function metaTitleMin(array $app): int
+    {
+        $value = (int) ($app['homes_meta_title_min_length'] ?? 10);
+
+        return $value > 0 ? $value : 10;
+    }
+
+    private static function percent(array $row, array $features, array $rules, bool $hasSeason, int $imageCount, int $metaTitleMin = 10): int
     {
         $done = 0;
 
@@ -210,7 +223,7 @@ final class HomesCompletion
             $done++;
         }
 
-        if (mb_strlen(self::text($row, 'title'), 'UTF-8') >= 10
+        if (mb_strlen(self::text($row, 'title'), 'UTF-8') >= $metaTitleMin
             && mb_strlen(self::text($row, 'description'), 'UTF-8') >= 50
             && mb_strlen(self::text($row, 'url'), 'UTF-8') >= 3
         ) {
