@@ -230,10 +230,14 @@ final class HomesController extends Controller
             }
         }
 
+        $evkoduSelect = $this->homesHasColumn($pdo, 'evkodu')
+            ? "LTRIM(RTRIM(ISNULL(CONVERT(nvarchar(255), h.evkodu), N''))) AS evkodu, "
+            : "N'' AS evkodu, ";
+
         $sql = $this->buildSql(compact(
             'dbt', 'doviz', 'takvimSelect', 'hedefKur', 'ksqlx', 'ksql', 'nettarihSql',
             'takvimCross', 'hasDate', 't1', 't2', 'dsql2', 'takvimWhere', 'includeInactive',
-            'gun', 'kisasureli', 'availabilitySelect'
+            'gun', 'kisasureli', 'availabilitySelect', 'evkoduSelect'
         ));
 
         // Dinamik WHERE
@@ -532,6 +536,7 @@ final class HomesController extends Controller
         foreach ($rows as $idx => &$row) {
             unset($row['totalCount']);
 
+            $row['evkodu'] = trim((string) ($row['evkodu'] ?? ''));
             $row['siralama'] = (int) ($row['siralama'] ?? 0);
 
             $isAvailable = true;
@@ -709,7 +714,7 @@ CROSS APPLY (
         return "
 SELECT
     COUNT(*) OVER() AS totalCount,
-    h.yatak_odasi, h.id, h.gavelBelgeNo,
+    h.yatak_odasi, h.id, " . ($c['evkoduSelect'] ?? '') . "h.gavelBelgeNo,
     ISNULL(h.siralama, 0) AS siralama,
     h.url{$c['dbt']} AS url,
     h.title{$c['dbt']} AS title,
@@ -1309,18 +1314,25 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
         return $map;
     }
 
+    /** @var array<string,bool> */
+    private $homesColumnCache = [];
+
     /**
      * homes tablosunda ilgili kolonun var olup olmadığını kontrol eder.
      */
     private function homesHasColumn(PDO $pdo, string $column): bool
     {
+        if (array_key_exists($column, $this->homesColumnCache)) {
+            return $this->homesColumnCache[$column];
+        }
         try {
             $stmt = $pdo->prepare("SELECT CASE WHEN COL_LENGTH('dbo.homes', :col) IS NULL THEN 0 ELSE 1 END");
             $stmt->execute([':col' => $column]);
-
-            return (int) $stmt->fetchColumn() === 1;
+            $exists = (int) $stmt->fetchColumn() === 1;
         } catch (\Throwable $e) {
-            return false;
+            $exists = false;
         }
+
+        return $this->homesColumnCache[$column] = $exists;
     }
 }
