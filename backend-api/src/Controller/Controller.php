@@ -183,6 +183,36 @@ abstract class Controller
     }
 
     /**
+     * homes.kategori yazilirken kullanilan ayirici: config homes_kategori_comma_space aciksa ', ' (eski ASP gibi), degilse ','.
+     */
+    protected function homesKategoriSeparator(): string
+    {
+        return !empty($this->app['homes_kategori_comma_space']) ? ', ' : ',';
+    }
+
+    /** @var bool|null kanun7464 tablosunda sure kolonu var mi (istek boyunca bir kez bakilir) */
+    private $gavelDurationColumnExistsCache = null;
+
+    /**
+     * Listelerde SELECT icin sure tipi (1 suresiz, 2 sureli). Ayardaki kolon kanun7464'te yoksa
+     * liste bozulmasin diye NULL doner.
+     */
+    protected function gavelDurationSelectSql(string $alias): string
+    {
+        if ($this->gavelDurationColumnExistsCache === null) {
+            try {
+                $stmt = $this->db->pdo()->prepare("SELECT CASE WHEN COL_LENGTH('dbo.kanun7464', :col) IS NULL THEN 0 ELSE 1 END");
+                $stmt->execute([':col' => $this->gavelDurationColumn()]);
+                $this->gavelDurationColumnExistsCache = (int) $stmt->fetchColumn() === 1;
+            } catch (\Throwable $e) {
+                $this->gavelDurationColumnExistsCache = false;
+            }
+        }
+
+        return $this->gavelDurationColumnExistsCache ? $this->gavelDurationSql($alias) : 'CAST(NULL AS int)';
+    }
+
+    /**
      * API sure tipini (1 suresiz, 2 sureli) ayardaki kolonun degerine cevirir; bos/gecersizse null.
      *
      * @param mixed $value

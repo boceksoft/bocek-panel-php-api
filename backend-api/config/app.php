@@ -23,6 +23,11 @@ return [
     // Villa Kiralama > Config ekranindan degistirilir. (Frontend'de calisma alani 47 icin 5.)
     'homes_meta_title_min_length' => 10,
 
+    // Acik ise homes.kategori (emlak tipi alt kategorileri) eski ASP paneli gibi ', ' (virgul + bosluk) ile yazilir
+    // (orn: '12, 15, 18'). Kapali (varsayilan): ',' ('12,15,18'). Sitenin kendi sorgulari kategoriyi ', ' ile
+    // ariyorsa o sitede acin. Panel okurken bosluklari zaten temizler.
+    'homes_kategori_comma_space' => false,
+
     // true: villa adi donen yerlerde (ilan listesi, katalog, rezervasyonlar, raporlar...) ad yerine homes.evkodu gosterilir;
     // evkodu bossa ad kullanilir. false (varsayilan): villa adi. Villa Kiralama > Config ekranindan degistirilir.
     'homes_title_use_code' => false,
@@ -460,6 +465,7 @@ return [
         'homes_two_cover_images' => 'bool',
         'homes_search_capacity_at_least' => 'bool',
         'homes_meta_title_min_length' => 'int',
+        'homes_kategori_comma_space' => 'bool',
         'homes_title_use_code' => 'bool',
         'homes_fake_discount' => 'bool',
         'homes_featured_features' => 'bool',

@@ -710,6 +710,9 @@ CROSS APPLY (
 SELECT
     COUNT(*) OVER() AS totalCount,
     h.yatak_odasi, h.id, h.gavelBelgeNo,
+    LTRIM(RTRIM(ISNULL(CONVERT(nvarchar(255), kanun.gavelBelgeNo), N''))) AS belge_no,
+    ISNULL(kanun.gavel, 0) AS belge_pasif,
+    " . $this->gavelDurationSelectSql('kanun') . " AS belge_sure_tipi,
     ISNULL(h.siralama, 0) AS siralama,
     h.url{$c['dbt']} AS url,
     h.title{$c['dbt']} AS title,

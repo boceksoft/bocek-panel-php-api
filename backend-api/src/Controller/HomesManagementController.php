@@ -318,6 +318,7 @@ SELECT
     {$regionTitleColumn} AS region_title,
     ISNULL(gavel.gavel, 0) AS document_passive,
     ISNULL(gavel.gavelBelgeNo, '') AS GavelBelgeNo,
+    " . $this->gavelDurationSelectSql('gavel') . " AS document_duration,
     CASE WHEN ISNULL(gavel.gavel, 0) = 0 THEN 'default' ELSE '' END AS document_button_class,
     calendar.exists_value AS rental_calendar,
     calendar.auto_price_update AS rental_calendar_price_sync,
@@ -434,6 +435,8 @@ WHERE {$whereSql}
                 'region_title' => (string) $row['region_title'],
                 'document_passive' => (int) $row['document_passive'],
                 'GavelBelgeNo' => (string) $row['GavelBelgeNo'],
+                // Belge sure tipi: 1 suresiz, 2 sureli, null bilinmiyor
+                'document_duration' => $row['document_duration'] !== null ? (int) $row['document_duration'] : null,
                 'document_button_class' => (string) $row['document_button_class'],
                 'rental_calendar' => (int) $row['rental_calendar'],
                 'rental_calendar_price_sync' => (int) $row['rental_calendar_price_sync'],

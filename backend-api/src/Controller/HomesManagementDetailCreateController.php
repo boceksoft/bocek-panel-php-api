@@ -285,12 +285,12 @@ final class HomesManagementDetailCreateController extends Controller
 
         $this->addSiteExtraFeeUpdates($updates, $payload);
 
-        $this->addListUpdate($updates, $payload, 'kategori', 'kategori', ',');
+        $this->addListUpdate($updates, $payload, 'kategori', 'kategori', $this->homesKategoriSeparator());
         $this->addListUpdate($updates, $payload, 'ozellikler', 'ozellikler', '#');
         $this->addListUpdate($updates, $payload, 'onecikan', 'onecikan', ',');
         $this->addListUpdate($updates, $payload, 'kurallar', 'kurallar', ',');
         $this->addListUpdate($updates, $payload, 'dahilhizmetler', 'fiyata_dahil', '#');
-        $this->addListUpdate($updates, $payload, 'genelBilgiler.temelBilgiler.kategori_ids', 'kategori', ',');
+        $this->addListUpdate($updates, $payload, 'genelBilgiler.temelBilgiler.kategori_ids', 'kategori', $this->homesKategoriSeparator());
         $this->addListUpdate($updates, $payload, 'ozelliklerVeOlanaklar.seciliOzellikIds', 'ozellikler', '#');
         $this->addListUpdate($updates, $payload, 'ozelliklerVeOlanaklar.oneCikanOzellikIds', 'onecikan', ',');
         $this->addListUpdate($updates, $payload, 'ozelliklerVeOlanaklar.evKurallariIds', 'kurallar', ',');
