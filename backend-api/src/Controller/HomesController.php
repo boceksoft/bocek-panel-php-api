@@ -482,9 +482,9 @@ final class HomesController extends Controller
         $poolHeatingVal = strtolower(trim($poolHeatingRaw));
 
         if (in_array($poolHeatingVal, ['1', 'true', 'var', 'yes', 'evet'], true)) {
-            $sql .= ' AND (' . $this->poolHeatingExistsSql() . ')';
+            $sql .= ' AND (' . $this->poolHeatingExistsSql($pdo) . ')';
         } elseif (in_array($poolHeatingVal, ['0', 'false', 'yok', 'no', 'hayir'], true)) {
-            $sql .= ' AND NOT (' . $this->poolHeatingExistsSql() . ')';
+            $sql .= ' AND NOT (' . $this->poolHeatingExistsSql($pdo) . ')';
         }
 
         // ORDER BY + sayfalama
@@ -730,7 +730,7 @@ SELECT
     h.ribbon{$c['dbt']} AS ribbon,
     h.ribbon2{$c['dbt']} AS ribbon2,
     h.yuzme_havuzu, h.kisi, h.oda_sayisi,
-    CASE WHEN " . $this->poolHeatingExistsSql() . " THEN 'var' ELSE 'yok' END AS havuzisitma,
+    CASE WHEN " . $this->poolHeatingExistsSql($this->db->pdo()) . " THEN 'var' ELSE 'yok' END AS havuzisitma,
     '{$c['doviz']}' AS doviz,
     d2.baslik{$c['dbt']} AS d2baslik,
     {$c['takvimSelect']}
@@ -1262,19 +1262,85 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
         return array_values($allIds);
     }
 
+    /** @var string|null */
+    private $poolHeatingExistsSqlCache = null;
+
     /**
      * Villanin havuz isitmasi olup olmadigini kontrol eden SQL EXISTS ifadesi.
+     * Once ekstra servisleri (HomesExtraPaymentPrices / HomesExtraPayments) kontrol eder;
+     * ekstra serviste havuz isitma tanimi yoksa sezonlar.isitmaFiyat'a duser.
      */
-    private function poolHeatingExistsSql(): string
+    private function poolHeatingExistsSql(PDO $pdo): string
     {
-        return "EXISTS (
-            SELECT 1 
-            FROM sezonlar sz_isitma
-            WHERE sz_isitma.islem_id = h.id
-              AND sz_isitma.islem = 'emlak'
-              AND " . \App\Support\SqlDate::any('sz_isitma.tarih1') . " > CONVERT(date, GETDATE(), 104)
-              AND ISNULL(sz_isitma.isitmaFiyat, 0) > 0
-        )";
+        if ($this->poolHeatingExistsSqlCache !== null) {
+            return $this->poolHeatingExistsSqlCache;
+        }
+
+        $extraDefinedParts = [];
+        $extraActiveParts = [];
+
+        if ($this->tableExists($pdo, 'dbo.HomesExtraPaymentPrices')
+            && $this->tableExists($pdo, 'dbo.HomesExtraPaymentTypes')
+        ) {
+            $newMatch = '('
+                . $this->heatingTextMatchSql('ept.Code')
+                . ' OR ' . $this->heatingTextMatchSql('ept.Name')
+                . ' OR ' . $this->heatingTextMatchSql('ept.HomeColumnBase')
+                . ' OR ' . $this->heatingTextMatchSql('ep.Description')
+                . ')';
+            $newBase = "SELECT 1
+                FROM dbo.HomesExtraPaymentPrices ep
+                INNER JOIN dbo.HomesExtraPaymentTypes ept ON ept.ExtraPaymentTypeId = ep.ExtraPaymentTypeId
+                WHERE ep.HomesId = h.id
+                  AND ISNULL(ep.IsDeleted, 0) = 0
+                  AND ISNULL(ept.IsDeleted, 0) = 0
+                  AND TRY_CONVERT(date, ep.EndDate) >= CAST(GETDATE() AS date)
+                  AND {$newMatch}";
+            $extraDefinedParts[] = "EXISTS ({$newBase})";
+            $extraActiveParts[] = "EXISTS ({$newBase} AND ISNULL(ep.Value, 0) > 0)";
+        }
+
+        if ($this->tableExists($pdo, 'dbo.HomesExtraPayments')) {
+            $legacyMatch = $this->heatingTextMatchSql('lep.title');
+            $legacyBase = "SELECT 1
+                FROM dbo.HomesExtraPayments lep
+                WHERE lep.homesId = h.id
+                  AND TRY_CONVERT(date, lep.end_date) >= CAST(GETDATE() AS date)
+                  AND {$legacyMatch}";
+            $extraDefinedParts[] = "EXISTS ({$legacyBase})";
+            $extraActiveParts[] = "EXISTS ({$legacyBase} AND ISNULL(lep.amount, 0) > 0)";
+        }
+
+        $seasonFallback = '';
+        if ($this->tableHasColumn($pdo, 'dbo.sezonlar', 'isitmaFiyat')) {
+            $seasonFallback = "EXISTS (
+                SELECT 1
+                FROM sezonlar sz_isitma
+                WHERE sz_isitma.islem_id = h.id
+                  AND sz_isitma.islem = 'emlak'
+                  AND " . \App\Support\SqlDate::any('sz_isitma.tarih1') . " > CONVERT(date, GETDATE(), 104)
+                  AND ISNULL(sz_isitma.isitmaFiyat, 0) > 0
+            )";
+        }
+
+        if ($extraActiveParts === []) {
+            return $this->poolHeatingExistsSqlCache = ($seasonFallback !== '' ? $seasonFallback : '1 = 0');
+        }
+
+        $extraActive = '(' . implode(' OR ', $extraActiveParts) . ')';
+        $extraDefined = '(' . implode(' OR ', $extraDefinedParts) . ')';
+        if ($seasonFallback === '') {
+            return $this->poolHeatingExistsSqlCache = $extraActive;
+        }
+
+        return $this->poolHeatingExistsSqlCache = "({$extraActive} OR (NOT {$extraDefined} AND {$seasonFallback}))";
+    }
+
+    private function heatingTextMatchSql(string $expr): string
+    {
+        $norm = "LOWER(ISNULL(CONVERT(nvarchar(511), {$expr}), N''))";
+
+        return "({$norm} LIKE N'%ısıtma%' OR {$norm} LIKE N'%isitma%' OR {$norm} LIKE N'%pool%heat%' OR {$norm} LIKE N'%heat%pool%')";
     }
 
     /**
@@ -1318,24 +1384,47 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
     }
 
     /** @var array<string,bool> */
-    private $homesColumnCache = [];
+    private $schemaCache = [];
 
     /**
      * homes tablosunda ilgili kolonun var olup olmadığını kontrol eder.
      */
     private function homesHasColumn(PDO $pdo, string $column): bool
     {
-        if (array_key_exists($column, $this->homesColumnCache)) {
-            return $this->homesColumnCache[$column];
+        return $this->tableHasColumn($pdo, 'dbo.homes', $column);
+    }
+
+    private function tableHasColumn(PDO $pdo, string $table, string $column): bool
+    {
+        $cacheKey = 'col:' . $table . '.' . $column;
+        if (array_key_exists($cacheKey, $this->schemaCache)) {
+            return $this->schemaCache[$cacheKey];
         }
         try {
-            $stmt = $pdo->prepare("SELECT CASE WHEN COL_LENGTH('dbo.homes', :col) IS NULL THEN 0 ELSE 1 END");
-            $stmt->execute([':col' => $column]);
+            $stmt = $pdo->prepare('SELECT CASE WHEN COL_LENGTH(:tbl, :col) IS NULL THEN 0 ELSE 1 END');
+            $stmt->execute([':tbl' => $table, ':col' => $column]);
             $exists = (int) $stmt->fetchColumn() === 1;
         } catch (\Throwable $e) {
             $exists = false;
         }
 
-        return $this->homesColumnCache[$column] = $exists;
+        return $this->schemaCache[$cacheKey] = $exists;
+    }
+
+    private function tableExists(PDO $pdo, string $table): bool
+    {
+        $cacheKey = 'tbl:' . $table;
+        if (array_key_exists($cacheKey, $this->schemaCache)) {
+            return $this->schemaCache[$cacheKey];
+        }
+        try {
+            $stmt = $pdo->prepare("SELECT CASE WHEN OBJECT_ID(:tbl, 'U') IS NULL THEN 0 ELSE 1 END");
+            $stmt->execute([':tbl' => $table]);
+            $exists = (int) $stmt->fetchColumn() === 1;
+        } catch (\Throwable $e) {
+            $exists = false;
+        }
+
+        return $this->schemaCache[$cacheKey] = $exists;
     }
 }
