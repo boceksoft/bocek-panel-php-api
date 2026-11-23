@@ -8,8 +8,9 @@ use App\Support\LegacySql;
 use PDO;
 
 /*
- * Sitenin alan adi ve arama sayfasi URL'si, sadece okuma.
+ * Sitenin alan adi, arama sayfasi ve rezervasyon sayfasi URL bilgileri, sadece okuma.
  *   GET /backend-api/site-url?site=1
+ *   GET /backend-api/site-url/reservation-url?site=1
  */
 class SiteUrlController extends Controller
 {
@@ -25,21 +26,7 @@ class SiteUrlController extends Controller
     {
         $pdo = $this->db->pdo();
         $siteId = $this->siteId();
-        $suffix = $this->tableSuffix($pdo, $siteId);
-
-        $genel = [];
-        try {
-            $row = $pdo->query('SELECT TOP 1 * FROM genel' . $suffix)->fetch(PDO::FETCH_ASSOC);
-            $genel = is_array($row) ? array_change_key_case($row, CASE_LOWER) : [];
-        } catch (\PDOException $e) {
-            $genel = [];
-        }
-        $g = function (string $key) use ($genel): string {
-            $key = strtolower($key);
-            return isset($genel[$key]) ? trim((string) $genel[$key]) : '';
-        };
-        $domain = rtrim($g('domain'), '/');
-        $siteDomain = str_replace('web.', 'www.', $domain);
+        [$siteDomain, $fullDomain] = $this->resolveSiteDomain($pdo, $siteId);
 
         $searchUrls = $this->app['site_search_url'] ?? [];
         $searchUrl = '';
@@ -58,11 +45,6 @@ class SiteUrlController extends Controller
         $searchUrl = trim($searchUrl);
         if ($searchUrl === '') {
             $searchUrl = 'arama-sonuclari';
-        }
-
-        $fullDomain = $siteDomain;
-        if ($fullDomain !== '' && preg_match('#^https?://#i', $fullDomain) !== 1) {
-            $fullDomain = 'https://' . $fullDomain;
         }
 
         $searchPageUrl = '';
@@ -147,6 +129,112 @@ class SiteUrlController extends Controller
             'search_params' => $searchParams,
             'formatting' => $formatting,
         ]);
+    }
+
+    /**
+     * Sitenin rezervasyon sayfasi URL ve parametre yapisini dondurur.
+     *
+     * @Get("reservation-url")
+     * @query site int Site kimliği
+     */
+    public function reservationUrl(): void
+    {
+        $pdo = $this->db->pdo();
+        $siteId = $this->siteId();
+        [$siteDomain, $fullDomain] = $this->resolveSiteDomain($pdo, $siteId);
+
+        $config = is_array($this->app['calculate_reservation_url'] ?? null)
+            ? $this->app['calculate_reservation_url']
+            : [];
+
+        $rawPath = trim((string) ($config['path'] ?? '/rezervasyon'));
+        if ($rawPath === '') {
+            $path = '';
+        } elseif (preg_match('#^https?://#i', $rawPath) === 1) {
+            $path = $rawPath;
+        } else {
+            $path = '/' . ltrim($rawPath, '/');
+        }
+
+        if ($path !== '') {
+            $reservationPageUrl = preg_match('#^https?://#i', $path) === 1
+                ? $path
+                : ($fullDomain !== '' ? rtrim($fullDomain, '/') . $path : $path);
+        } else {
+            $reservationPageUrl = $fullDomain;
+        }
+
+        $defaultParams = [
+            'entity_id' => 'id',
+            'start' => 'reservationdate1',
+            'end' => 'reservationdate2',
+            'adult' => 'adult',
+            'child' => 'child',
+            'baby' => 'baby',
+            'pool_fee' => 'buyPool',
+        ];
+        $rawParams = is_array($config['params'] ?? null) ? $config['params'] : [];
+        $params = [];
+        foreach ($defaultParams as $key => $defaultVal) {
+            $params[$key] = array_key_exists($key, $rawParams)
+                ? trim((string) $rawParams[$key])
+                : $defaultVal;
+        }
+        foreach ($rawParams as $key => $val) {
+            if (!array_key_exists($key, $params)) {
+                $params[(string) $key] = trim((string) $val);
+            }
+        }
+
+        $dateFormat = trim((string) ($config['date_format'] ?? 'd.m.Y'));
+        if ($dateFormat === '') {
+            $dateFormat = 'd.m.Y';
+        }
+
+        $this->response->success([
+            'site' => [
+                'id' => $siteId,
+                'domain' => $siteDomain,
+                'reservation_url' => $reservationPageUrl,
+                'path' => $path,
+                'params' => $params,
+                'date_format' => $dateFormat,
+            ],
+            'domain' => $siteDomain,
+            'reservation_url' => $reservationPageUrl,
+            'path' => $path,
+            'params' => $params,
+            'date_format' => $dateFormat,
+        ]);
+    }
+
+    /**
+     * @return array{0:string,1:string} [siteDomain, fullDomain]
+     */
+    private function resolveSiteDomain(PDO $pdo, int $siteId): array
+    {
+        $suffix = $this->tableSuffix($pdo, $siteId);
+
+        $genel = [];
+        try {
+            $row = $pdo->query('SELECT TOP 1 * FROM genel' . $suffix)->fetch(PDO::FETCH_ASSOC);
+            $genel = is_array($row) ? array_change_key_case($row, CASE_LOWER) : [];
+        } catch (\PDOException $e) {
+            $genel = [];
+        }
+        $domainValue = '';
+        if (isset($genel['domain'])) {
+            $domainValue = trim((string) $genel['domain']);
+        }
+        $domain = rtrim($domainValue, '/');
+        $siteDomain = str_replace('web.', 'www.', $domain);
+
+        $fullDomain = $siteDomain;
+        if ($fullDomain !== '' && preg_match('#^https?://#i', $fullDomain) !== 1) {
+            $fullDomain = 'https://' . $fullDomain;
+        }
+
+        return [$siteDomain, $fullDomain];
     }
 
     /** sites.dbtable ("", "_s2" ...). Geçersiz sonek ya da tablo yoksa "". */
