@@ -804,11 +804,33 @@ INNER JOIN dolu ON dolu.kayitid = kayitlar.id
                     $row[$f] = (int) $row[$f];
                 }
             }
+            // Villanin sitedeki tam adresi (homes.url + ana site alan adi); rezervasyon listesinde villa adina tiklayinca acilir
+            if (array_key_exists('villa_url', $row)) {
+                $row['villa_link'] = $this->villaLink((string) ($row['villa_url'] ?? ''));
+            }
             $this->addTableColumnAliases($row);
         }
         unset($row);
 
         return $rows;
+    }
+
+    /** homes.url -> https://alan-adi/url (zaten tam adresse dokunulmaz; alan adi yoksa bos). */
+    private function villaLink(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || preg_match('#^https?://#i', $url) === 1) {
+            return $url;
+        }
+        $domain = rtrim(trim(defined('Domain') ? (string) constant('Domain') : ''), '/');
+        if ($domain === '') {
+            return '';
+        }
+        if (preg_match('#^https?://#i', $domain) !== 1) {
+            $domain = 'https://' . $domain;
+        }
+
+        return $domain . '/' . ltrim($url, '/');
     }
 
     /**

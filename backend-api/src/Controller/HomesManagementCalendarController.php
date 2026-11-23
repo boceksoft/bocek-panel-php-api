@@ -114,6 +114,9 @@ final class HomesManagementCalendarController extends Controller
             LEFT JOIN dbo.satis_kanallari sk ON sk.id = k.satis_kanallari_id
             WHERE d.emlak = :emlak
               AND ISNULL(d.Durum, -99) NOT IN (2, 4, 5, {$deletedStatus})
+              -- Rezervasyonsuz Durum 0 (Kiralama Takvimi'nde onaylanmamis/bekleyen kayit, eski takvim kapatmasi):
+              -- site ve ASP panel dolu saymaz; ilan takviminde de gosterilmez (gunler bos gorunmeliydi, dolu gorunuyordu).
+              AND NOT (ISNULL(d.Durum, -99) = 0 AND ISNULL(d.[{$kayitIdColumn}], 0) <= 0)
             ORDER BY d.tarih DESC, d.id DESC
         ");
         $stmt->execute([':emlak' => $id]);
