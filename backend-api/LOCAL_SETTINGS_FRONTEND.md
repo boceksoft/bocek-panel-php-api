@@ -153,13 +153,13 @@ Rezervasyon detayinda `islem_kaydi` tablosundan belge gecmisi cekilsin mi?
 `kayitlar` tablosunda ulke/kod bilgisinin tutuldugu kolon adidir. Ornek: `ulke`, `ulkeKodu`, `countryCode`.
 
 `calculate_param_names`  
-Calculate endpoint'ine gelen parametre adlarini siteye gore eslemek icin kullanilir. Ornek olarak `entity_id`, `start`, `end` icin kabul edilecek alternatif parametre adlari tanimlanir.
+Calculate endpoint'ine gelen parametre adlarini siteye gore eslemek icin kullanilir. `entity_id`, `start`, `end`, `adult`, `child`, `baby` icin kabul edilecek alternatif parametre adlari tanimlanir.
 
 `calculate_date_formats`  
 Calculate endpoint'inin kabul edecegi tarih formatlari listesidir. Ornek: `Y-m-d`, `d.m.Y`, `m/d/Y`.
 
 `calculate_reservation_url`  
-Calculate sonucunda donen `reservation_url` icin path, query parametre adlari ve tarih formati ayarlaridir.
+Calculate sonucunda donen `reservation_url` icin path, query parametre adlari (`entity_id`, `start`, `end`, `adult`, `child`, `baby`, `pool_fee`, `site`) ve tarih formati ayarlaridir. Bir parametre bos string (`""`) verilirse (`adult`, `child`, `baby`) URL'ye eklenmez.
 
 `links_reservation_url`  
 Link olusturma endpoint'inin `redirectTo` query parametre adlarini ve tarih formatini belirler.

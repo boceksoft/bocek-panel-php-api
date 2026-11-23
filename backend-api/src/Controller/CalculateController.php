@@ -32,6 +32,9 @@ final class CalculateController extends Controller
      * @query start string required Giris tarihi (Y-m-d / d.m.Y)
      * @query end string required Cikis tarihi (Y-m-d / d.m.Y)
      * @query PromotionCode string Promosyon kodu
+     * @query adult int Yetişkin sayısı (reservation_url için)
+     * @query child int Çocuk sayısı (reservation_url için)
+     * @query baby int Bebek sayısı (reservation_url için)
      * @query pool_fee bool Havuz isitma ucreti eklensin mi
      * @query selectedServices string Secili ekstra servis id listesi
      * @query site int Site kimligi
@@ -282,6 +285,9 @@ final class CalculateController extends Controller
      * @query start string required Giris tarihi (Y-m-d / d.m.Y)
      * @query end string required Cikis tarihi (Y-m-d / d.m.Y)
      * @query PromotionCode string Promosyon kodu
+     * @query adult int Yetişkin sayısı (reservation_url için)
+     * @query child int Çocuk sayısı (reservation_url için)
+     * @query baby int Bebek sayısı (reservation_url için)
      * @query pool_fee bool Havuz isitma ucreti eklensin mi
      * @query selectedServices string Secili ekstra servis id listesi
      * @query format string png veya jpg
@@ -1262,6 +1268,23 @@ WHERE h.id = {$entityId}";
             $this->queryParamName($params, 'start', 'start') => $this->formatDate($start, $dateFormat),
             $this->queryParamName($params, 'end', 'end') => $this->formatDate($end, $dateFormat),
         ];
+
+        $guestDefaults = [
+            'adult' => ['adult', 'adults', 'yetiskin'],
+            'child' => ['child', 'children', 'cocuk'],
+            'baby' => ['baby', 'babies', 'infant', 'bebek'],
+        ];
+        foreach ($guestDefaults as $key => $defaultInputKeys) {
+            if (array_key_exists($key, $params) && trim((string) $params[$key]) === '') {
+                continue;
+            }
+            $count = $this->guestCountParam($key, $defaultInputKeys);
+            if ($count === null) {
+                continue;
+            }
+            $query[$this->queryParamName($params, $key, $key)] = $count;
+        }
+
         if ($site > 1) {
             $query[$this->queryParamName($params, 'site', 'site')] = $site;
         }
@@ -1271,6 +1294,24 @@ WHERE h.id = {$entityId}";
         }
 
         return $domain . $path . '?' . http_build_query($query, '', '&');
+    }
+
+    /**
+     * @param string[] $defaultKeys
+     */
+    private function guestCountParam(string $name, array $defaultKeys): ?int
+    {
+        $raw = $this->configuredParam($name, $defaultKeys, null);
+        if ($raw === null || is_array($raw)) {
+            return null;
+        }
+        $trimmed = trim((string) $raw);
+        if ($trimmed === '' || !is_numeric($trimmed)) {
+            return null;
+        }
+        $count = (int) $trimmed;
+
+        return $count >= 0 ? $count : null;
     }
 
     private function siteDomain(int $site): string
