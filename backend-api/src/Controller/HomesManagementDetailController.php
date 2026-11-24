@@ -875,6 +875,17 @@ final class HomesManagementDetailController extends Controller
             }
         }
 
+        // Config homes_belge_no_homes: kanun7464'te belge no yoksa eski panelin yazdigi homes.gavelBelgeNo gosterilir
+        if (!empty($this->app['homes_belge_no_homes']) && trim((string) ($row['gavelbelgeno'] ?? '')) === ''
+            && $this->columnExists($pdo, 'dbo', 'homes', 'gavelBelgeNo')
+        ) {
+            $home = $this->fetchOne($pdo, 'SELECT gavelBelgeNo FROM homes WHERE id = :id', [':id' => $homeId]);
+            $homeBelgeNo = is_array($home) ? trim((string) ($home['gavelBelgeNo'] ?? '')) : '';
+            if ($homeBelgeNo !== '') {
+                $row['gavelbelgeno'] = $homeBelgeNo;
+            }
+        }
+
         return [
             'gavel_belge_no' => $this->firstValueFrom($row, ['gavelbelgeno']),
             'gavel_belge_tipi' => $this->firstValueFrom($row, ['gavelbelgetipi']),

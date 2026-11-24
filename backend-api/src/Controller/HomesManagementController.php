@@ -285,6 +285,9 @@ final class HomesManagementController extends Controller
         $urlSql = $this->homesColumnExists($pdo, $urlColumn) ? "ISNULL(CONVERT(nvarchar(1000), h.[{$urlColumn}]), N'')" : "N''";
         // Taslak: yeni ilan ekraninda olusturulup "Kaydet" ile tamamlanmamis ilan (homes.template = 1).
         $draftSql = $this->homesColumnExists($pdo, 'template') ? 'CAST(ISNULL(h.template, 0) AS int)' : 'CAST(0 AS int)';
+        // Basvuru numarasi (kanun7464.gavelBasvuruNo); kolon olmayan sitelerde bos
+        $basvuruStmt = $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.kanun7464', 'gavelBasvuruNo') IS NULL THEN 0 ELSE 1 END");
+        $basvuruSql = (int) $basvuruStmt->fetchColumn() === 1 ? "ISNULL(CONVERT(nvarchar(200), gavel.gavelBasvuruNo), N'')" : "N''";
 
         $sql = " 
 SELECT
@@ -318,6 +321,7 @@ SELECT
     {$regionTitleColumn} AS region_title,
     ISNULL(gavel.gavel, 0) AS document_passive,
     ISNULL(gavel.gavelBelgeNo, '') AS GavelBelgeNo,
+    {$basvuruSql} AS GavelBasvuruNo,
     " . $this->gavelDurationSelectSql('gavel') . " AS document_duration,
     CASE WHEN ISNULL(gavel.gavel, 0) = 0 THEN 'default' ELSE '' END AS document_button_class,
     calendar.exists_value AS rental_calendar,
@@ -435,6 +439,8 @@ WHERE {$whereSql}
                 'region_title' => (string) $row['region_title'],
                 'document_passive' => (int) $row['document_passive'],
                 'GavelBelgeNo' => (string) $row['GavelBelgeNo'],
+                // Basvuru numarasi (belge no yokken listede gosterilir)
+                'GavelBasvuruNo' => trim((string) ($row['GavelBasvuruNo'] ?? '')),
                 // Belge sure tipi: 1 suresiz, 2 sureli, null bilinmiyor
                 'document_duration' => $row['document_duration'] !== null ? (int) $row['document_duration'] : null,
                 'document_button_class' => (string) $row['document_button_class'],

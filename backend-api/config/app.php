@@ -100,6 +100,11 @@ return [
     // homes_title_use_code acikken kod yine once gelir.
     'homes_site_name_orj_ad' => false,
 
+    // Belge no (bakanlik belge numarasi) ilan kaydinda nereye yazilir. false (varsayilan): sadece kanun7464.gavelBelgeNo.
+    // true: kanun7464.gavelBelgeNo'ya ek olarak homes.gavelBelgeNo'ya da (eski panel bazi sitelerde homes'a yaziyor).
+    // Acikken ilan detayinda kanun7464'te belge no yoksa homes.gavelBelgeNo gosterilir.
+    'homes_belge_no_homes' => false,
+
     // Villa indirim turleri (indirimler.discountType); degerlerin anlami siteye gore degisir. Bkz. src/Support/HomesDiscountTypes.php
     //   options: value, label, payer (rezervasyonda kim karsilar: site | ev_sahibi | genel),
     //            base (price | commission: fiyat x KO x oran | owner_share: fiyat x (100 - KO) x oran).
@@ -484,6 +489,7 @@ return [
         'homes_whatsapp_rez_takip' => 'bool',
         'homes_real_name_orj_ad' => 'bool',
         'homes_site_name_orj_ad' => 'bool',
+        'homes_belge_no_homes' => 'bool',
         'homes_extra_fields' => 'array',
         'homes_code' => 'array',
         'homes_empty_seasons' => 'array',

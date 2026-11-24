@@ -235,6 +235,20 @@ final class ReservationsController extends Controller
         $where = array_merge($where, $statusWhere);
         $whereSql = $where ? ('WHERE 1=1 AND ' . implode(' AND ', $where)) : 'WHERE 1=1';
 
+        // sadeceIdler=1: ayni filtrelerle sadece rezervasyon id'leri (listede "Tumunu Sec"); tum satirlar cekilmez,
+        // binlerce rezervasyonda da bellek sinirina takilmaz.
+        if ($this->p('sadeceIdler') === '1') {
+            $countSql = $this->buildCountSql($whereSql, $useAcentaUsers, $kisibilgileri === '>' || $kisibilgileri === '=');
+            $stmt = $pdo->prepare(str_replace('SELECT COUNT(*) AS total', 'SELECT DISTINCT kayitlar.id', $countSql) . ' ORDER BY kayitlar.id DESC');
+            foreach ($params as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
+            $stmt->execute();
+            $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+            $this->response->success(['ids' => $ids, 'total' => count($ids)]);
+            return;
+        }
+
         // sadeceToplam=1: ayni filtrelerle sadece kayit sayisi (menu rozetleri); satir ve ciro hesaplanmaz.
         if ($this->p('sadeceToplam') === '1') {
             $stmt = $pdo->prepare($this->buildCountSql($whereSql, $useAcentaUsers, $kisibilgileri === '>' || $kisibilgileri === '='));
