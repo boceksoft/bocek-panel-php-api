@@ -13,6 +13,10 @@ return [
     // false (varsayilan): tek kapak. Villa Kiralama > Config ekranindan degistirilir.
     'homes_two_cover_images' => false,
 
+    // true: ilan detayinda / yeni ilanda "Taslak" yok; eksik alan olsa da ilan dogrudan kaydedilir. Eksik alanlar ve
+    // tamamlanma yuzdesi yine gosterilir, "eksik, yine de kaydedilsin mi?" diye sorulur. false (varsayilan): eksikse kaydedilmez.
+    'homes_save_incomplete' => false,
+
     // Teklif Al / katalog villa aramasinda kisi filtresi.
     // true: secilen kisi sayisini alan tum villalar (kapasite >= kisi; 2 kisi -> 2, 3, 4, 5... kisilik).
     // false (varsayilan): eski panel (ASP) araligi; 1 -> 1-2, cift -> kisi..kisi+2 (2 -> 2-4), tek -> kisi-1..kisi+1.
@@ -469,6 +473,7 @@ return [
     // deploy_secret, github_token ve DB bilgileri bilerek burada yok.
     'editable_local_settings' => [
         'homes_two_cover_images' => 'bool',
+        'homes_save_incomplete' => 'bool',
         'homes_search_capacity_at_least' => 'bool',
         'homes_meta_title_min_length' => 'int',
         'homes_kategori_comma_space' => 'bool',

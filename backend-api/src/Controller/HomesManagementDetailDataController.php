@@ -64,6 +64,8 @@ final class HomesManagementDetailDataController extends Controller
         $selectableData['indirim_turleri'] = $discountTypes;
         // Sahte indirim orani (config homes_fake_discount): acikken indirim eklerken sahte oran alani gosterilir.
         $selectableData['sahte_indirim'] = !empty($this->app['homes_fake_discount']);
+        // Eksik ilan kaydi (config homes_save_incomplete): acikken Taslak yok, eksik alanlar onayla kaydedilir.
+        $selectableData['eksik_kaydet'] = !empty($this->app['homes_save_incomplete']);
         // One cikan ozellikler (config homes_featured_features): acikken Ozellikler sekmesinde secim bolumu gosterilir.
         // Hic one cikan ozellik tanimli degilse (veya tablo yoksa) bolum gosterilmez.
         $selectableData['one_cikan_ozellikler_aktif'] = !empty($this->app['homes_featured_features'])
@@ -108,6 +110,7 @@ final class HomesManagementDetailDataController extends Controller
             'indirim_turu' => $selectableData['indirim_turu'],
             'indirim_turleri' => $selectableData['indirim_turleri'],
             'sahte_indirim' => $selectableData['sahte_indirim'],
+            'eksik_kaydet' => $selectableData['eksik_kaydet'],
         ]);
     }
 
