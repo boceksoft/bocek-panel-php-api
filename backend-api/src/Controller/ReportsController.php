@@ -42,6 +42,12 @@ final class ReportsController extends Controller
     private const PAYMENT_CREDIT_CARD = 1;
     private const PAYMENT_TRANSFER = 2;
 
+    /** Aylık performans ve potansiyel raporu filtrelerindeki tarih tipleri (dateType). */
+    private const REPORT_DATE_TYPES = [
+        ['id' => 'islem_tarihi', 'name' => 'İşlem Tarihi (Kayıt / Rezervasyon Oluşturulma Tarihi)', 'value' => 'islem_tarihi'],
+        ['id' => 'rez_tarihi', 'name' => 'Rezervasyon Tarihi (Giriş Tarihi)', 'value' => 'rez_tarihi'],
+    ];
+
     /** Potansiyel raporunda izin verilen en uzun aralık (gün). */
     private const MAX_POTENTIAL_DAYS = 366;
 
@@ -63,6 +69,20 @@ final class ReportsController extends Controller
         4 => 'İptal Edildi',
         5 => 'Silindi',
     ];
+
+    /** Rezervasyon listesindeki durum etiketleri (dolu.durum) — ReservationStatusController ile aynı. */
+    private const RESERVATION_STATUS_LABELS = [
+        0 => 'Onay Bekliyor',
+        1 => 'Ödeme Bekliyor',
+        2 => 'Süre Doldu',
+        3 => 'Onaylandı',
+        4 => 'İptal Edildi',
+        5 => 'Silindi',
+        6 => 'Açık Rezervasyon',
+    ];
+
+    /** Potansiyel raporu rezervasyon listesindeki en fazla kayıt. */
+    private const MAX_POTENTIAL_RESERVATIONS = 5000;
 
     /**
      * Bugünkü satışlar ile genel ciro, komisyon ve rezervasyon sayılarını döner.
@@ -206,71 +226,52 @@ WHERE {$filterColumn} >= {$range['start']} AND {$filterColumn} < {$range['end']}
      *   Alınan ön ödeme (prepaymentTotal): panel rapor-yonetimi.asp "Toplam Alınan Ön Ödeme" (işlem tarihi) ile aynı;
      *   onaylı kayıtların (kayitlar.kayit_durum 3) ön ödemesi (kayitlar.tutar), onaylandığı güne
      *   (kayitlar.son_durum_guncelleme) göre.
+     *   dateType=rez_tarihi verilirse tüm metrikler (talep, gerçekleşen/kaçan, ön ödeme, kurala uymayan) giriş
+     *   tarihine (kayitlar.rez_tarihi) göre filtrelenir ve günlere dağıtılır: o gün girişli talepler ve sonuçları.
      *
      * @Get("potential")
      * @query startDate string Başlangıç tarihi (YYYY-MM-DD veya DD.MM.YYYY), varsayılan 6 gün önce
      * @query endDate string Bitiş tarihi, dahil (YYYY-MM-DD veya DD.MM.YYYY), varsayılan bugün
      * @query villaIds string Virgülle ayrılmış villa (homes.id) kimlikleri
      * @query regionIds string Virgülle ayrılmış bölge (destinations.id) kimlikleri
+     * @query dateType string islem_tarihi (varsayılan) veya rez_tarihi (giriş tarihi); potential-options dateTypes
+     * Rezervasyon listesi ayrı endpoint'te: potential/reservations (aynı filtreler).
      */
     public function potential(): void
     {
-        $startDate = $this->parseDate(
-            (string) $this->request->query('startDate', ''),
-            (new DateTime('today'))->modify('-6 day')->format('Y-m-d')
-        );
-        $endDate = $this->parseDate((string) $this->request->query('endDate', ''), (new DateTime('today'))->format('Y-m-d'));
-        if ($endDate < $startDate) {
-            throw new HttpException('endDate startDate tarihinden önce olamaz.', 'VALIDATION_ERROR', 422);
-        }
-        if ((new DateTime($startDate))->diff(new DateTime($endDate))->days > self::MAX_POTENTIAL_DAYS) {
-            throw new HttpException('Tarih aralığı en fazla ' . self::MAX_POTENTIAL_DAYS . ' gün olabilir.', 'VALIDATION_ERROR', 422);
-        }
+        $f = $this->potentialFilters();
+        $startDate = $f['startDate'];
+        $endDate = $f['endDate'];
+        $dateTypeStr = $f['dateType'];
+        $requestDay = $f['requestDay'];
+        $resultDay = $f['resultDay'];
+        $range = $f['range'];
+        $filter = $f['filter'];
+        $joins = '';
 
-        $villaIds = $this->idList((string) $this->request->query('villaIds', ''));
-        $regionIds = $this->idList((string) $this->request->query('regionIds', ''));
-
-        $range = $this->rangeLiterals($startDate, $endDate);
         $deleted = $this->deletedStatus();
         $durum = 'd.durum';
         $lost = "{$durum} IN (2, 4, {$deleted})";
         $tutar = "ISNULL(TRY_CONVERT(float, dbo.fnTemizle(k.toplam_tutar)), 0) * (CASE WHEN k.doviz = 'tl' THEN 1 ELSE ISNULL(k.kur, 1) END)";
         $gece = 'ISNULL(DATEDIFF(day, k.rez_tarihi, k.gelecek_tarih), 0)';
 
-        $where = [];
-        $joins = '';
-        if ($villaIds) {
-            $where[] = 'k.evid IN (' . implode(',', $villaIds) . ')';
-        }
-        if ($regionIds) {
-            // HomesController'daki bölge filtresi: seçilen bölge villanın 3 seviyeli bölge ağacının herhangi biri.
-            $joins = '
-INNER JOIN homes h ON h.id = k.evid
-INNER JOIN destinations d2 ON d2.id = h.emlak_bolgesi
-LEFT  JOIN destinations d1 ON d1.id = d2.cat
-LEFT  JOIN destinations d0 ON d0.id = d1.cat';
-            $where[] = '(d2.id IN (' . implode(',', $regionIds) . ') OR d1.id IN (' . implode(',', $regionIds)
-                . ') OR d0.id IN (' . implode(',', $regionIds) . '))';
-        }
-
         $from = "FROM kayitlar k\nINNER JOIN dolu d ON d.kayitid = k.id{$joins}";
-        $filter = $where ? "\n  AND " . implode("\n  AND ", $where) : '';
 
-        // Talepler: geldiği güne göre.
+        // Talepler: geldiği güne (dateType=rez_tarihi ise giriş tarihine) göre.
         $requestSql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.islem_tarihi AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST({$requestDay} AS date), 23) AS gun,
     COUNT(*) AS talep,
     SUM({$gece}) AS talep_gece,
     SUM({$tutar}) AS potansiyel
 {$from}
-WHERE k.islem_tarihi >= {$range['start']} AND k.islem_tarihi < {$range['end']}{$filter}
-GROUP BY CAST(k.islem_tarihi AS date)";
+WHERE {$requestDay} >= {$range['start']} AND {$requestDay} < {$range['end']}{$filter}
+GROUP BY CAST({$requestDay} AS date)";
 
-        // Sonuçlar: onaylandığı / kaçtığı (son durum değişikliği) güne göre.
+        // Sonuçlar: onaylandığı / kaçtığı (son durum değişikliği) güne (dateType=rez_tarihi ise giriş tarihine) göre.
         $resultSql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST({$resultDay} AS date), 23) AS gun,
     SUM(CASE WHEN {$durum} = 3 THEN 1 ELSE 0 END) AS gerceklesen,
     SUM(CASE WHEN {$durum} = 3 THEN {$gece} ELSE 0 END) AS gerceklesen_gece,
     SUM(CASE WHEN {$durum} = 3 THEN {$tutar} ELSE 0 END) AS gerceklesen_ciro,
@@ -278,20 +279,20 @@ SELECT
     SUM(CASE WHEN {$lost} THEN {$tutar} ELSE 0 END) AS kacan_ciro,
     SUM(CASE WHEN {$durum} = 2 THEN 1 ELSE 0 END) AS suresi_dolan
 {$from}
-WHERE k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}
+WHERE {$resultDay} >= {$range['start']} AND {$resultDay} < {$range['end']}
   AND ({$durum} = 3 OR {$lost}){$filter}
-GROUP BY CAST(k.son_durum_guncelleme AS date)";
+GROUP BY CAST({$resultDay} AS date)";
 
         // Alınan ön ödeme: panelde dolu tablosuna bakılmaz, kur boşsa tutar sayılmaz (panel ile aynı).
         $prepaymentFrom = $joins ? "FROM kayitlar k{$joins}" : 'FROM kayitlar k';
         $prepaymentSql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST({$resultDay} AS date), 23) AS gun,
     SUM(k.tutar * (CASE WHEN k.doviz = 'tl' THEN 1 ELSE k.kur END)) AS on_odeme
 {$prepaymentFrom}
 WHERE k.kayit_durum = 3
-  AND k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}{$filter}
-GROUP BY CAST(k.son_durum_guncelleme AS date)";
+  AND {$resultDay} >= {$range['start']} AND {$resultDay} < {$range['end']}{$filter}
+GROUP BY CAST({$resultDay} AS date)";
 
         $byDay = [];
         foreach ([$requestSql, $resultSql, $prepaymentSql] as $sql) {
@@ -301,7 +302,7 @@ GROUP BY CAST(k.son_durum_guncelleme AS date)";
             }
         }
 
-        $ruleViolations = $this->lostShortStayCounts($from, $filter, $range, $lost);
+        $ruleViolations = $this->lostShortStayCounts($from, $filter, $range, $lost, $resultDay);
 
         // Talep gelmeyen günler de tabloda 0 ile görünsün.
         $days = [];
@@ -338,9 +339,174 @@ GROUP BY CAST(k.son_durum_guncelleme AS date)";
         $this->response->success([
             'startDate' => $startDate,
             'endDate' => $endDate,
+            'dateType' => $dateTypeStr,
             'days' => $days,
             'meta' => ['count' => count($days)],
         ]);
+    }
+
+    /**
+     * Potansiyel raporunun rezervasyon listesi (ayrı istek; rapor tablosu ile birlikte yüklenmez).
+     * Tablodaki taleplerin (totalInquiries) kendisi: /potential ile aynı tarih aralığı, tarih tipi ve villa/bölge filtresi.
+     * Kolonlar ve tutarlar kasa raporu (vault) ile aynı hesaplanır. Silinen kayıtlar da talep sayıldığı için listededir
+     * (durum 5). Giriş tarihine göre sıralı, en fazla MAX_POTENTIAL_RESERVATIONS kayıt.
+     *
+     * @Get("potential/reservations")
+     * @query startDate string Başlangıç tarihi (YYYY-MM-DD veya DD.MM.YYYY), varsayılan 6 gün önce
+     * @query endDate string Bitiş tarihi, dahil (YYYY-MM-DD veya DD.MM.YYYY), varsayılan bugün
+     * @query villaIds string Virgülle ayrılmış villa (homes.id) kimlikleri
+     * @query regionIds string Virgülle ayrılmış bölge (destinations.id) kimlikleri
+     * @query dateType string islem_tarihi (varsayılan) veya rez_tarihi (giriş tarihi)
+     * @query reservationStatus string Virgülle ayrılmış durumlar (0-6, silinen 5), varsayılan tümü
+     */
+    public function potentialReservations(): void
+    {
+        $f = $this->potentialFilters();
+
+        $statusFilter = $this->request->query('reservationStatus');
+        $statuses = ($statusFilter === null || $statusFilter === '' || $statusFilter === 'all')
+            ? []
+            : array_values(array_filter(array_map('intval', explode(',', (string) $statusFilter)), function (int $s): bool {
+                return $s >= 0 && $s <= 6;
+            }));
+
+        $this->response->success([
+            'startDate' => $f['startDate'],
+            'endDate' => $f['endDate'],
+            'dateType' => $f['dateType'],
+        ] + $this->potentialReservationRows($f['filter'], $f['requestDay'], $f['range'], $statuses));
+    }
+
+    /**
+     * /potential ve /potential/reservations ortak filtreleri: tarih aralığı, tarih tipi, villa/bölge koşulları.
+     *
+     * @return array{startDate:string,endDate:string,dateType:string,requestDay:string,resultDay:string,range:array{start:string,end:string},filter:string}
+     */
+    private function potentialFilters(): array
+    {
+        $startDate = $this->parseDate(
+            (string) $this->request->query('startDate', ''),
+            (new DateTime('today'))->modify('-6 day')->format('Y-m-d')
+        );
+        $endDate = $this->parseDate((string) $this->request->query('endDate', ''), (new DateTime('today'))->format('Y-m-d'));
+        if ($endDate < $startDate) {
+            throw new HttpException('endDate startDate tarihinden önce olamaz.', 'VALIDATION_ERROR', 422);
+        }
+        if ((new DateTime($startDate))->diff(new DateTime($endDate))->days > self::MAX_POTENTIAL_DAYS) {
+            throw new HttpException('Tarih aralığı en fazla ' . self::MAX_POTENTIAL_DAYS . ' gün olabilir.', 'VALIDATION_ERROR', 422);
+        }
+
+        $villaIds = $this->idList((string) $this->request->query('villaIds', ''));
+        $regionIds = $this->idList((string) $this->request->query('regionIds', ''));
+
+        // Tarih tipi: monthlyperformance ile aynı değerler (islem_tarihi | rez_tarihi).
+        $isRezTarihi = $this->isRezTarihi($this->request->query('dateType') ?? $this->request->query('date_type'));
+
+        $where = [];
+        if ($villaIds) {
+            $where[] = 'k.evid IN (' . implode(',', $villaIds) . ')';
+        }
+        if ($regionIds) {
+            // HomesController'daki bölge filtresi: seçilen bölge villanın 3 seviyeli bölge ağacının herhangi biri.
+            // Alt sorgu: rezervasyon listesi sorgusundaki homes/site join'leriyle alias çakışmasın.
+            $regionList = implode(',', $regionIds);
+            $where[] = "k.evid IN (
+    SELECT rh.id
+      FROM homes rh
+     INNER JOIN destinations rd2 ON rd2.id = rh.emlak_bolgesi
+      LEFT JOIN destinations rd1 ON rd1.id = rd2.cat
+      LEFT JOIN destinations rd0 ON rd0.id = rd1.cat
+     WHERE rd2.id IN ({$regionList}) OR rd1.id IN ({$regionList}) OR rd0.id IN ({$regionList}))";
+        }
+
+        return [
+            'startDate' => $startDate,
+            'endDate' => $endDate,
+            'dateType' => $isRezTarihi ? 'rez_tarihi' : 'islem_tarihi',
+            // İşlem tarihinde talepler geldiği güne, sonuçlar durum değişikliği gününe göre; giriş tarihinde hepsi girişe göre.
+            'requestDay' => $isRezTarihi ? 'k.rez_tarihi' : 'k.islem_tarihi',
+            'resultDay' => $isRezTarihi ? 'k.rez_tarihi' : 'k.son_durum_guncelleme',
+            'range' => $this->rangeLiterals($startDate, $endDate),
+            'filter' => $where ? "\n  AND " . implode("\n  AND ", $where) : '',
+        ];
+    }
+
+    /**
+     * Potansiyel rezervasyon listesi sorgusu, toplamlar ve durum sayıları.
+     *
+     * @param string $filter potentialFilters() villa/bölge koşulları ("\n  AND ..." biçiminde)
+     * @param array{start:string,end:string} $range rangeLiterals() çıktısı
+     * @param int[] $statuses Boşsa tüm durumlar; aksi halde dolu.durum (silinen için 5)
+     */
+    private function potentialReservationRows(string $filter, string $requestDay, array $range, array $statuses): array
+    {
+        $pdo = $this->db->pdo();
+        $deleted = $this->deletedStatus();
+        $parts = $this->reservationListSqlParts($pdo);
+
+        $statusSql = '';
+        if ($statuses) {
+            // Siteye özel silinme kodu: istekte 5 gelir, tabloda $deleted aranır.
+            $codes = array_map(function (int $s) use ($deleted): int {
+                return $s === 5 ? $deleted : $s;
+            }, $statuses);
+            $statusSql = "\n  AND d.durum IN (" . implode(',', array_unique($codes)) . ')';
+        }
+
+        $limit = self::MAX_POTENTIAL_RESERVATIONS;
+        $sql = "
+SELECT TOP " . ($limit + 1) . "
+    {$parts['select']}
+FROM dbo.kayitlar k
+INNER JOIN dbo.dolu d ON d.kayitid = k.id
+{$parts['joins']}
+WHERE {$requestDay} >= {$range['start']} AND {$requestDay} < {$range['end']}{$filter}{$statusSql}
+ORDER BY k.rez_tarihi ASC, k.id ASC";
+
+        $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        $truncated = count($rows) > $limit;
+        if ($truncated) {
+            $rows = array_slice($rows, 0, $limit);
+        }
+
+        $netCommissionBase = ReservationDiscountModel::commissionBase(
+            ReservationDiscountModel::config(is_array($this->app['reservation_discount'] ?? null) ? $this->app['reservation_discount'] : [])
+        ) === 'net';
+
+        $items = [];
+        $sum = ['toplam_tutar' => 0.0, 'on_odeme' => 0.0, 'kalan_odeme' => 0.0, 'hesap_evsahibi' => 0.0, 'temizlik' => 0.0, 'kar' => 0.0, 'gece' => 0];
+        $statusCounts = [];
+        foreach ($rows as $r) {
+            $item = $this->reservationListItem($r, $netCommissionBase);
+            foreach (array_keys($sum) as $key) {
+                $sum[$key] += $item[$key] ?? 0;
+            }
+            $statusKey = $item['durum'] === null ? 'unknown' : (string) $item['durum'];
+            if (!isset($statusCounts[$statusKey])) {
+                $statusCounts[$statusKey] = ['durum' => $item['durum'], 'label' => $item['durum_label'], 'count' => 0];
+            }
+            $statusCounts[$statusKey]['count']++;
+            $items[] = $item;
+        }
+
+        $totals = ['count' => count($items), 'gece' => $sum['gece']];
+        foreach (['toplam_tutar', 'on_odeme', 'kalan_odeme', 'hesap_evsahibi', 'temizlik', 'kar'] as $key) {
+            $totals[$key] = round($sum[$key], 2);
+            $totals[$key . '_formatted'] = number_format($sum[$key], 2, ',', '.') . ' TL';
+        }
+        ksort($statusCounts);
+
+        return [
+            'items' => $items,
+            'totals' => $totals,
+            'statusCounts' => array_values($statusCounts),
+            'meta' => [
+                'count' => count($items),
+                'limit' => $limit,
+                'truncated' => $truncated,
+                'statuses' => $statuses,
+            ],
+        ];
     }
 
     /**
@@ -350,9 +516,10 @@ GROUP BY CAST(k.son_durum_guncelleme AS date)";
      * dönemi ve kisasureli3'ün izin verdiği tam ara boşluk hariç. kisasureli3 takvimin bugünkü haline bakar.
      *
      * @param array{start:string,end:string} $range rangeLiterals() çıktısı
+     * @param string $dayColumn Günlere dağıtılan kolon (k.son_durum_guncelleme veya dateType=rez_tarihi için k.rez_tarihi)
      * @return array<string,int> Y-m-d => adet
      */
-    private function lostShortStayCounts(string $from, string $filter, array $range, string $lost): array
+    private function lostShortStayCounts(string $from, string $filter, array $range, string $lost, string $dayColumn = 'k.son_durum_guncelleme'): array
     {
         $pdo = $this->db->pdo();
         $sameAcrossSites = !empty($this->app['calculate_prices_same_across_sites']);
@@ -363,7 +530,7 @@ GROUP BY CAST(k.son_durum_guncelleme AS date)";
 
         $sql = "
 SELECT
-    CONVERT(varchar(10), CAST(k.son_durum_guncelleme AS date), 23) AS gun,
+    CONVERT(varchar(10), CAST({$dayColumn} AS date), 23) AS gun,
     k.evid,
     CONVERT(varchar(10), CAST(k.rez_tarihi AS date), 23) AS giris,
     CONVERT(varchar(10), CAST(k.gelecek_tarih AS date), 23) AS cikis,
@@ -388,7 +555,7 @@ OUTER APPLY (
        AND CAST(k.rez_tarihi AS date) BETWEEN " . \App\Support\SqlDate::any('s.tarih1') . " AND " . \App\Support\SqlDate::any('s.tarih2') . "
      ORDER BY s.id DESC
 ) AS sz
-WHERE k.son_durum_guncelleme >= {$range['start']} AND k.son_durum_guncelleme < {$range['end']}
+WHERE {$dayColumn} >= {$range['start']} AND {$dayColumn} < {$range['end']}
   AND {$lost}{$filter}";
 
         $hasShortStayFunction = $this->objectExists('dbo.kisasureli3', 'IF') || $this->objectExists('dbo.kisasureli3', 'TF');
@@ -686,7 +853,7 @@ SELECT r.i, COUNT(DISTINCT d.emlak) AS dolu_villa
     }
 
     /**
-     * Potansiyel raporu filtreleri: villalar ve bölgeler.
+     * Potansiyel raporu filtreleri: villalar, bölgeler ve tarih tipleri (monthlyperformance/filters ile aynı dateTypes).
      *
      * @Get("potential-options")
      */
@@ -731,6 +898,7 @@ SELECT r.i, COUNT(DISTINCT d.emlak) AS dolu_villa
                 ];
             }, $villas),
             'regions' => $regions,
+            'dateTypes' => self::REPORT_DATE_TYPES,
         ]);
     }
 
@@ -1061,6 +1229,8 @@ WHERE k.odeme = {$paymentType}
      * @query months string|array Ay veya aylar listesi (1-12)
      * @query villas string|array Villa id'leri (virgülle ayrılmış veya dizi)
      * @query date_type string Tarih tipi ('islem_tarihi' | 'rez_tarihi', varsayılan 'islem_tarihi')
+     * @query startDate string Özel aralık başlangıcı (YYYY-MM-DD / DD.MM.YYYY). endDate ile verilirse year/months yok sayılır
+     * @query endDate string Özel aralık bitişi (dahil). Kıyas dönemi aynı aralığın bir yıl öncesi; aralık en fazla 1 yıl
      */
     public function monthlyperformance(): void
     {
@@ -1079,6 +1249,13 @@ WHERE k.odeme = {$paymentType}
             ?? $this->request->query('ay')
             ?? $this->request->input('ay');
         $months = $this->parseIntList($monthsRaw);
+
+        // Özel tarih aralığı verildiyse yıl/ay filtresinin yerine geçer.
+        $customRange = $this->customReportRange();
+        if ($customRange !== null) {
+            $year = (int) substr($customRange['start'], 0, 4);
+            $months = [];
+        }
 
         $villasRaw = $this->request->query('villas')
             ?? $this->request->input('villas')
@@ -1181,20 +1358,29 @@ WHERE k.odeme = {$paymentType}
 
         $prevYear = $year - 1;
 
-        // Yıl filtresi: islem_tarihi üzerinden cari yıl ve önceki yıl (karşılaştırma için)
-        $where[] = "YEAR({$islemDateExpr}) IN (:year, :prev_year)";
-        $params[':year'] = $year;
-        $params[':prev_year'] = $prevYear;
+        if ($customRange !== null) {
+            // Özel aralık: seçilen aralık ve bir yıl öncesi (karşılaştırma için)
+            $where[] = "(({$islemDateExpr} BETWEEN :range_start AND :range_end) OR ({$islemDateExpr} BETWEEN :prev_range_start AND :prev_range_end))";
+            $params[':range_start'] = $customRange['start'];
+            $params[':range_end'] = $customRange['end'];
+            $params[':prev_range_start'] = $customRange['prevStart'];
+            $params[':prev_range_end'] = $customRange['prevEnd'];
+        } else {
+            // Yıl filtresi: islem_tarihi üzerinden cari yıl ve önceki yıl (karşılaştırma için)
+            $where[] = "YEAR({$islemDateExpr}) IN (:year, :prev_year)";
+            $params[':year'] = $year;
+            $params[':prev_year'] = $prevYear;
 
-        // Ay filtresi: islem_tarihi üzerinden (boş ise TÜM aylar)
-        if ($months !== []) {
-            $mPhs = [];
-            foreach ($months as $idx => $m) {
-                $ph = ':month_' . $idx;
-                $mPhs[] = $ph;
-                $params[$ph] = $m;
+            // Ay filtresi: islem_tarihi üzerinden (boş ise TÜM aylar)
+            if ($months !== []) {
+                $mPhs = [];
+                foreach ($months as $idx => $m) {
+                    $ph = ':month_' . $idx;
+                    $mPhs[] = $ph;
+                    $params[$ph] = $m;
+                }
+                $where[] = "MONTH({$islemDateExpr}) IN (" . implode(',', $mPhs) . ')';
             }
-            $where[] = "MONTH({$islemDateExpr}) IN (" . implode(',', $mPhs) . ')';
         }
 
         $whereSql = implode(' AND ', $where);
@@ -1272,8 +1458,12 @@ WHERE k.odeme = {$paymentType}
         $rowsCurrent = [];
         $rowsPrevious = [];
         foreach ($rows as $r) {
-            $rYear = isset($r['rez_yil']) ? (int) $r['rez_yil'] : $year;
-            if ($rYear === $prevYear) {
+            if ($customRange !== null) {
+                $isPrevious = (string) ($r['islem_tarihi'] ?? '') < $customRange['start'];
+            } else {
+                $isPrevious = (isset($r['rez_yil']) ? (int) $r['rez_yil'] : $year) === $prevYear;
+            }
+            if ($isPrevious) {
                 $rowsPrevious[] = $r;
             } else {
                 $rowsCurrent[] = $r;
@@ -1363,14 +1553,28 @@ WHERE k.odeme = {$paymentType}
         } else {
             $totalDaysInPeriod = (int) date('z', strtotime(sprintf('%04d-12-31', $year))) + 1;
         }
+
+        // Özel aralık: grafik aralığın her günü için (1..gün sayısı), kıyas aynı aralığın bir yıl öncesi.
+        if ($customRange !== null) {
+            $targetMonth = (int) substr($customRange['start'], 5, 2);
+            $numDays = $customRange['days'];
+            $totalDaysInPeriod = $customRange['days'];
+        }
         $totalDaysInPeriod = max(1, $totalDaysInPeriod);
+
+        $periodDays = $this->reportPeriodDays($numDays, $customRange, $year, $targetMonth);
+        $periodDayTs = array_map('strtotime', $periodDays);
+        $dayMapCurrent = $customRange !== null ? array_flip($periodDays) : null;
+        $dayMapPrevious = $customRange !== null
+            ? array_flip($this->reportPeriodDays($numDays, $customRange, $prevYear, $targetMonth, true))
+            : null;
 
         $daily = [];
         for ($d = 1; $d <= $numDays; $d++) {
             $daily[$d] = [
                 'gun' => $d,
                 'day' => $d,
-                'date' => sprintf('%04d-%02d-%02d', $year, $targetMonth, min($d, 28)),
+                'date' => $customRange !== null ? $periodDays[$d] : sprintf('%04d-%02d-%02d', $year, $targetMonth, min($d, 28)),
                 'girisKisi' => 0,
                 'cikisKisi' => 0,
                 'konaklayanKisi' => 0,
@@ -1409,20 +1613,16 @@ WHERE k.odeme = {$paymentType}
             $girisTs = strtotime($girisStr);
             $cikisTs = $cikisStr !== '' ? strtotime($cikisStr) : ($girisTs + 86400 * 7);
 
-            $girisM = (int) date('n', $girisTs);
             $girisD = (int) date('j', $girisTs);
-
-            $cikisM = (int) date('n', $cikisTs);
             $cikisD = (int) date('j', $cikisTs);
 
             $islemStr = (string) ($row['islem_tarihi'] ?? '');
             $islemTs = $islemStr !== '' ? strtotime($islemStr) : $girisTs;
-            $islemM = (int) date('n', $islemTs);
-            $islemD = (int) date('j', $islemTs);
 
-            $matchIslem = $isSingleMonth ? ($islemM === $targetMonth) : true;
-            $matchGiris = $isSingleMonth ? ($girisM === $targetMonth) : true;
-            $matchCikis = $isSingleMonth ? ($cikisM === $targetMonth) : true;
+            // Grafikteki gün indeksi (grafik dışındaysa 0)
+            $islemIdx = $this->reportDayIndex($islemTs, $dayMapCurrent, $isSingleMonth, $targetMonth);
+            $girisIdx = $this->reportDayIndex($girisTs, $dayMapCurrent, $isSingleMonth, $targetMonth);
+            $cikisIdx = $this->reportDayIndex($cikisTs, $dayMapCurrent, $isSingleMonth, $targetMonth);
 
             $nights = max(1, (int) round(($cikisTs - $girisTs) / 86400));
 
@@ -1431,32 +1631,31 @@ WHERE k.odeme = {$paymentType}
                 $totalRezNights += $nights;
 
                 // İşlem günü: ciro, kazanç, kesinleşen ve tahsilat kanalları
-                if ($matchIslem && isset($daily[$islemD])) {
-                    $daily[$islemD]['kesinlesen'] += 1;
-                    $daily[$islemD]['brutCiro'] += $ciro;
-                    $daily[$islemD]['sirketKazanci'] += $kar;
+                if (isset($daily[$islemIdx])) {
+                    $daily[$islemIdx]['kesinlesen'] += 1;
+                    $daily[$islemIdx]['brutCiro'] += $ciro;
+                    $daily[$islemIdx]['sirketKazanci'] += $kar;
 
                     if ($odeme === 1 || $odeme === 4) {
-                        $daily[$islemD]['sanalPos'] += $ciro;
+                        $daily[$islemIdx]['sanalPos'] += $ciro;
                     } elseif ($odeme === 2 || $odeme === 5) {
-                        $daily[$islemD]['bankaHavalesi'] += $ciro;
+                        $daily[$islemIdx]['bankaHavalesi'] += $ciro;
                     }
                 }
 
                 // Giriş günü (misafir doluluk grafiği)
-                if ($matchGiris && isset($daily[$girisD])) {
-                    $daily[$girisD]['girisKisi'] += $pax;
+                if (isset($daily[$girisIdx])) {
+                    $daily[$girisIdx]['girisKisi'] += $pax;
                 }
 
                 // Çıkış günü (misafir doluluk grafiği)
-                if ($matchCikis && isset($daily[$cikisD])) {
-                    $daily[$cikisD]['cikisKisi'] += $pax;
+                if (isset($daily[$cikisIdx])) {
+                    $daily[$cikisIdx]['cikisKisi'] += $pax;
                 }
 
                 // Konaklayan günler (giris <= day < cikis)
-                if ($isSingleMonth) {
-                    for ($d = 1; $d <= $numDays; $d++) {
-                        $currDayTs = strtotime(sprintf('%04d-%02d-%02d', $year, $targetMonth, $d));
+                if ($isSingleMonth || $customRange !== null) {
+                    foreach ($periodDayTs as $d => $currDayTs) {
                         if ($currDayTs >= $girisTs && $currDayTs < $cikisTs) {
                             $daily[$d]['konaklayanKisi'] += $pax;
                             $daily[$d]['konaklayanRez'] += 1;
@@ -1479,8 +1678,8 @@ WHERE k.odeme = {$paymentType}
                 }
             } else {
                 // Kesinleşmeyen talep (işlem günü)
-                if ($matchIslem && isset($daily[$islemD])) {
-                    $daily[$islemD]['kacanTalep'] += 1;
+                if (isset($daily[$islemIdx])) {
+                    $daily[$islemIdx]['kacanTalep'] += 1;
                 }
             }
         }
@@ -1535,12 +1734,10 @@ WHERE k.odeme = {$paymentType}
 
                 $islemStr = (string) ($row['islem_tarihi'] ?? '');
                 $islemTs = $islemStr !== '' ? strtotime($islemStr) : $girisTs;
-                $islemM = (int) date('n', $islemTs);
-                $islemD = (int) date('j', $islemTs);
 
-                $matchIslem = $isSingleMonth ? ($islemM === $targetMonth) : true;
-                if ($matchIslem && isset($dailyCiroPrevious[$islemD])) {
-                    $dailyCiroPrevious[$islemD] += $ciro;
+                $islemIdx = $this->reportDayIndex($islemTs, $dayMapPrevious, $isSingleMonth, $targetMonth);
+                if (isset($dailyCiroPrevious[$islemIdx])) {
+                    $dailyCiroPrevious[$islemIdx] += $ciro;
                 }
             }
         }
@@ -1552,7 +1749,7 @@ WHERE k.odeme = {$paymentType}
         for ($d = 1; $d <= $numDays; $d++) {
             $cumCurrent += (float) ($daily[$d]['brutCiro'] ?? 0.0);
             $cumPrevious += (float) ($dailyCiroPrevious[$d] ?? 0.0);
-            $cumulativeGrowth[] = [
+            $cumulativeGrowth[] = ($customRange !== null ? ['date' => $periodDays[$d]] : []) + [
                 'gun' => $d,
                 'day' => $d,
                 'current' => round($cumCurrent, 2),
@@ -1612,9 +1809,21 @@ WHERE k.odeme = {$paymentType}
         $subTitleText = $isSingleMonth
             ? "{$periodTitle} {$prevYear} ve {$periodTitle} {$year} kümülatif ciro artış eğrisi"
             : "{$prevYear} ve {$year} kümülatif ciro artış eğrisi";
+        $comparisonTitle = "Geçmiş Yıl Kıyaslaması ve Kümülatif Büyüme ({$prevYear} vs {$year})";
+
+        // Özel aralık: başlıklar tarih aralığı ile
+        if ($customRange !== null) {
+            $currRangeLabel = $this->formatDateRangeLabel($customRange['start'], $customRange['end']);
+            $prevRangeLabel = $this->formatDateRangeLabel($customRange['prevStart'], $customRange['prevEnd']);
+            $periodTitle = $currRangeLabel;
+            $prevColHeader = $prevRangeLabel;
+            $currColHeader = $currRangeLabel;
+            $subTitleText = "{$prevRangeLabel} ve {$currRangeLabel} kümülatif ciro artış eğrisi";
+            $comparisonTitle = "Geçmiş Yıl Kıyaslaması ve Kümülatif Büyüme ({$prevRangeLabel} vs {$currRangeLabel})";
+        }
 
         $comparison = [
-            'title' => "Geçmiş Yıl Kıyaslaması ve Kümülatif Büyüme ({$prevYear} vs {$year})",
+            'title' => $comparisonTitle,
             'subTitle' => $subTitleText,
             'growthBadge' => [
                 'rate' => $ciroDiff['rate'],
@@ -1718,6 +1927,11 @@ WHERE k.odeme = {$paymentType}
             'chart' => $cumulativeGrowth,
         ];
 
+        // Özel aralıkta grafik noktalarına gerçek tarih eklenir (x ekseni için).
+        $withDate = function (array $d, array $point) use ($customRange): array {
+            return $customRange !== null ? ['date' => $d['date']] + $point : $point;
+        };
+
         // Yanıt zarfı
         $this->response->success([
             'cards' => [
@@ -1807,43 +2021,43 @@ WHERE k.odeme = {$paymentType}
 
             // Grafikler (Image 5'teki 4 grafik)
             'charts' => [
-                'doluluk' => array_map(function ($d) {
-                    return [
+                'doluluk' => array_map(function ($d) use ($withDate) {
+                    return $withDate($d, [
                         'gun' => $d['gun'],
                         'day' => $d['day'],
                         'girisKisi' => $d['girisKisi'],
                         'cikisKisi' => $d['cikisKisi'],
                         'konaklayanKisi' => $d['konaklayanKisi'],
                         'konaklayanRez' => $d['konaklayanRez'],
-                    ];
+                    ]);
                 }, array_values($daily)),
 
-                'donusum' => array_map(function ($d) {
-                    return [
+                'donusum' => array_map(function ($d) use ($withDate) {
+                    return $withDate($d, [
                         'gun' => $d['gun'],
                         'day' => $d['day'],
                         'kesinlesen' => $d['kesinlesen'],
                         'kacanTalep' => $d['kacanTalep'],
                         'donusumOrani' => $d['donusumOrani'],
-                    ];
+                    ]);
                 }, array_values($daily)),
 
-                'ciroKazanc' => array_map(function ($d) {
-                    return [
+                'ciroKazanc' => array_map(function ($d) use ($withDate) {
+                    return $withDate($d, [
                         'gun' => $d['gun'],
                         'day' => $d['day'],
                         'brutCiro' => $d['brutCiro'],
                         'sirketKazanci' => $d['sirketKazanci'],
-                    ];
+                    ]);
                 }, array_values($daily)),
 
-                'tahsilatKanallari' => array_map(function ($d) {
-                    return [
+                'tahsilatKanallari' => array_map(function ($d) use ($withDate) {
+                    return $withDate($d, [
                         'gun' => $d['gun'],
                         'day' => $d['day'],
                         'sanalPos' => $d['sanalPos'],
                         'bankaHavalesi' => $d['bankaHavalesi'],
-                    ];
+                    ]);
                 }, array_values($daily)),
 
                 'kumulatifBuyume' => $cumulativeGrowth,
@@ -1864,6 +2078,11 @@ WHERE k.odeme = {$paymentType}
                 'chartDays' => $numDays,
                 'dateType' => $dateTypeStr,
                 'dateField' => $dateTypeStr,
+                'periodType' => $customRange !== null ? 'custom' : 'month',
+                'startDate' => $customRange['start'] ?? null,
+                'endDate' => $customRange['end'] ?? null,
+                'previousStartDate' => $customRange['prevStart'] ?? null,
+                'previousEndDate' => $customRange['prevEnd'] ?? null,
             ],
         ]);
     }
@@ -1882,6 +2101,9 @@ WHERE k.odeme = {$paymentType}
      * @query cutoff int Projeksiyon kesme günü (varsayılan 29 veya ayın son günü)
      * @query date_type string Tarih tipi ('islem_tarihi' | 'rez_tarihi', varsayılan 'islem_tarihi')
      * @query sqlx string Ham SQL çıktısı modu ('json', 'raw', 'template')
+     * @query startDate string Özel aralık başlangıcı (YYYY-MM-DD / DD.MM.YYYY). endDate ile verilirse year/months yok sayılır
+     * @query endDate string Özel aralık bitişi (dahil). Kıyas dönemi aynı aralığın bir yıl öncesi; aralık en fazla 1 yıl.
+     *                       cutoff bu durumda aralığın kaçıncı günü olduğunu belirtir (1..gün sayısı)
      */
     public function paxperformance(): void
     {
@@ -2000,22 +2222,38 @@ WHERE k.odeme = {$paymentType}
             $where[] = 'k.evid IN (' . implode(',', $vPhs) . ')';
         }
 
+        // Özel tarih aralığı verildiyse yıl/ay filtresinin yerine geçer.
+        $customRange = $this->customReportRange();
+        if ($customRange !== null) {
+            $year = (int) substr($customRange['start'], 0, 4);
+            $months = [];
+        }
+
         $prevYear = $year - 1;
 
-        // Yıl filtresi: islem_tarihi üzerinden cari yıl ve önceki yıl (karşılaştırma için)
-        $where[] = "YEAR({$islemDateExpr}) IN (:year, :prev_year)";
-        $params[':year'] = $year;
-        $params[':prev_year'] = $prevYear;
+        if ($customRange !== null) {
+            // Özel aralık: seçilen aralık ve bir yıl öncesi (karşılaştırma için)
+            $where[] = "(({$islemDateExpr} BETWEEN :range_start AND :range_end) OR ({$islemDateExpr} BETWEEN :prev_range_start AND :prev_range_end))";
+            $params[':range_start'] = $customRange['start'];
+            $params[':range_end'] = $customRange['end'];
+            $params[':prev_range_start'] = $customRange['prevStart'];
+            $params[':prev_range_end'] = $customRange['prevEnd'];
+        } else {
+            // Yıl filtresi: islem_tarihi üzerinden cari yıl ve önceki yıl (karşılaştırma için)
+            $where[] = "YEAR({$islemDateExpr}) IN (:year, :prev_year)";
+            $params[':year'] = $year;
+            $params[':prev_year'] = $prevYear;
 
-        // Ay filtresi: islem_tarihi üzerinden (boş ise TÜM aylar)
-        if ($months !== []) {
-            $mPhs = [];
-            foreach ($months as $idx => $m) {
-                $ph = ':month_' . $idx;
-                $mPhs[] = $ph;
-                $params[$ph] = $m;
+            // Ay filtresi: islem_tarihi üzerinden (boş ise TÜM aylar)
+            if ($months !== []) {
+                $mPhs = [];
+                foreach ($months as $idx => $m) {
+                    $ph = ':month_' . $idx;
+                    $mPhs[] = $ph;
+                    $params[$ph] = $m;
+                }
+                $where[] = "MONTH({$islemDateExpr}) IN (" . implode(',', $mPhs) . ')';
             }
-            $where[] = "MONTH({$islemDateExpr}) IN (" . implode(',', $mPhs) . ')';
         }
 
         $whereSql = implode(' AND ', $where);
@@ -2093,8 +2331,12 @@ WHERE k.odeme = {$paymentType}
         $rowsCurrent = [];
         $rowsPrevious = [];
         foreach ($rows as $r) {
-            $rYear = isset($r['rez_yil']) ? (int) $r['rez_yil'] : $year;
-            if ($rYear === $prevYear) {
+            if ($customRange !== null) {
+                $isPrevious = (string) ($r['islem_tarihi'] ?? '') < $customRange['start'];
+            } else {
+                $isPrevious = (isset($r['rez_yil']) ? (int) $r['rez_yil'] : $year) === $prevYear;
+            }
+            if ($isPrevious) {
                 $rowsPrevious[] = $r;
             } else {
                 $rowsCurrent[] = $r;
@@ -2123,12 +2365,36 @@ WHERE k.odeme = {$paymentType}
         } else {
             $totalDaysInPeriod = (int) date('z', strtotime(sprintf('%04d-12-31', $year))) + 1;
         }
+
+        // Özel aralık: grafik aralığın her günü için (1..gün sayısı), kıyas aynı aralığın bir yıl öncesi.
+        if ($customRange !== null) {
+            $targetMonth = (int) substr($customRange['start'], 5, 2);
+            $numDays = $customRange['days'];
+            $totalDaysInPeriod = $customRange['days'];
+        }
         $totalDaysInPeriod = max(1, $totalDaysInPeriod);
 
+        $periodDays = $this->reportPeriodDays($numDays, $customRange, $year, $targetMonth);
+        $periodDaysPrevious = $this->reportPeriodDays($numDays, $customRange, $prevYear, $targetMonth, true);
+        $periodDayTs = array_map('strtotime', $periodDays);
+        $periodDayTsPrevious = array_map('strtotime', $periodDaysPrevious);
+        $dayMapCurrent = $customRange !== null ? array_flip($periodDays) : null;
+        $dayMapPrevious = $customRange !== null ? array_flip($periodDaysPrevious) : null;
+
         // Projeksiyon Kesme Günü (Örn: 29)
+        $today = date('Y-m-d');
         $cutoffRaw = $this->request->query('cutoff') ?? $this->request->input('cutoff');
         if ($cutoffRaw !== null && is_numeric($cutoffRaw) && (int) $cutoffRaw >= 1 && (int) $cutoffRaw <= $numDays) {
             $cutoffDay = (int) $cutoffRaw;
+        } elseif ($customRange !== null) {
+            // Özel aralık: bugün aralıktaysa bugünün indeksi; aralık geçmişteyse son gün, gelecekteyse ilk gün.
+            if ($today > $customRange['end']) {
+                $cutoffDay = $numDays;
+            } elseif ($today < $customRange['start']) {
+                $cutoffDay = 1;
+            } else {
+                $cutoffDay = $dayMapCurrent[$today] ?? $numDays;
+            }
         } elseif ($year === (int) date('Y') && $targetMonth === (int) date('n')) {
             $cutoffDay = min((int) date('j'), $numDays);
         } else {
@@ -2143,7 +2409,7 @@ WHERE k.odeme = {$paymentType}
             $dailyCurrent[$d] = [
                 'day' => $d,
                 'gun' => $d,
-                'date' => sprintf('%04d-%02d-%02d', $year, $targetMonth, min($d, 28)),
+                'date' => $customRange !== null ? $periodDays[$d] : sprintf('%04d-%02d-%02d', $year, $targetMonth, min($d, 28)),
                 'girisKisi' => 0,
                 'cikisKisi' => 0,
                 'konaklayanKisi' => 0,
@@ -2157,7 +2423,7 @@ WHERE k.odeme = {$paymentType}
             $dailyPrevious[$d] = [
                 'day' => $d,
                 'gun' => $d,
-                'date' => sprintf('%04d-%02d-%02d', $prevYear, $targetMonth, min($d, 28)),
+                'date' => $customRange !== null ? $periodDaysPrevious[$d] : sprintf('%04d-%02d-%02d', $prevYear, $targetMonth, min($d, 28)),
                 'girisKisi' => 0,
                 'cikisKisi' => 0,
                 'konaklayanKisi' => 0,
@@ -2223,46 +2489,48 @@ WHERE k.odeme = {$paymentType}
 
             $islemStr = (string) ($row['islem_tarihi'] ?? '');
             $islemTs = $islemStr !== '' ? strtotime($islemStr) : $girisTs;
-            $islemM = (int) date('n', $islemTs);
-            $islemD = (int) date('j', $islemTs);
 
-            $matchIslem = $isSingleMonth ? ($islemM === $targetMonth) : true;
+            // Toplam giriş/çıkış: tek ayda o aya düşenler, diğer durumlarda (özel aralık dahil) hepsi
             $matchGiris = $isSingleMonth ? ($girisM === $targetMonth) : true;
             $matchCikis = $isSingleMonth ? ($cikisM === $targetMonth) : true;
+
+            // Grafikteki gün indeksi (grafik dışındaysa 0)
+            $islemIdx = $this->reportDayIndex($islemTs, $dayMapCurrent, $isSingleMonth, $targetMonth);
+            $girisIdx = $this->reportDayIndex($girisTs, $dayMapCurrent, $isSingleMonth, $targetMonth);
+            $cikisIdx = $this->reportDayIndex($cikisTs, $dayMapCurrent, $isSingleMonth, $targetMonth);
 
             $nights = max(1, (int) round(($cikisTs - $girisTs) / 86400));
             $totalGuestNights += ($pax * $nights);
             $totalRezNights += $nights;
 
             // İşlem günü: pax, rez, ciro, kazanç
-            if ($matchIslem && isset($dailyCurrent[$islemD])) {
-                $dailyCurrent[$islemD]['kesinlesenPax'] += $pax;
-                $dailyCurrent[$islemD]['kesinlesenRez'] += 1;
-                $dailyCurrent[$islemD]['ciro'] += $ciro;
-                $dailyCurrent[$islemD]['kazanc'] += $kar;
-                $dailyCurrent[$islemD]['tahsilat'] += $tahsilat;
+            if (isset($dailyCurrent[$islemIdx])) {
+                $dailyCurrent[$islemIdx]['kesinlesenPax'] += $pax;
+                $dailyCurrent[$islemIdx]['kesinlesenRez'] += 1;
+                $dailyCurrent[$islemIdx]['ciro'] += $ciro;
+                $dailyCurrent[$islemIdx]['kazanc'] += $kar;
+                $dailyCurrent[$islemIdx]['tahsilat'] += $tahsilat;
             }
 
             // Giriş günü
             if ($matchGiris) {
                 $totalGirisKisi += $pax;
-                if (isset($dailyCurrent[$girisD])) {
-                    $dailyCurrent[$girisD]['girisKisi'] += $pax;
+                if (isset($dailyCurrent[$girisIdx])) {
+                    $dailyCurrent[$girisIdx]['girisKisi'] += $pax;
                 }
             }
 
             // Çıkış günü
             if ($matchCikis) {
                 $totalCikisKisi += $pax;
-                if (isset($dailyCurrent[$cikisD])) {
-                    $dailyCurrent[$cikisD]['cikisKisi'] += $pax;
+                if (isset($dailyCurrent[$cikisIdx])) {
+                    $dailyCurrent[$cikisIdx]['cikisKisi'] += $pax;
                 }
             }
 
             // Konaklayan günler (giris <= day < cikis)
-            if ($isSingleMonth) {
-                for ($d = 1; $d <= $numDays; $d++) {
-                    $currDayTs = strtotime(sprintf('%04d-%02d-%02d', $year, $targetMonth, $d));
+            if ($isSingleMonth || $customRange !== null) {
+                foreach ($periodDayTs as $d => $currDayTs) {
                     if ($currDayTs >= $girisTs && $currDayTs < $cikisTs) {
                         $dailyCurrent[$d]['konaklayanKisi'] += $pax;
                         $dailyCurrent[$d]['konaklayanRez'] += 1;
@@ -2330,41 +2598,41 @@ WHERE k.odeme = {$paymentType}
 
             $islemStr = (string) ($row['islem_tarihi'] ?? '');
             $islemTs = $islemStr !== '' ? strtotime($islemStr) : $girisTs;
-            $islemM = (int) date('n', $islemTs);
-            $islemD = (int) date('j', $islemTs);
 
-            $matchIslem = $isSingleMonth ? ($islemM === $targetMonth) : true;
             $matchGiris = $isSingleMonth ? ($girisM === $targetMonth) : true;
             $matchCikis = $isSingleMonth ? ($cikisM === $targetMonth) : true;
+
+            $islemIdx = $this->reportDayIndex($islemTs, $dayMapPrevious, $isSingleMonth, $targetMonth);
+            $girisIdx = $this->reportDayIndex($girisTs, $dayMapPrevious, $isSingleMonth, $targetMonth);
+            $cikisIdx = $this->reportDayIndex($cikisTs, $dayMapPrevious, $isSingleMonth, $targetMonth);
 
             $nights = max(1, (int) round(($cikisTs - $girisTs) / 86400));
             $prevGuestNights += ($pax * $nights);
             $prevRezNights += $nights;
 
-            if ($matchIslem && isset($dailyPrevious[$islemD])) {
-                $dailyPrevious[$islemD]['kesinlesenPax'] += $pax;
-                $dailyPrevious[$islemD]['kesinlesenRez'] += 1;
-                $dailyPrevious[$islemD]['ciro'] += $ciro;
-                $dailyPrevious[$islemD]['kazanc'] += $kar;
+            if (isset($dailyPrevious[$islemIdx])) {
+                $dailyPrevious[$islemIdx]['kesinlesenPax'] += $pax;
+                $dailyPrevious[$islemIdx]['kesinlesenRez'] += 1;
+                $dailyPrevious[$islemIdx]['ciro'] += $ciro;
+                $dailyPrevious[$islemIdx]['kazanc'] += $kar;
             }
 
             if ($matchGiris) {
                 $prevGirisKisi += $pax;
-                if (isset($dailyPrevious[$girisD])) {
-                    $dailyPrevious[$girisD]['girisKisi'] += $pax;
+                if (isset($dailyPrevious[$girisIdx])) {
+                    $dailyPrevious[$girisIdx]['girisKisi'] += $pax;
                 }
             }
 
             if ($matchCikis) {
                 $prevCikisKisi += $pax;
-                if (isset($dailyPrevious[$cikisD])) {
-                    $dailyPrevious[$cikisD]['cikisKisi'] += $pax;
+                if (isset($dailyPrevious[$cikisIdx])) {
+                    $dailyPrevious[$cikisIdx]['cikisKisi'] += $pax;
                 }
             }
 
-            if ($isSingleMonth) {
-                for ($d = 1; $d <= $numDays; $d++) {
-                    $currDayTs = strtotime(sprintf('%04d-%02d-%02d', $prevYear, $targetMonth, $d));
+            if ($isSingleMonth || $customRange !== null) {
+                foreach ($periodDayTsPrevious as $d => $currDayTs) {
                     if ($currDayTs >= $girisTs && $currDayTs < $cikisTs) {
                         $dailyPrevious[$d]['konaklayanKisi'] += $pax;
                         $dailyPrevious[$d]['konaklayanRez'] += 1;
@@ -2509,7 +2777,7 @@ WHERE k.odeme = {$paymentType}
             $chartKonaklayan[] = [
                 'day' => $d,
                 'gun' => $d,
-                'date' => sprintf('%04d-%02d-%02d', $year, $targetMonth, min($d, 28)),
+                'date' => $cData['date'],
                 'girisKisi' => (int) $cData['girisKisi'],
                 'cikisKisi' => (int) $cData['cikisKisi'],
                 'konaklayanKisi' => (int) $cData['konaklayanKisi'],
@@ -2520,7 +2788,7 @@ WHERE k.odeme = {$paymentType}
             $dailyPax = (int) $cData['kesinlesenPax'];
             $dailyOrtGrup = $dailyRez > 0 ? round($dailyPax / $dailyRez, 1) : 0.0;
 
-            $chartPaxGrup[] = [
+            $chartPaxGrup[] = ($customRange !== null ? ['date' => $cData['date']] : []) + [
                 'day' => $d,
                 'gun' => $d,
                 'kesinlesenPax' => $dailyPax,
@@ -2533,7 +2801,7 @@ WHERE k.odeme = {$paymentType}
             $kbCiro = $dailyPax > 0 ? round($dailyCiro / $dailyPax, 2) : 0.0;
             $kbKazanc = $dailyPax > 0 ? round($dailyKar / $dailyPax, 2) : 0.0;
 
-            $chartKisiBasi[] = [
+            $chartKisiBasi[] = ($customRange !== null ? ['date' => $cData['date']] : []) + [
                 'day' => $d,
                 'gun' => $d,
                 'kesinlesenPax' => $dailyPax,
@@ -2559,7 +2827,7 @@ WHERE k.odeme = {$paymentType}
         $weekdayCounts = array_fill(1, 7, 0);
 
         for ($d = 1; $d <= $numDays; $d++) {
-            $ts = strtotime(sprintf('%04d-%02d-%02d', $year, $targetMonth, $d));
+            $ts = $periodDayTs[$d];
             $w = (int) date('N', $ts); // 1 (Pzt) .. 7 (Paz)
             $weekdaySums[$w] += (int) $dailyCurrent[$d]['konaklayanKisi'];
             $weekdayCounts[$w]++;
@@ -2835,7 +3103,7 @@ WHERE k.odeme = {$paymentType}
                 $realPaxVal = null; // Cutoff sonrası reel veri null
             }
 
-            $cumulativePaxChart[] = [
+            $cumulativePaxChart[] = ($customRange !== null ? ['date' => $periodDays[$d]] : []) + [
                 'day' => $d,
                 'gun' => $d,
                 'previousCumulative' => $cumPaxPrev,
@@ -2852,6 +3120,37 @@ WHERE k.odeme = {$paymentType}
         ];
         $monthTitle = $monthNames[$targetMonth] ?? 'Ay';
 
+        $comparisonTitle = 'Geçmiş Yıl Kıyaslaması ve Ay Sonu Pax Potansiyeli';
+        $comparisonPeriod = "{$monthTitle} {$prevYear} vs {$year}";
+        $comparisonSubTitle = "1-{$cutoffDay} {$monthTitle} arası reel gerçekleşme oranı baz alınarak kalan günlerin projeksiyonu hesaplanmıştır";
+        $comparisonNote = "Potansiyel Projeksiyon Formülü: {$year} yılı 1–{$cutoffDay}. gün reel pax verisine, {$prevYear} yılının kalan günleri bu yılın performans çarpanı (bu yıl ÷ geçen yıl aynı dönem) uygulanarak eklenmiştir.";
+        $comparisonHeaders = [
+            'metric' => 'Metrik',
+            'currentCutoff' => "{$year} (1-{$cutoffDay})",
+            'previousCutoff' => "{$prevYear} (1-{$cutoffDay})",
+            'diff' => 'Fark',
+            'previousTotal' => "{$prevYear} Ay Toplamı",
+            'currentPotential' => "{$year} Ay Sonu Potansiyeli",
+            'potentialDiff' => 'Potansiyel Fark',
+        ];
+
+        // Özel aralık: başlıklar tarih aralığı ile, "ay" yerine "dönem"
+        if ($customRange !== null) {
+            $currRangeLabel = $this->formatDateRangeLabel($customRange['start'], $customRange['end']);
+            $prevRangeLabel = $this->formatDateRangeLabel($customRange['prevStart'], $customRange['prevEnd']);
+            $currCutoffLabel = $this->formatDateRangeLabel($customRange['start'], $periodDays[$cutoffDay]);
+            $prevCutoffLabel = $this->formatDateRangeLabel($customRange['prevStart'], $periodDaysPrevious[$cutoffDay]);
+
+            $comparisonTitle = 'Geçmiş Yıl Kıyaslaması ve Dönem Sonu Pax Potansiyeli';
+            $comparisonPeriod = "{$prevRangeLabel} vs {$currRangeLabel}";
+            $comparisonSubTitle = "{$currCutoffLabel} arası reel gerçekleşme oranı baz alınarak dönemin kalan günlerinin projeksiyonu hesaplanmıştır";
+            $comparisonNote = "Potansiyel Projeksiyon Formülü: {$currCutoffLabel} reel pax verisine, {$prevRangeLabel} döneminin kalan günleri bu dönemin performans çarpanı (bu dönem ÷ geçen yıl aynı dönem) uygulanarak eklenmiştir.";
+            $comparisonHeaders['currentCutoff'] = $currCutoffLabel;
+            $comparisonHeaders['previousCutoff'] = $prevCutoffLabel;
+            $comparisonHeaders['previousTotal'] = "{$prevRangeLabel} Dönem Toplamı";
+            $comparisonHeaders['currentPotential'] = "{$currRangeLabel} Dönem Sonu Potansiyeli";
+        }
+
         $this->response->success([
             // 9 Özet Kart (Image 1)
             'cards' => $cards,
@@ -2866,22 +3165,15 @@ WHERE k.odeme = {$paymentType}
 
             // Geçmiş Yıl Kıyaslaması ve Ay Sonu Pax Potansiyeli (Image 3)
             'comparison' => [
-                'title' => 'Geçmiş Yıl Kıyaslaması ve Ay Sonu Pax Potansiyeli',
-                'period' => "{$monthTitle} {$prevYear} vs {$year}",
-                'subTitle' => "1-{$cutoffDay} {$monthTitle} arası reel gerçekleşme oranı baz alınarak kalan günlerin projeksiyonu hesaplanmıştır",
+                'title' => $comparisonTitle,
+                'period' => $comparisonPeriod,
+                'subTitle' => $comparisonSubTitle,
                 'cutoffDay' => $cutoffDay,
+                'cutoffDate' => $customRange !== null ? $periodDays[$cutoffDay] : null,
                 'numDays' => $numDays,
                 'paxMultiplier' => round($paxMultiplier, 2),
-                'note' => "Potansiyel Projeksiyon Formülü: {$year} yılı 1–{$cutoffDay}. gün reel pax verisine, {$prevYear} yılının kalan günleri bu yılın performans çarpanı (bu yıl ÷ geçen yıl aynı dönem) uygulanarak eklenmiştir.",
-                'headers' => [
-                    'metric' => 'Metrik',
-                    'currentCutoff' => "{$year} (1-{$cutoffDay})",
-                    'previousCutoff' => "{$prevYear} (1-{$cutoffDay})",
-                    'diff' => 'Fark',
-                    'previousTotal' => "{$prevYear} Ay Toplamı",
-                    'currentPotential' => "{$year} Ay Sonu Potansiyeli",
-                    'potentialDiff' => 'Potansiyel Fark',
-                ],
+                'note' => $comparisonNote,
+                'headers' => $comparisonHeaders,
                 'table' => $comparisonTable,
                 'cumulativePax' => $cumulativePaxChart,
             ],
@@ -2898,6 +3190,11 @@ WHERE k.odeme = {$paymentType}
                 'cutoffDay' => $cutoffDay,
                 'dateType' => $dateTypeStr,
                 'dateField' => $dateTypeStr,
+                'periodType' => $customRange !== null ? 'custom' : 'month',
+                'startDate' => $customRange['start'] ?? null,
+                'endDate' => $customRange['end'] ?? null,
+                'previousStartDate' => $customRange['prevStart'] ?? null,
+                'previousEndDate' => $customRange['prevEnd'] ?? null,
             ],
         ]);
     }
@@ -3653,10 +3950,7 @@ WHERE k.odeme = {$paymentType}
                 ['id' => 11, 'name' => 'Kasım'],
                 ['id' => 12, 'name' => 'Aralık'],
             ],
-            'dateTypes' => [
-                ['id' => 'islem_tarihi', 'name' => 'İşlem Tarihi (Kayıt / Rezervasyon Oluşturulma Tarihi)', 'value' => 'islem_tarihi'],
-                ['id' => 'rez_tarihi', 'name' => 'Rezervasyon Tarihi (Giriş Tarihi)', 'value' => 'rez_tarihi'],
-            ],
+            'dateTypes' => self::REPORT_DATE_TYPES,
         ]);
     }
 
@@ -3956,6 +4250,93 @@ WHERE k.odeme = {$paymentType}
     }
 
     /**
+     * Aylık performans / pax raporu için özel tarih aralığı (startDate + endDate). Verilmezse null döner ve
+     * rapor year/months ile çalışır. Karşılaştırma dönemi aynı aralığın bir yıl öncesidir; iki dönem çakışmasın
+     * diye aralık en fazla 1 yıl olabilir.
+     *
+     * @return array{start:string,end:string,prevStart:string,prevEnd:string,days:int}|null
+     */
+    private function customReportRange(): ?array
+    {
+        $startRaw = trim((string) ($this->request->query('startDate') ?? $this->request->input('startDate')
+            ?? $this->request->query('start_date') ?? $this->request->input('start_date') ?? ''));
+        $endRaw = trim((string) ($this->request->query('endDate') ?? $this->request->input('endDate')
+            ?? $this->request->query('end_date') ?? $this->request->input('end_date') ?? ''));
+        if ($startRaw === '' && $endRaw === '') {
+            return null;
+        }
+        if ($startRaw === '' || $endRaw === '') {
+            throw new HttpException('Özel tarih aralığı için startDate ve endDate birlikte gönderilmeli.', 'VALIDATION_ERROR', 422);
+        }
+
+        $start = $this->parseDate($startRaw, '');
+        $end = $this->parseDate($endRaw, '');
+        if ($end < $start) {
+            throw new HttpException('endDate startDate tarihinden önce olamaz.', 'VALIDATION_ERROR', 422);
+        }
+
+        $prevStart = (new DateTime($start))->modify('-1 year')->format('Y-m-d');
+        $prevEnd = (new DateTime($end))->modify('-1 year')->format('Y-m-d');
+        if ($prevEnd >= $start) {
+            throw new HttpException('Tarih aralığı en fazla 1 yıl olabilir.', 'VALIDATION_ERROR', 422);
+        }
+
+        return [
+            'start' => $start,
+            'end' => $end,
+            'prevStart' => $prevStart,
+            'prevEnd' => $prevEnd,
+            'days' => (int) (new DateTime($start))->diff(new DateTime($end))->days + 1,
+        ];
+    }
+
+    /**
+     * Rapor grafiğindeki günler: [1 => 'Y-m-d', ...]. Özel aralıkta aralığın (veya bir yıl öncesinin) günleri,
+     * aksi halde $year / $targetMonth ayının günleri.
+     *
+     * @param array{start:string,prevStart:string}|null $customRange
+     * @return array<int,string>
+     */
+    private function reportPeriodDays(int $numDays, ?array $customRange, int $year, int $targetMonth, bool $previous = false): array
+    {
+        $days = [];
+        if ($customRange !== null) {
+            $cursor = new DateTime($previous ? $customRange['prevStart'] : $customRange['start']);
+            for ($d = 1; $d <= $numDays; $d++) {
+                $days[$d] = $cursor->format('Y-m-d');
+                $cursor->modify('+1 day');
+            }
+            return $days;
+        }
+        for ($d = 1; $d <= $numDays; $d++) {
+            $days[$d] = sprintf('%04d-%02d-%02d', $year, $targetMonth, $d);
+        }
+        return $days;
+    }
+
+    /**
+     * Bir tarihin rapor grafiğindeki gün indeksi (1..numDays), grafikte yoksa 0.
+     * $dayMap verilirse (özel aralık: 'Y-m-d' => indeks) ona bakar; aksi halde ayın günü (tek ayda ay eşleşmeli).
+     *
+     * @param array<string,int>|null $dayMap
+     */
+    private function reportDayIndex(int $ts, ?array $dayMap, bool $isSingleMonth, int $targetMonth): int
+    {
+        if ($dayMap !== null) {
+            return $dayMap[date('Y-m-d', $ts)] ?? 0;
+        }
+        if ($isSingleMonth && (int) date('n', $ts) !== $targetMonth) {
+            return 0;
+        }
+        return (int) date('j', $ts);
+    }
+
+    private function formatDateRangeLabel(string $start, string $end): string
+    {
+        return date('d.m.Y', strtotime($start)) . ' - ' . date('d.m.Y', strtotime($end));
+    }
+
+    /**
      * @param mixed $raw
      */
     private function isRezTarihi($raw): bool
@@ -4194,6 +4575,94 @@ WHERE k.odeme = {$paymentType}
 
         $whereSql = implode(' AND ', $where);
 
+        $parts = $this->reservationListSqlParts($pdo);
+        $sql = "
+            SELECT
+                {$parts['select']}
+            FROM dbo.kayitlar k
+            INNER JOIN dbo.dolu d ON d.kayitid = k.id
+            {$parts['joins']}
+            WHERE {$whereSql}
+            ORDER BY {$dateExpr} DESC, k.id DESC
+        ";
+
+        $stmt = $pdo->prepare($sql);
+        foreach ($params as $k => $v) {
+            $stmt->bindValue($k, $v);
+        }
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $items = [];
+        $sumToplamTutar = 0.0;
+        $sumOnOdeme = 0.0;
+        $sumHesapEvsahibi = 0.0;
+        $sumKalan = 0.0;
+        $sumKar = 0.0;
+
+        $netCommissionBase = ReservationDiscountModel::commissionBase(
+            ReservationDiscountModel::config(is_array($this->app['reservation_discount'] ?? null) ? $this->app['reservation_discount'] : [])
+        ) === 'net';
+        foreach ($rows as $r) {
+            $item = $this->reservationListItem($r, $netCommissionBase);
+
+            $sumToplamTutar += $item['toplam_tutar'];
+            $sumOnOdeme += $item['on_odeme'];
+            $sumHesapEvsahibi += $item['hesap_evsahibi'];
+            $sumKalan += $item['kalan_odeme'];
+            $sumKar += $item['kar'];
+
+            $items[] = $item;
+        }
+
+        $cards = [
+            'kayit_sayisi' => count($items),
+            'kayit_sayisi_label' => count($items) . ' Rezervasyon',
+            'toplam_satis_tutari' => round($sumToplamTutar, 2),
+            'toplam_satis_tutari_formatted' => number_format($sumToplamTutar, 0, ',', '.') . ' TL',
+            'acenta_on_odemesi' => round($sumOnOdeme, 2),
+            'acenta_on_odemesi_formatted' => number_format($sumOnOdeme, 0, ',', '.') . ' TL',
+            'ev_sahibine_odenen' => round($sumHesapEvsahibi, 2),
+            'ev_sahibine_odenen_formatted' => number_format($sumHesapEvsahibi, 0, ',', '.') . ' TL',
+            'kalan_tahsilat' => round($sumKalan, 2),
+            'kalan_tahsilat_formatted' => number_format($sumKalan, 0, ',', '.') . ' TL',
+            'toplam_acenta_kari' => round($sumKar, 2),
+            'toplam_acenta_kari_formatted' => number_format($sumKar, 0, ',', '.') . ' TL',
+        ];
+
+        $this->response->success([
+            'items' => $items,
+            'cards' => $cards,
+            'totals' => $cards,
+            'summary' => $cards,
+            'meta' => [
+                'total' => count($items),
+                'count' => count($items),
+                'dateRange' => [
+                    'startDate' => $startDate,
+                    'endDate' => $endDate,
+                    'dateType' => $dateType,
+                ],
+                'filters' => [
+                    'villas' => $villaIds,
+                    'paymentTypes' => $paymentTypes,
+                    'paidStatus' => $paidStatus,
+                    'siteId' => $siteId,
+                    'search' => $search,
+                ],
+            ],
+        ]);
+    }
+
+    /**
+     * Rezervasyon listesi (kasa raporu, potansiyel raporu) için ortak SELECT kolonları ve JOIN'ler.
+     * Kullanan sorgu: FROM dbo.kayitlar k INNER JOIN dbo.dolu d ON d.kayitid = k.id {joins}.
+     * Satırlar reservationListItem() ile yanıt kaydına çevrilir.
+     *
+     * @return array{select:string,joins:string}
+     */
+    private function reservationListSqlParts(PDO $pdo): array
+    {
         // Tablo joins: Site
         $hasSiteTable = $this->hasTable($pdo, 'site');
         $hasSitesTable = $this->hasTable($pdo, 'sites');
@@ -4234,7 +4703,7 @@ WHERE k.odeme = {$paymentType}
         $hasVirtualPos = $this->hasVirtualPosTable($pdo);
         // Siteye gore olmayabilen kayitlar kolonlari (yoksa NULL): garantivillam'da odendi yok.
         $kc = [];
-        foreach (['banka', 'odendi', 'oznot', 'eskifiyat', 'kar', 'kazancorani', 'indirimevsahibi', 'tur'] as $col) {
+        foreach (['banka', 'odendi', 'oznot', 'eskifiyat', 'kar', 'kazancorani', 'indirimevsahibi', 'tur', 'temizlik'] as $col) {
             $kc[$col] = $this->kayitlarColumnSql($pdo, $col);
         }
         $posJoin = $hasVirtualPos && $kc['banka'] !== 'NULL' ? 'LEFT JOIN [Finance].[VirtualPos] vp ON vp.Id = TRY_CONVERT(int, k.banka)' : '';
@@ -4278,8 +4747,7 @@ WHERE k.odeme = {$paymentType}
         $safeStatusJoin = $hasSafeStatus ? 'LEFT JOIN dbo.safeStatus ss ON ss.kayitId = k.id' : '';
         $safeStatusSelect = $hasSafeStatus ? 'ss.status AS safe_status' : 'NULL AS safe_status';
 
-        $sql = "
-            SELECT
+        $select = "
                 k.id,
                 k.evid,
                 k.adi AS kayit_adi,
@@ -4306,276 +4774,247 @@ WHERE k.odeme = {$paymentType}
                 {$kc['kazancorani']} AS k_kazancorani,
                 {$kc['indirimevsahibi']} AS k_indirimevsahibi,
                 {$kc['tur']} AS k_tur,
+                {$kc['temizlik']} AS k_temizlik,
+                d.durum AS dolu_durum,
                 {$safeStatusSelect},
                 {$koSelect}
-            FROM dbo.kayitlar k
-            INNER JOIN dbo.dolu d ON d.kayitid = k.id
-            {$siteJoin}
-            {$homesJoin}
-            {$posJoin}
-            {$safeStatusJoin}
-            {$koJoin}
-            WHERE {$whereSql}
-            ORDER BY {$dateExpr} DESC, k.id DESC
         ";
 
-        $stmt = $pdo->prepare($sql);
-        foreach ($params as $k => $v) {
-            $stmt->bindValue($k, $v);
-        }
-        $stmt->execute();
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        $items = [];
-        $sumToplamTutar = 0.0;
-        $sumOnOdeme = 0.0;
-        $sumHesapEvsahibi = 0.0;
-        $sumKalan = 0.0;
-        $sumKar = 0.0;
-
-        $netCommissionBase = ReservationDiscountModel::commissionBase(
-            ReservationDiscountModel::config(is_array($this->app['reservation_discount'] ?? null) ? $this->app['reservation_discount'] : [])
-        ) === 'net';
-        foreach ($rows as $r) {
-            $kur = 1.0;
-            if (isset($r['ko_kur']) && is_numeric($r['ko_kur']) && (float) $r['ko_kur'] > 0) {
-                $kur = (float) $r['ko_kur'];
-            } elseif (isset($r['k_kur']) && is_numeric($r['k_kur']) && (float) $r['k_kur'] > 0) {
-                $kur = (float) $r['k_kur'];
-            }
-
-            $toplamTutarRaw = 0.0;
-            if (isset($r['ko_toplam_tutar']) && is_numeric($r['ko_toplam_tutar'])) {
-                $toplamTutarRaw = (float) $r['ko_toplam_tutar'];
-            } elseif (isset($r['k_toplam_tutar']) && is_numeric($r['k_toplam_tutar'])) {
-                $toplamTutarRaw = (float) $r['k_toplam_tutar'];
-            }
-            $toplamTutar = round($toplamTutarRaw * $kur, 2);
-
-            $asilFiyatiRaw = 0.0;
-            if (isset($r['ko_satis_bedeli']) && is_numeric($r['ko_satis_bedeli']) && (float) $r['ko_satis_bedeli'] > 0) {
-                $asilFiyatiRaw = (float) $r['ko_satis_bedeli'];
-            } elseif (isset($r['k_eskifiyat']) && is_numeric($r['k_eskifiyat']) && (float) $r['k_eskifiyat'] > 0) {
-                $asilFiyatiRaw = (float) $r['k_eskifiyat'];
-            } else {
-                $asilFiyatiRaw = $toplamTutarRaw;
-            }
-            $asilFiyati = round($asilFiyatiRaw * $kur, 2);
-
-            $indirimSite = (float) ($r['ko_indirim_site'] ?? 0);
-            $indirimEvsahibi = (float) ($r['ko_indirim_evsahibi'] ?? 0);
-            $indirimRaw = ($indirimSite + $indirimEvsahibi) > 0
-                ? ($indirimSite + $indirimEvsahibi)
-                : max(0.0, $asilFiyatiRaw - $toplamTutarRaw);
-            $indirim = round($indirimRaw * $kur, 2);
-
-            // Indirimin taraflara dagilimi (kayitlar_odeme.indirim_site / indirim_evsahibi; ikisi birden olabilir).
-            // kayitlar_odeme yoksa indirimevsahibi bayragi: tamami ev sahibi ya da tamami site.
-            if (($indirimSite + $indirimEvsahibi) > 0) {
-                $indirimSitePay = $indirimSite;
-                $indirimEvsahibiPay = $indirimEvsahibi;
-            } elseif ((int) ($r['k_indirimevsahibi'] ?? 0) === 1) {
-                $indirimSitePay = 0.0;
-                $indirimEvsahibiPay = $indirimRaw;
-            } else {
-                $indirimSitePay = $indirimRaw;
-                $indirimEvsahibiPay = 0.0;
-            }
-            // Net komisyon tabani (kayakoyvillas): S = acente indirimi, E = ev sahibi indirimi (liste fiyatindan); kayitli
-            // paylar (site = ev sahibi ind. x KO% + acente) girilen tutarlara cevrilir, "firma indirimi" gibi gorunmez.
-            if ($netCommissionBase && $indirimSitePay + $indirimEvsahibiPay > 0) {
-                $view = ReservationDiscountModel::netView($indirimSitePay, $indirimEvsahibiPay, (float) ($r['k_kazancorani'] ?? 0));
-                $indirimSitePay = $view['agency'];
-                $indirimEvsahibiPay = $view['owner_list'];
-            }
-            $indirimKim = $indirimRaw <= 0 ? ''
-                : ($indirimSitePay > 0 && $indirimEvsahibiPay > 0 ? 'S+E' : ($indirimEvsahibiPay > 0 ? 'E' : 'S'));
-            $indirimYuzde = ($asilFiyati > 0 && $indirim > 0) ? (int) round(($indirim / $asilFiyati) * 100) : 0;
-            $indirimFormatted = number_format($indirim, 0, ',', '.') . ' TL';
-            if ($indirimYuzde > 0) {
-                $indirimFormatted .= ' (%' . $indirimYuzde . ')';
-            } elseif ($indirimKim !== '') {
-                $indirimFormatted .= ' (' . $indirimKim . ')';
-            }
-
-            $onOdemeRaw = 0.0;
-            if (isset($r['ko_on_odeme']) && is_numeric($r['ko_on_odeme'])) {
-                $onOdemeRaw = (float) $r['ko_on_odeme'];
-            } elseif (isset($r['k_on_odeme']) && is_numeric($r['k_on_odeme'])) {
-                $onOdemeRaw = (float) $r['k_on_odeme'];
-            } elseif (isset($r['k_tutar']) && is_numeric($r['k_tutar'])) {
-                $onOdemeRaw = (float) $r['k_tutar'];
-            }
-            $onOdeme = round($onOdemeRaw * $kur, 2);
-
-            $kalanRaw = 0.0;
-            if ((string) ($r['k_tur'] ?? '') === '2') {
-                $kalanRaw = 0.0;
-            } elseif (isset($r['ko_kalan']) && is_numeric($r['ko_kalan'])) {
-                $kalanRaw = (float) $r['ko_kalan'];
-            } elseif (isset($r['k_kalan']) && is_numeric($r['k_kalan'])) {
-                $kalanRaw = (float) $r['k_kalan'];
-            } else {
-                $kalanRaw = max(0.0, $toplamTutarRaw - $onOdemeRaw);
-            }
-            $kalanOdeme = round($kalanRaw * $kur, 2);
-
-            // Kar (site kazanci) ve hesap ev sahibi (on odeme - kar) kayitlar_odeme'den okunur; hesabi tutarAktar
-            // trigger'i yapar (liste x komisyon% - site indirimi, rezervasyon detayi ile ayni). Rapor yeniden hesaplamaz.
-            // kayitlar_odeme satiri yoksa (tablo yok / kayit henuz aktarilmamis) ayni kuralla yedek hesap.
-            $hasKoRow = isset($r['ko_kazanc_tutari']) && is_numeric($r['ko_kazanc_tutari']);
-            if ($hasKoRow) {
-                $karRaw = (float) $r['ko_kazanc_tutari'];
-                $hesapEvsahibiRaw = isset($r['ko_evsahibi_kalan']) && is_numeric($r['ko_evsahibi_kalan'])
-                    ? (float) $r['ko_evsahibi_kalan']
-                    : $onOdemeRaw - $karRaw;
-            } else {
-                $kazancOrani = (float) ($r['k_kazancorani'] ?? 0);
-                $indirimSiteRaw = $indirimSitePay;
-                if ($kazancOrani > 0) {
-                    $karRaw = round($asilFiyatiRaw * $kazancOrani / 100 - $indirimSiteRaw, 2);
-                } elseif (isset($r['k_kar']) && is_numeric($r['k_kar']) && (float) $r['k_kar'] > 0) {
-                    $karRaw = (float) $r['k_kar'];
-                } else {
-                    $karRaw = 0.0 - $indirimSiteRaw;
-                }
-                $hesapEvsahibiRaw = $onOdemeRaw - $karRaw;
-            }
-            $kar = round($karRaw * $kur, 2);
-            $hesapEvsahibi = round($hesapEvsahibiRaw * $kur, 2);
-
-            $odemeVal = (int) ($r['odeme'] ?? 0);
-            $odemeSekli = '-';
-            if ($odemeVal === 1) {
-                $odemeSekli = 'Kredi Kartı';
-            } elseif ($odemeVal === 2) {
-                $odemeSekli = 'Havale';
-            } elseif ($odemeVal === 3) {
-                $odemeSekli = 'Nakit';
-            }
-
-            $posName = trim((string) ($r['pos_banka_name'] ?? ''));
-            if ($posName !== '') {
-                $odenilenBanka = $posName;
-            } elseif ($odemeVal === 1) {
-                $odenilenBanka = 'Banka';
-            } else {
-                $odenilenBanka = '-';
-            }
-
-            $sonDurum = '-';
-            $safeStatus = (int) ($r['safe_status'] ?? 0);
-            if ($safeStatus === 1) {
-                $sonDurum = 'Müşteri Bekliyor';
-            } elseif ($safeStatus === 2) {
-                $sonDurum = 'Ev Sahibi Karşıladı';
-            } elseif ($safeStatus === 3) {
-                $sonDurum = 'Ödeme Kasaya';
-            } elseif ($safeStatus === 4) {
-                $sonDurum = 'Ödeme Ev Sahibine';
-            } elseif ($safeStatus === 5) {
-                $sonDurum = 'Müşteri İptal';
-            } elseif ((int) ($r['kayit_odendi'] ?? 0) === 1) {
-                $sonDurum = 'Ödendi';
-            }
-
-            $villaAdi = trim((string) ($r['kayit_adi'] ?? ''));
-            if ($villaAdi === '') {
-                $villaAdi = trim((string) ($r['home_title'] ?? ''));
-            }
-
-            $siteName = trim((string) ($r['site_name'] ?? ''));
-            $siteShort = trim((string) ($r['site_short'] ?? ''));
-            if ($siteShort === '' && $siteName !== '') {
-                $siteShort = mb_substr($siteName, 0, 1, 'UTF-8');
-            }
-
-            $sumToplamTutar += $toplamTutar;
-            $sumOnOdeme += $onOdeme;
-            $sumHesapEvsahibi += $hesapEvsahibi;
-            $sumKalan += $kalanOdeme;
-            $sumKar += $kar;
-
-            $items[] = [
-                'id' => (int) $r['id'],
-                'rez_no' => (int) $r['id'],
-                'rez_no_label' => 'Rez. No ' . $r['id'],
-                'site' => $siteShort ?: ($siteName ?: (string) $r['site_id']),
-                'site_name' => $siteName,
-                'site_short' => $siteShort,
-                'site_id' => (int) $r['site_id'],
-                'villa_id' => (int) $r['evid'],
-                'villa_adi' => $villaAdi,
-                'giris' => (string) ($r['giris_tarihi'] ?? ''),
-                'giris_iso' => (string) ($r['giris_tarihi_iso'] ?? ''),
-                'cikis' => (string) ($r['cikis_tarihi'] ?? ''),
-                'cikis_iso' => (string) ($r['cikis_tarihi_iso'] ?? ''),
-                'musteri' => trim((string) ($r['musteri'] ?? '')),
-                'asil_fiyati' => $asilFiyati,
-                'asil_fiyati_formatted' => number_format($asilFiyati, 0, ',', '.') . ' TL',
-                'toplam_tutar' => $toplamTutar,
-                'toplam_tutar_formatted' => number_format($toplamTutar, 0, ',', '.') . ' TL',
-                'indirim' => $indirim,
-                'indirim_formatted' => $indirimFormatted,
-                'indirim_kim' => $indirimKim,
-                'indirim_yuzde' => $indirimYuzde,
-                'indirim_site' => round($indirimSitePay * $kur, 2),
-                'indirim_evsahibi' => round($indirimEvsahibiPay * $kur, 2),
-                'on_odeme' => $onOdeme,
-                'on_odeme_formatted' => number_format($onOdeme, 0, ',', '.') . ' TL',
-                'kalan_odeme' => $kalanOdeme,
-                'kalan_odeme_formatted' => number_format($kalanOdeme, 0, ',', '.') . ' TL',
-                'odeme_sekli' => $odemeSekli,
-                'odeme_val' => $odemeVal,
-                'odenilen_banka' => $odenilenBanka,
-                'hesap_evsahibi' => $hesapEvsahibi,
-                'hesap_evsahibi_formatted' => number_format($hesapEvsahibi, 0, ',', '.') . ' TL',
-                'kar' => $kar,
-                'kar_formatted' => number_format($kar, 0, ',', '.') . ' TL',
-                'son_durum' => $sonDurum,
-                'odendi' => ((int) ($r['kayit_odendi'] ?? 0) === 1),
-                'paid_status' => ((int) ($r['kayit_odendi'] ?? 0) === 1),
-                'not' => trim((string) ($r['oznot'] ?? '')),
-            ];
-        }
-
-        $cards = [
-            'kayit_sayisi' => count($items),
-            'kayit_sayisi_label' => count($items) . ' Rezervasyon',
-            'toplam_satis_tutari' => round($sumToplamTutar, 2),
-            'toplam_satis_tutari_formatted' => number_format($sumToplamTutar, 0, ',', '.') . ' TL',
-            'acenta_on_odemesi' => round($sumOnOdeme, 2),
-            'acenta_on_odemesi_formatted' => number_format($sumOnOdeme, 0, ',', '.') . ' TL',
-            'ev_sahibine_odenen' => round($sumHesapEvsahibi, 2),
-            'ev_sahibine_odenen_formatted' => number_format($sumHesapEvsahibi, 0, ',', '.') . ' TL',
-            'kalan_tahsilat' => round($sumKalan, 2),
-            'kalan_tahsilat_formatted' => number_format($sumKalan, 0, ',', '.') . ' TL',
-            'toplam_acenta_kari' => round($sumKar, 2),
-            'toplam_acenta_kari_formatted' => number_format($sumKar, 0, ',', '.') . ' TL',
+        return [
+            'select' => $select,
+            'joins' => implode("\n", array_filter([$siteJoin, $homesJoin, $posJoin, $safeStatusJoin, $koJoin])),
         ];
+    }
 
-        $this->response->success([
-            'items' => $items,
-            'cards' => $cards,
-            'totals' => $cards,
-            'summary' => $cards,
-            'meta' => [
-                'total' => count($items),
-                'count' => count($items),
-                'dateRange' => [
-                    'startDate' => $startDate,
-                    'endDate' => $endDate,
-                    'dateType' => $dateType,
-                ],
-                'filters' => [
-                    'villas' => $villaIds,
-                    'paymentTypes' => $paymentTypes,
-                    'paidStatus' => $paidStatus,
-                    'siteId' => $siteId,
-                    'search' => $search,
-                ],
-            ],
-        ]);
+    /**
+     * reservationListSqlParts() satırını liste kaydına çevirir: TL tutarlar (rezervasyon kuru ile), indirim dağılımı,
+     * kalan ödeme, kâr / hesap ev sahibi (kayitlar_odeme, yoksa aynı kuralla yedek hesap), ödeme şekli, son durum.
+     */
+    private function reservationListItem(array $r, bool $netCommissionBase): array
+    {
+        $kur = 1.0;
+        if (isset($r['ko_kur']) && is_numeric($r['ko_kur']) && (float) $r['ko_kur'] > 0) {
+            $kur = (float) $r['ko_kur'];
+        } elseif (isset($r['k_kur']) && is_numeric($r['k_kur']) && (float) $r['k_kur'] > 0) {
+            $kur = (float) $r['k_kur'];
+        }
+
+        $toplamTutarRaw = 0.0;
+        if (isset($r['ko_toplam_tutar']) && is_numeric($r['ko_toplam_tutar'])) {
+            $toplamTutarRaw = (float) $r['ko_toplam_tutar'];
+        } elseif (isset($r['k_toplam_tutar']) && is_numeric($r['k_toplam_tutar'])) {
+            $toplamTutarRaw = (float) $r['k_toplam_tutar'];
+        }
+        $toplamTutar = round($toplamTutarRaw * $kur, 2);
+
+        $asilFiyatiRaw = 0.0;
+        if (isset($r['ko_satis_bedeli']) && is_numeric($r['ko_satis_bedeli']) && (float) $r['ko_satis_bedeli'] > 0) {
+            $asilFiyatiRaw = (float) $r['ko_satis_bedeli'];
+        } elseif (isset($r['k_eskifiyat']) && is_numeric($r['k_eskifiyat']) && (float) $r['k_eskifiyat'] > 0) {
+            $asilFiyatiRaw = (float) $r['k_eskifiyat'];
+        } else {
+            $asilFiyatiRaw = $toplamTutarRaw;
+        }
+        $asilFiyati = round($asilFiyatiRaw * $kur, 2);
+
+        $indirimSite = (float) ($r['ko_indirim_site'] ?? 0);
+        $indirimEvsahibi = (float) ($r['ko_indirim_evsahibi'] ?? 0);
+        $indirimRaw = ($indirimSite + $indirimEvsahibi) > 0
+            ? ($indirimSite + $indirimEvsahibi)
+            : max(0.0, $asilFiyatiRaw - $toplamTutarRaw);
+        $indirim = round($indirimRaw * $kur, 2);
+
+        // Indirimin taraflara dagilimi (kayitlar_odeme.indirim_site / indirim_evsahibi; ikisi birden olabilir).
+        // kayitlar_odeme yoksa indirimevsahibi bayragi: tamami ev sahibi ya da tamami site.
+        if (($indirimSite + $indirimEvsahibi) > 0) {
+            $indirimSitePay = $indirimSite;
+            $indirimEvsahibiPay = $indirimEvsahibi;
+        } elseif ((int) ($r['k_indirimevsahibi'] ?? 0) === 1) {
+            $indirimSitePay = 0.0;
+            $indirimEvsahibiPay = $indirimRaw;
+        } else {
+            $indirimSitePay = $indirimRaw;
+            $indirimEvsahibiPay = 0.0;
+        }
+        // Net komisyon tabani (kayakoyvillas): S = acente indirimi, E = ev sahibi indirimi (liste fiyatindan); kayitli
+        // paylar (site = ev sahibi ind. x KO% + acente) girilen tutarlara cevrilir, "firma indirimi" gibi gorunmez.
+        if ($netCommissionBase && $indirimSitePay + $indirimEvsahibiPay > 0) {
+            $view = ReservationDiscountModel::netView($indirimSitePay, $indirimEvsahibiPay, (float) ($r['k_kazancorani'] ?? 0));
+            $indirimSitePay = $view['agency'];
+            $indirimEvsahibiPay = $view['owner_list'];
+        }
+        $indirimKim = $indirimRaw <= 0 ? ''
+            : ($indirimSitePay > 0 && $indirimEvsahibiPay > 0 ? 'S+E' : ($indirimEvsahibiPay > 0 ? 'E' : 'S'));
+        $indirimYuzde = ($asilFiyati > 0 && $indirim > 0) ? (int) round(($indirim / $asilFiyati) * 100) : 0;
+        $indirimFormatted = number_format($indirim, 0, ',', '.') . ' TL';
+        if ($indirimYuzde > 0) {
+            $indirimFormatted .= ' (%' . $indirimYuzde . ')';
+        } elseif ($indirimKim !== '') {
+            $indirimFormatted .= ' (' . $indirimKim . ')';
+        }
+
+        $onOdemeRaw = 0.0;
+        if (isset($r['ko_on_odeme']) && is_numeric($r['ko_on_odeme'])) {
+            $onOdemeRaw = (float) $r['ko_on_odeme'];
+        } elseif (isset($r['k_on_odeme']) && is_numeric($r['k_on_odeme'])) {
+            $onOdemeRaw = (float) $r['k_on_odeme'];
+        } elseif (isset($r['k_tutar']) && is_numeric($r['k_tutar'])) {
+            $onOdemeRaw = (float) $r['k_tutar'];
+        }
+        $onOdeme = round($onOdemeRaw * $kur, 2);
+
+        $kalanRaw = 0.0;
+        if ((string) ($r['k_tur'] ?? '') === '2') {
+            $kalanRaw = 0.0;
+        } elseif (isset($r['ko_kalan']) && is_numeric($r['ko_kalan'])) {
+            $kalanRaw = (float) $r['ko_kalan'];
+        } elseif (isset($r['k_kalan']) && is_numeric($r['k_kalan'])) {
+            $kalanRaw = (float) $r['k_kalan'];
+        } else {
+            $kalanRaw = max(0.0, $toplamTutarRaw - $onOdemeRaw);
+        }
+        $kalanOdeme = round($kalanRaw * $kur, 2);
+
+        // Kar (site kazanci) ve hesap ev sahibi (on odeme - kar) kayitlar_odeme'den okunur; hesabi tutarAktar
+        // trigger'i yapar (liste x komisyon% - site indirimi, rezervasyon detayi ile ayni). Rapor yeniden hesaplamaz.
+        // kayitlar_odeme satiri yoksa (tablo yok / kayit henuz aktarilmamis) ayni kuralla yedek hesap.
+        $hasKoRow = isset($r['ko_kazanc_tutari']) && is_numeric($r['ko_kazanc_tutari']);
+        if ($hasKoRow) {
+            $karRaw = (float) $r['ko_kazanc_tutari'];
+            $hesapEvsahibiRaw = isset($r['ko_evsahibi_kalan']) && is_numeric($r['ko_evsahibi_kalan'])
+                ? (float) $r['ko_evsahibi_kalan']
+                : $onOdemeRaw - $karRaw;
+        } else {
+            $kazancOrani = (float) ($r['k_kazancorani'] ?? 0);
+            $indirimSiteRaw = $indirimSitePay;
+            if ($kazancOrani > 0) {
+                $karRaw = round($asilFiyatiRaw * $kazancOrani / 100 - $indirimSiteRaw, 2);
+            } elseif (isset($r['k_kar']) && is_numeric($r['k_kar']) && (float) $r['k_kar'] > 0) {
+                $karRaw = (float) $r['k_kar'];
+            } else {
+                $karRaw = 0.0 - $indirimSiteRaw;
+            }
+            $hesapEvsahibiRaw = $onOdemeRaw - $karRaw;
+        }
+        $kar = round($karRaw * $kur, 2);
+        $hesapEvsahibi = round($hesapEvsahibiRaw * $kur, 2);
+
+        $odemeVal = (int) ($r['odeme'] ?? 0);
+        $odemeSekli = '-';
+        if ($odemeVal === 1) {
+            $odemeSekli = 'Kredi Kartı';
+        } elseif ($odemeVal === 2) {
+            $odemeSekli = 'Havale';
+        } elseif ($odemeVal === 3) {
+            $odemeSekli = 'Nakit';
+        }
+
+        $posName = trim((string) ($r['pos_banka_name'] ?? ''));
+        if ($posName !== '') {
+            $odenilenBanka = $posName;
+        } elseif ($odemeVal === 1) {
+            $odenilenBanka = 'Banka';
+        } else {
+            $odenilenBanka = '-';
+        }
+
+        $sonDurum = '-';
+        $safeStatus = (int) ($r['safe_status'] ?? 0);
+        if ($safeStatus === 1) {
+            $sonDurum = 'Müşteri Bekliyor';
+        } elseif ($safeStatus === 2) {
+            $sonDurum = 'Ev Sahibi Karşıladı';
+        } elseif ($safeStatus === 3) {
+            $sonDurum = 'Ödeme Kasaya';
+        } elseif ($safeStatus === 4) {
+            $sonDurum = 'Ödeme Ev Sahibine';
+        } elseif ($safeStatus === 5) {
+            $sonDurum = 'Müşteri İptal';
+        } elseif ((int) ($r['kayit_odendi'] ?? 0) === 1) {
+            $sonDurum = 'Ödendi';
+        }
+
+        $villaAdi = trim((string) ($r['kayit_adi'] ?? ''));
+        if ($villaAdi === '') {
+            $villaAdi = trim((string) ($r['home_title'] ?? ''));
+        }
+
+        $siteName = trim((string) ($r['site_name'] ?? ''));
+        $siteShort = trim((string) ($r['site_short'] ?? ''));
+        if ($siteShort === '' && $siteName !== '') {
+            $siteShort = mb_substr($siteName, 0, 1, 'UTF-8');
+        }
+
+        $temizlikRaw = trim((string) ($r['k_temizlik'] ?? ''));
+        $temizlikNumeric = preg_replace('/[^0-9,.\-]/u', '', $temizlikRaw);
+        $temizlik = null;
+        if ($temizlikNumeric !== '' && preg_match('/\d/', $temizlikNumeric)) {
+            // Panelde "4000 TL", "₺3.500", "3500,50" gibi yazılır; binlik nokta, ondalık virgül.
+            // TL / ₺ yazılıysa zaten TL; değilse rezervasyon dövizindedir, kurla çevrilir (ReservationsController gibi).
+            $isTl = mb_strpos($temizlikRaw, '₺') !== false || preg_match('/\bTL\b/iu', $temizlikRaw) === 1;
+            $temizlik = round((float) str_replace(['.', ','], ['', '.'], $temizlikNumeric) * ($isTl ? 1.0 : $kur), 2);
+        }
+
+        $girisIso = (string) ($r['giris_tarihi_iso'] ?? '');
+        $cikisIso = (string) ($r['cikis_tarihi_iso'] ?? '');
+        $gece = ($girisIso !== '' && $cikisIso !== '')
+            ? max(0, (int) (new DateTime($girisIso))->diff(new DateTime($cikisIso))->format('%r%a'))
+            : 0;
+
+        // Rezervasyon durumu (dolu.durum); siteye özel silinme kodu 5 olarak döner.
+        $durum = isset($r['dolu_durum']) && is_numeric($r['dolu_durum']) ? (int) $r['dolu_durum'] : null;
+        if ($durum !== null && $durum === $this->deletedStatus()) {
+            $durum = 5;
+        }
+
+        return [
+            'id' => (int) $r['id'],
+            'rez_no' => (int) $r['id'],
+            'rez_no_label' => 'Rez. No ' . $r['id'],
+            'site' => $siteShort ?: ($siteName ?: (string) $r['site_id']),
+            'site_name' => $siteName,
+            'site_short' => $siteShort,
+            'site_id' => (int) $r['site_id'],
+            'villa_id' => (int) $r['evid'],
+            'villa_adi' => $villaAdi,
+            'giris' => (string) ($r['giris_tarihi'] ?? ''),
+            'giris_iso' => (string) ($r['giris_tarihi_iso'] ?? ''),
+            'cikis' => (string) ($r['cikis_tarihi'] ?? ''),
+            'cikis_iso' => (string) ($r['cikis_tarihi_iso'] ?? ''),
+            'musteri' => trim((string) ($r['musteri'] ?? '')),
+            'asil_fiyati' => $asilFiyati,
+            'asil_fiyati_formatted' => number_format($asilFiyati, 0, ',', '.') . ' TL',
+            'toplam_tutar' => $toplamTutar,
+            'toplam_tutar_formatted' => number_format($toplamTutar, 0, ',', '.') . ' TL',
+            'indirim' => $indirim,
+            'indirim_formatted' => $indirimFormatted,
+            'indirim_kim' => $indirimKim,
+            'indirim_yuzde' => $indirimYuzde,
+            'indirim_site' => round($indirimSitePay * $kur, 2),
+            'indirim_evsahibi' => round($indirimEvsahibiPay * $kur, 2),
+            'on_odeme' => $onOdeme,
+            'on_odeme_formatted' => number_format($onOdeme, 0, ',', '.') . ' TL',
+            'kalan_odeme' => $kalanOdeme,
+            'kalan_odeme_formatted' => number_format($kalanOdeme, 0, ',', '.') . ' TL',
+            'odeme_sekli' => $odemeSekli,
+            'odeme_val' => $odemeVal,
+            'odenilen_banka' => $odenilenBanka,
+            'hesap_evsahibi' => $hesapEvsahibi,
+            'hesap_evsahibi_formatted' => number_format($hesapEvsahibi, 0, ',', '.') . ' TL',
+            'kar' => $kar,
+            'kar_formatted' => number_format($kar, 0, ',', '.') . ' TL',
+            'son_durum' => $sonDurum,
+            'odendi' => ((int) ($r['kayit_odendi'] ?? 0) === 1),
+            'paid_status' => ((int) ($r['kayit_odendi'] ?? 0) === 1),
+            'not' => trim((string) ($r['oznot'] ?? '')),
+            'gece' => $gece,
+            'gece_label' => $gece . ' Gece',
+            'temizlik' => $temizlik,
+            'temizlik_raw' => $temizlikRaw,
+            'temizlik_formatted' => $temizlik !== null ? number_format($temizlik, 0, ',', '.') . ' TL' : ($temizlikRaw !== '' ? $temizlikRaw : '-'),
+            'durum' => $durum,
+            'durum_label' => $durum !== null ? (self::RESERVATION_STATUS_LABELS[$durum] ?? (string) $durum) : '',
+        ];
     }
 
     /**
