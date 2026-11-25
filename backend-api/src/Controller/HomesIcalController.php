@@ -12,8 +12,9 @@ use PDO;
  *   GET  /homes-ical?id=   homes.ical, homes.ical_gecelik, disa aktarma linki, Kiralama Takvimi baglantisi
  *   POST /homes-ical       homes.ical ve homes.ical_gecelik'i kaydeder
  *   POST /homes-ical/sync  sitedeki /ical/icalsync.php?id= betigini calistirir (eski panel: "Ice Aktar")
+ *   POST /homes-ical/key   disa aktarma anahtari yoksa dbo.IcalKeys'e yazar (link: {site}/ics/{AccessKey}.ics)
  *
- * iCal'in okunup dolu tablosuna yazilmasi ve disa aktarma (/ical/icalwrite.php) sitede kalir; burada yeniden yazilmaz.
+ * iCal'in okunup dolu tablosuna yazilmasi ve .ics dosyasinin uretilmesi sitede kalir; burada yeniden yazilmaz.
  * Kiralama Takvimi'ne bagli villalarda (KiralamaTakvimi.CalendarHomes) iCal kullanilamaz: kaydetme ve ice aktarma reddedilir.
  */
 final class HomesIcalController extends Controller
@@ -46,6 +47,7 @@ final class HomesIcalController extends Controller
         }
 
         $estateId = $this->calendarEstateId($pdo, $id);
+        $accessKey = $this->accessKey($pdo, $id);
 
         $this->response->success([
             'id' => $id,
@@ -53,8 +55,10 @@ final class HomesIcalController extends Controller
             'ical_url' => $url,
             'gecelik' => $gecelik,
             'gecelik_supported' => $hasGecelik,
-            // Disa aktarma: eski panel replace(ayarlar("domain"), "web", "www") & "/ical/icalwrite.php?id="
-            'export_url' => $this->siteDomain() . '/ical/icalwrite.php?id=' . $id,
+            // Disa aktarma: sitedeki /ics/{dbo.IcalKeys.AccessKey}.ics (site /ical/cache/... dosyasini uretip yonlendirir).
+            // Villanin anahtari yoksa bos; "iCal linki olustur" (POST /homes-ical/key) ile olusturulur.
+            'export_url' => $accessKey !== null ? $this->siteDomain() . '/ics/' . $accessKey . '.ics' : '',
+            'export_key_supported' => $this->tableExists($pdo, 'IcalKeys'),
             'calendar_estate_id' => $estateId,
             'kiralama_takvimi' => $estateId !== null,
         ]);
@@ -158,6 +162,70 @@ final class HomesIcalController extends Controller
             'status' => $status,
             'message' => $text,
         ]);
+    }
+
+    /**
+     * Villa icin disa aktarma anahtari olusturur (dbo.IcalKeys); varsa mevcut anahtari doner, yenisini yazmaz.
+     * Anahtar eski sistemdeki gibi 24 haneli kucuk harf hex.
+     *
+     * @Post("key")
+     * @body id int required Emlak kimligi
+     */
+    public function createKey(): void
+    {
+        $id = $this->homeId((int) $this->request->input('id', 0));
+        $pdo = $this->db->pdo();
+        $this->assertHome($pdo, $id);
+        $this->assertNotKiralamaTakvimi($pdo, $id);
+        if (!$this->tableExists($pdo, 'IcalKeys')) {
+            throw new HttpException('Bu sitede IcalKeys tablosu yok; iCal linki oluşturulamaz.', 'NOT_SUPPORTED', 422);
+        }
+
+        $created = false;
+        $pdo->beginTransaction();
+        try {
+            $key = $this->accessKey($pdo, $id, true);
+            if ($key === null) {
+                $key = bin2hex(random_bytes(12));
+                $insert = $pdo->prepare('INSERT INTO dbo.IcalKeys (HomeId, AccessKey) VALUES (:id, :key)');
+                $insert->execute([':id' => $id, ':key' => $key]);
+                $created = true;
+            }
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw new HttpException('iCal linki oluşturulamadı: ' . $e->getMessage(), 'DB_UPDATE_FAILED', 500);
+        }
+
+        $this->response->success([
+            'id' => $id,
+            'created' => $created,
+            'export_url' => $this->siteDomain() . '/ics/' . $key . '.ics',
+        ]);
+    }
+
+    /** dbo.IcalKeys'teki anahtar (birden fazlaysa en yenisi); tablo / kayit yoksa null. */
+    private function accessKey(PDO $pdo, int $id, bool $lock = false): ?string
+    {
+        if (!$this->tableExists($pdo, 'IcalKeys')) {
+            return null;
+        }
+        $stmt = $pdo->prepare('SELECT TOP 1 AccessKey FROM dbo.IcalKeys' . ($lock ? ' WITH (UPDLOCK, HOLDLOCK)' : '')
+            . ' WHERE HomeId = :id ORDER BY Id DESC');
+        $stmt->execute([':id' => $id]);
+        $key = trim((string) $stmt->fetchColumn());
+
+        return $key !== '' ? $key : null;
+    }
+
+    private function tableExists(PDO $pdo, string $table): bool
+    {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = :t");
+        $stmt->execute([':t' => $table]);
+
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     private function homeId(int $id): int
