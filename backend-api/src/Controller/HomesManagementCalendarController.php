@@ -188,6 +188,8 @@ final class HomesManagementCalendarController extends Controller
     {
         $emlakId = $this->positiveInt('id', 'Lutfen gecerli bir emlak ID gonderin.');
         [$start, $end] = $this->dateRange();
+        // Musaitlik degisti: istek basarili biterse site HTML cache'i temizlenir (config html_cache_clear).
+        $this->markHtmlCacheHome($emlakId);
 
         // Kiralama Takvimi'ndeki mevcut kayit (ReservationId secili tarihlerden bulunur): dolu'ya yazilmaz, sadece KT'ye istek gider.
         // iptal: Reservation/Cancel, duzenle: baslik (KT reservation/update, dogrudan), detay: mevcut bilgiler (Reservation/Item).
@@ -781,6 +783,7 @@ final class HomesManagementCalendarController extends Controller
         $pdo->beginTransaction();
         try {
             $emlakId = $this->requireClosure($pdo, $doluId);
+            $this->markHtmlCacheHome($emlakId);
             $this->assertNoOverlap($pdo, $emlakId, $start, $end, $doluId);
             $this->assertRezTipColumn($pdo);
             $pdo->prepare('UPDATE dbo.dolu SET tarih = :tarih, tarih2 = :tarih2, musteri = :musteri, rez_tip = :rez_tip WHERE id = :id')
@@ -805,7 +808,7 @@ final class HomesManagementCalendarController extends Controller
     {
         $doluId = $this->positiveInt('doluId', 'Gecersiz kapatma ID.');
         $pdo = $this->db->pdo();
-        $this->requireClosure($pdo, $doluId);
+        $this->markHtmlCacheHome($this->requireClosure($pdo, $doluId));
         $kayitIdColumn = $this->kayitIdColumn($pdo);
         $ktGuard = $this->hasColumn($pdo, 'dbo.dolu', 'ReservationId') ? ' AND ISNULL(ReservationId, 0) <= 0' : '';
         $pdo->prepare("DELETE FROM dbo.dolu WHERE id = :id AND ISNULL([{$kayitIdColumn}], -1) <= 0{$ktGuard}")->execute([':id' => $doluId]);

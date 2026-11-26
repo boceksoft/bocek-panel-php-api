@@ -32,6 +32,15 @@ return [
     // ariyorsa o sitede acin. Panel okurken bosluklari zaten temizler.
     'homes_kategori_comma_space' => false,
 
+    // Acik ise fiyat / indirim / sezon / son dakika / hafta sonu / KT fiyat ice aktarma / takvim kapatma kayitlarindan sonra
+    // sitenin on yuz HTML cache'i ({siteRoot}/HtmlCache, cache.php) eski ASP panel (asp_scripts/cacheScripts.asp) gibi silinir:
+    // liste sayfalari (HtmlCache/l, tip / destinations url'leri, HtmlCacheFile/listingLinks.html) + villanin detay klasorleri.
+    // Kapali (varsayilan): cache'e dokunulmaz. Villa Kiralama > Config ekranindan degistirilir. Bkz. src/Support/HtmlCacheCleaner.php
+    'html_cache_clear' => false,
+
+    // Sitenin kok klasoru (HtmlCache bunun altinda). Bos (varsayilan): backend-api'nin bir ust klasoru.
+    'html_cache_root' => '',
+
     // true: villa adi donen yerlerde (ilan listesi, katalog, rezervasyonlar, raporlar...) ad yerine homes.evkodu gosterilir;
     // evkodu bossa ad kullanilir. false (varsayilan): villa adi. Villa Kiralama > Config ekranindan degistirilir.
     'homes_title_use_code' => false,
@@ -488,6 +497,8 @@ return [
         'homes_search_capacity_at_least' => 'bool',
         'homes_meta_title_min_length' => 'int',
         'homes_kategori_comma_space' => 'bool',
+        'html_cache_clear' => 'bool',
+        'html_cache_root' => 'string',
         'homes_title_use_code' => 'bool',
         'homes_fake_discount' => 'bool',
         'homes_featured_features' => 'bool',

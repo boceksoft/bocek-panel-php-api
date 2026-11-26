@@ -328,6 +328,7 @@ final class HomesManagementPricesController extends Controller
         $owner = $pdo->prepare("SELECT islem_id FROM sezonlar WHERE id = :seasonId AND islem = 'emlak'");
         $owner->execute([':seasonId' => $seasonId]);
         $homeId = (int) $owner->fetchColumn();
+        $this->markHtmlCacheHome($homeId);
 
         $stmt = $pdo->prepare('DELETE FROM sezonlar WHERE id = :seasonId');
         $stmt->execute([
@@ -399,6 +400,9 @@ final class HomesManagementPricesController extends Controller
                     );
                     $stmt->execute($params);
                     $affectedPrices = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($affectedPrices as $affected) {
+                        $this->markHtmlCacheHome((int) ($affected['HomesId'] ?? 0));
+                    }
 
                     $stmt = $pdo->prepare(
                         'DELETE FROM dbo.HomesExtraPaymentPrices
@@ -655,6 +659,9 @@ final class HomesManagementPricesController extends Controller
                 ':homeId' => $homeId,
             ]);
         } else {
+            $owner = $pdo->prepare('SELECT emlak FROM indirimler WHERE id = :discountId');
+            $owner->execute([':discountId' => $discountId]);
+            $this->markHtmlCacheHome((int) $owner->fetchColumn());
             $stmt = $pdo->prepare('DELETE FROM indirimler WHERE id = :discountId');
             $stmt->execute([
                 ':discountId' => $discountId,
@@ -1099,7 +1106,11 @@ final class HomesManagementPricesController extends Controller
      */
     private function payload(): array
     {
-        return array_merge($this->request->json(), $_GET);
+        $payload = array_merge($this->request->json(), $_GET);
+        // Bu controller'daki tum aksiyonlar yazma; istek basarili biterse villanin site HTML cache'i temizlenir.
+        $this->markHtmlCacheHome($this->resolveId($payload));
+
+        return $payload;
     }
 
     /**

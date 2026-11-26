@@ -34,6 +34,54 @@ abstract class Controller
         $this->app = $app;
     }
 
+    /** @var array<int,int> Istek basarili biterse HTML cache'i temizlenecek villalar */
+    private $htmlCacheHomeIds = [];
+
+    /** @var bool Temizlik bu istekte calisti mi */
+    private $htmlCacheDone = false;
+
+    /**
+     * Villanin site on yuz HTML cache'i istek basariyla bitince temizlensin (config html_cache_clear).
+     * Temizlik basarili yanit (response->success) gonderilmeden hemen once calisir ve raporu yanita
+     * data.html_cache olarak eklenir. Aksiyon hata firlatirsa success cagrilmaz, temizlik yapilmaz.
+     */
+    protected function markHtmlCacheHome(int $homeId): void
+    {
+        if ($homeId <= 0) {
+            return;
+        }
+        if ($this->htmlCacheHomeIds === []) {
+            $this->response->addSuccessExtra('html_cache', function () {
+                return $this->runHtmlCacheClear();
+            });
+        }
+        $this->htmlCacheHomeIds[$homeId] = $homeId;
+    }
+
+    /**
+     * @return array<string,mixed> temizlik raporu (config kapaliysa enabled=false)
+     */
+    private function runHtmlCacheClear(): array
+    {
+        $this->htmlCacheDone = true;
+        try {
+            return \App\Support\HtmlCacheCleaner::clearHomes($this->db->pdo(), $this->app, array_values($this->htmlCacheHomeIds));
+        } catch (\Throwable $e) {
+            // Cache temizligi kaydi etkilemez; hata yanitta gorunur (orn. HtmlCacheCleaner.php sunucuda yok).
+            return ['enabled' => !empty($this->app['html_cache_clear']), 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Router, aksiyon hatasiz bittikten sonra cagirir (success cagrilmadiysa temizlik burada yapilir).
+     */
+    public function afterAction(): void
+    {
+        if ($this->htmlCacheHomeIds !== [] && !$this->htmlCacheDone) {
+            $this->runHtmlCacheClear();
+        }
+    }
+
     /** @var bool|null homes.isDeleted kolonu var mi (istek boyunca bir kez bakilir) */
     private $homesHasDeletedColumn = null;
 
