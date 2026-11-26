@@ -32,6 +32,8 @@ final class ReservationsController extends Controller
      */
     public function index(): void
     {
+        // Ölçüm: hazırlık, ana sorgu ve ek sorgular (Server-Timing başlığında görünür)
+        $requestStartedAt = microtime(true);
         $pdo = $this->db->pdo();
 
         if ($this->p('hizliArama') === '1') {
@@ -279,6 +281,8 @@ final class ReservationsController extends Controller
         );
 
         // Çalıştır
+        \App\Support\ServerTiming::add('prep', $requestStartedAt);
+        $sqlStartedAt = microtime(true);
         $stmt = $pdo->prepare($sql);
         foreach ($params as $key => $value) {
             $stmt->bindValue($key, $value);
@@ -289,6 +293,8 @@ final class ReservationsController extends Controller
         }
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        \App\Support\ServerTiming::add('sql', $sqlStartedAt);
+        $extraStartedAt = microtime(true);
 
         // Ciro toplamları (window fonksiyonlarından ilk satırda gelir)
         $totalCount     = 0;
@@ -337,6 +343,7 @@ final class ReservationsController extends Controller
 
         $rows = $this->normalizeRows($rows);
 
+        \App\Support\ServerTiming::add('extra', $extraStartedAt);
         $this->response->success([
             'status'      => 'success',
             'total'       => $totalCount,
@@ -1136,15 +1143,7 @@ INNER JOIN dolu ON dolu.kayitid = kayitlar.id
 
     private function columnExists(PDO $pdo, string $schema, string $table, string $column): bool
     {
-        $stmt = $pdo->prepare(
-            'SELECT CASE WHEN COL_LENGTH(:tableName, :columnName) IS NULL THEN 0 ELSE 1 END'
-        );
-        $stmt->execute([
-            ':tableName' => $schema . '.' . $table,
-            ':columnName' => $column,
-        ]);
-
-        return (int) $stmt->fetchColumn() === 1;
+        return \App\Support\SchemaColumns::exists($pdo, $schema . '.' . $table, $column);
     }
 
     private function hasNewReservation(PDO $pdo): bool

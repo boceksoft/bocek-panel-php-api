@@ -18,9 +18,7 @@ final class HomesSoftDelete
 {
     public static function hasColumn(PDO $pdo): bool
     {
-        return (int) $pdo->query(
-            "SELECT CASE WHEN COL_LENGTH('dbo.homes', 'isDeleted') IS NULL THEN 0 ELSE 1 END"
-        )->fetchColumn() === 1;
+        return SchemaColumns::exists($pdo, 'dbo.homes', 'isDeleted');
     }
 
     /**
