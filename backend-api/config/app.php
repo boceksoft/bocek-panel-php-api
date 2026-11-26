@@ -100,6 +100,12 @@ return [
     // homes_title_use_code acikken kod yine once gelir.
     'homes_site_name_orj_ad' => false,
 
+    // "Villanin Orjinal Adi" (homes.orj_ad) alani referans linki olarak kullaniliyor mu (bazi siteler bu alana villanin referans linkini yazar).
+    // false (varsayilan): orj_ad villa adidir; ilan aramasinda (ilanlar listesi, paneldeki ust genel arama) aranir, genel aramada gosterilir.
+    // true: ilan ekraninda alanin adi "Referans Linki" olur; orj_ad'da aranmaz ve listede original_name bos doner.
+    // homes_real_name_orj_ad / homes_site_name_orj_ad acikken villa adi zaten orj_ad'dan geldigi icin o ad etkilenmez.
+    'homes_orj_ad_reference_link' => false,
+
     // Belge no (bakanlik belge numarasi) ilan kaydinda nereye yazilir. false (varsayilan): sadece kanun7464.gavelBelgeNo.
     // true: kanun7464.gavelBelgeNo'ya ek olarak homes.gavelBelgeNo'ya da (eski panel bazi sitelerde homes'a yaziyor).
     // Acikken ilan detayinda kanun7464'te belge no yoksa homes.gavelBelgeNo gosterilir.
@@ -489,6 +495,7 @@ return [
         'homes_whatsapp_rez_takip' => 'bool',
         'homes_real_name_orj_ad' => 'bool',
         'homes_site_name_orj_ad' => 'bool',
+        'homes_orj_ad_reference_link' => 'bool',
         'homes_belge_no_homes' => 'bool',
         'homes_extra_fields' => 'array',
         'homes_code' => 'array',

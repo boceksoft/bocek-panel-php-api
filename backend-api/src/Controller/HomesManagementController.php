@@ -84,6 +84,10 @@ final class HomesManagementController extends Controller
         $extraNameColumns = [];
         if ($title !== '' || $search !== '') {
             foreach (['orj_ad', 'villaadi'] as $extraNameColumn) {
+                // Config homes_orj_ad_reference_link aciksa orj_ad referans linkidir, orda aranmaz.
+                if ($extraNameColumn === 'orj_ad' && !$this->searchOrjAdEnabled()) {
+                    continue;
+                }
                 if ($this->homesColumnExists($pdo, $extraNameColumn)) {
                     $extraNameColumns[] = "ISNULL(CONVERT(nvarchar(500), h.[{$extraNameColumn}]), N'')";
                 }
@@ -300,7 +304,7 @@ SELECT
     " . $this->homeTitleSql('h', $titleColumn) . " AS title,
     {$titleColumn} AS gavel_title,
     " . $this->homeRealNameSql($pdo, 'h', $titleColumn) . " AS real_title,
-    " . ($this->homesColumnExists($pdo, 'orj_ad') ? "ISNULL(CONVERT(nvarchar(500), h.orj_ad), N'')" : "N''") . " AS original_name,
+    " . ($this->searchOrjAdEnabled() && $this->homesColumnExists($pdo, 'orj_ad') ? "ISNULL(CONVERT(nvarchar(500), h.orj_ad), N'')" : "N''") . " AS original_name,
 {$extraTitleSql}    h.siralama AS sort_order, 
     {$imageColumn} AS image,
     h.yatak_odasi AS bedroom_count,
@@ -406,7 +410,7 @@ WHERE {$whereSql}
                 'gavel_title' => (string) $row['gavel_title'],
                 // Gercek villa adi (config homes_code: kod basliga yaziliyorsa homes.villaadi)
                 'real_title' => (string) ($row['real_title'] ?? ''),
-                // "Villanin Orjinal Adi" (homes.orj_ad); kolon yoksa bos
+                // "Villanin Orjinal Adi" (homes.orj_ad); kolon yoksa veya config homes_orj_ad_reference_link aciksa (alan referans linki) bos
                 'original_name' => trim((string) ($row['original_name'] ?? '')),
                 // Diger sitelerdeki villa adlari [{id, name, title}]; baslik kolonu olmayan site yok
                 'site_titles' => array_map(function (array $extraSite) use ($row): array {
@@ -833,6 +837,15 @@ WHERE {$whereSql}
         $parts = explode(',', $site, 2);
 
         return trim($parts[0]);
+    }
+
+    /**
+     * Ilan aramasinda ve listede "Villanin Orjinal Adi" (homes.orj_ad) kullanilir mi.
+     * Config homes_orj_ad_reference_link aciksa alan referans linkidir: kullanilmaz.
+     */
+    private function searchOrjAdEnabled(): bool
+    {
+        return empty($this->app['homes_orj_ad_reference_link']);
     }
 
     /**
