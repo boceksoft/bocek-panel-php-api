@@ -56,6 +56,9 @@ final class HomesManagementDetailDataController extends Controller
         $mailConfig = is_array($this->app['reservation_mail'] ?? null) ? $this->app['reservation_mail'] : [];
         $cleaningLabel = trim((string) ($mailConfig['cleaning_label'] ?? ''));
         $selectableData['temizlik_etiketi'] = $cleaningLabel !== '' ? $cleaningLabel : 'Temizlik Ücreti';
+        // Havuz isitma fiyat tipi (config calculate_heating_price_is_weekly): true haftalik, false gecelik.
+        // Ek Ucretler'de isitma bu tiple kaydedilir; hesap (Calculate) de ayni ayara gore gece basina boler.
+        $selectableData['isitma_fiyat_tipi'] = !empty($this->app['calculate_heating_price_is_weekly']) ? 'haftalik' : 'gunluk';
         // Sunucunun tek dosya yukleme siniri (bayt); frontend fotograflari bunun altina kucultur.
         $selectableData['yukleme_siniri'] = UploadLimits::maxBytes();
         // Villa indirim turleri (config homes_discount_types): enabled, default, options [{value, label, payer, base}].
@@ -106,6 +109,7 @@ final class HomesManagementDetailDataController extends Controller
             'evkodu' => $selectableData['evkodu'],
             'bos_sezon' => $selectableData['bos_sezon'],
             'temizlik_etiketi' => $selectableData['temizlik_etiketi'],
+            'isitma_fiyat_tipi' => $selectableData['isitma_fiyat_tipi'],
             'yukleme_siniri' => $selectableData['yukleme_siniri'],
             'indirim_turu' => $selectableData['indirim_turu'],
             'indirim_turleri' => $selectableData['indirim_turleri'],

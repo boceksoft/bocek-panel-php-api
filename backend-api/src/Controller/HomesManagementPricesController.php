@@ -328,6 +328,7 @@ final class HomesManagementPricesController extends Controller
         $owner = $pdo->prepare("SELECT islem_id FROM sezonlar WHERE id = :seasonId AND islem = 'emlak'");
         $owner->execute([':seasonId' => $seasonId]);
         $homeId = (int) $owner->fetchColumn();
+        $this->markHtmlCacheHome($homeId);
 
         $stmt = $pdo->prepare('DELETE FROM sezonlar WHERE id = :seasonId');
         $stmt->execute([
@@ -399,6 +400,9 @@ final class HomesManagementPricesController extends Controller
                     );
                     $stmt->execute($params);
                     $affectedPrices = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($affectedPrices as $affected) {
+                        $this->markHtmlCacheHome((int) ($affected['HomesId'] ?? 0));
+                    }
 
                     $stmt = $pdo->prepare(
                         'DELETE FROM dbo.HomesExtraPaymentPrices
@@ -655,6 +659,9 @@ final class HomesManagementPricesController extends Controller
                 ':homeId' => $homeId,
             ]);
         } else {
+            $owner = $pdo->prepare('SELECT emlak FROM indirimler WHERE id = :discountId');
+            $owner->execute([':discountId' => $discountId]);
+            $this->markHtmlCacheHome((int) $owner->fetchColumn());
             $stmt = $pdo->prepare('DELETE FROM indirimler WHERE id = :discountId');
             $stmt->execute([
                 ':discountId' => $discountId,
@@ -1099,7 +1106,11 @@ final class HomesManagementPricesController extends Controller
      */
     private function payload(): array
     {
-        return array_merge($this->request->json(), $_GET);
+        $payload = array_merge($this->request->json(), $_GET);
+        // Bu controller'daki tum aksiyonlar yazma; istek basarili biterse villanin site HTML cache'i temizlenir.
+        $this->markHtmlCacheHome($this->resolveId($payload));
+
+        return $payload;
     }
 
     /**
@@ -1437,6 +1448,8 @@ final class HomesManagementPricesController extends Controller
                     ':homeId' => $homeId,
                 ], $cleaningParams));
                 $updated += max(1, $stmt->rowCount());
+                // Ek Ucretler'deki temizlik / isitma araliklari sezona yazilir (tarihler degismis olabilir)
+                $this->applyExtraPaymentRangesToSeason($pdo, $homeId, $seasonId, $startDate, $endDate);
                 continue;
             }
 
@@ -1454,6 +1467,14 @@ final class HomesManagementPricesController extends Controller
                 ':sezon' => $seasonTitle,
             ], $cleaningParams));
             $updated++;
+            // Yeni sezon: Ek Ucretler'de bu tarihleri kapsayan temizlik / isitma araligi varsa degeri sezona yazilir
+            $newSeasonId = (int) $pdo->query('SELECT CAST(SCOPE_IDENTITY() AS int)')->fetchColumn();
+            if ($newSeasonId <= 0) {
+                $last = $pdo->prepare("SELECT TOP 1 id FROM sezonlar WHERE islem_id = :homeId AND islem = 'emlak' ORDER BY id DESC");
+                $last->execute([':homeId' => $homeId]);
+                $newSeasonId = (int) $last->fetchColumn();
+            }
+            $this->applyExtraPaymentRangesToSeason($pdo, $homeId, $newSeasonId, $startDate, $endDate);
         }
 
         return ['updated' => $updated, 'skipped' => $skipped];
@@ -1494,6 +1515,9 @@ final class HomesManagementPricesController extends Controller
             $description = $this->extraPaymentDescription($row, $type);
 
             if ($startDate !== '' && $endDate !== '') {
+                // Ayni hizmetin tarihleri cakismaz: yeni aralik eski kayitlarin ustune binerse eskiler kirpilir
+                // (orn. 1-30 Aralik 1000 varken 15 Aralik-31 Ocak 2000 eklenince eski 1-14 Aralik 1000 kalir).
+                $this->trimOverlappingExtraPaymentPrices($pdo, $homeId, (int) $type['id'], $startDate, $endDate);
                 $seasonIds = $this->prepareSeasonsForExtraPaymentRange($pdo, $homeId, $startDate, $endDate);
             }
 
@@ -1510,12 +1534,17 @@ final class HomesManagementPricesController extends Controller
             $legacyStartDate = '';
             $legacyEndDate = '';
             $usesSeasonColumn = $this->extraPaymentUsesSeasonColumn($type);
-            $singlePriceRowForRange = $startDate !== '' && $endDate !== '' && count($seasonIds) > 1;
+            // Sezona yazilan tiplerde (temizlik / isitma vb.) girilen aralik her zaman tek satir olarak saklanir
+            // (sezonu olmayan gunler dahil); sonradan eklenen sezonlar degerini bu satirdan alir.
+            $seasonRangeRow = $startDate !== '' && $endDate !== '' && $usesSeasonColumn;
+            $singlePriceRowForRange = $startDate !== '' && $endDate !== '' && (count($seasonIds) > 1 || $seasonRangeRow);
 
             if ($singlePriceRowForRange) {
                 $this->updateExtraPaymentTypeIncluded($pdo, (int) $type['id'], $row);
                 $this->deactivateSeasonExtraPaymentPrices($pdo, $homeId, (int) $type['id'], $startDate, $endDate);
-                $this->upsertExtraPaymentPrice($pdo, $homeId, 0, (int) $type['id'], $startDate, $endDate, $value, $currencyId, $priceType, $description, $usesSeasonColumn);
+                // Cakisanlar yukarida kirpildi: aralik satiri yeni eklenir. (Eski upsert SeasonId IS NULL olan tum
+                // satirlari guncelliyordu; ayni tipin diger araliklari da ezilirdi.)
+                $this->insertExtraPaymentRangeRow($pdo, $homeId, (int) $type['id'], $startDate, $endDate, $value, $currencyId, $priceType, $description, $row);
                 $updated++;
             }
 
@@ -1543,6 +1572,17 @@ final class HomesManagementPricesController extends Controller
                 }
 
                 $this->updateSeasonExtraPaymentColumn($pdo, $homeId, $seasonId, $type, $value);
+                // Temizlik: istekte gece siniri geldiyse (bos = 0) sezonun temizlikGece'si de yazilir
+                // (gelmeyen istekler, orn. gorselden fiyat aktarma, mevcut gece sinirina dokunmaz)
+                if (array_key_exists('ChargeNightLimit', $row) || array_key_exists('chargeNightLimit', $row)) {
+                    $this->updateSeasonCleaningNights(
+                        $pdo,
+                        $homeId,
+                        $seasonId,
+                        $type,
+                        $this->numericValue($row, ['ChargeNightLimit', 'chargeNightLimit'])
+                    );
+                }
 
                 $rowUpdated++;
                 $legacyStartDate = $legacyStartDate === '' ? $rowStart : $this->minDate($legacyStartDate, $rowStart);
@@ -2367,6 +2407,177 @@ final class HomesManagementPricesController extends Controller
         return is_array($row) ? $row : [];
     }
 
+    /**
+     * Ek ucretin girilen tarih araligini tek satir (SeasonId NULL) olarak ekler. Temizlikte gece siniri
+     * (ChargeNightLimit, kolon varsa) da saklanir; sonradan eklenen sezonlar degerlerini bu satirdan alir.
+     *
+     * @param array<string,mixed> $row Istek satiri (ChargeNightLimit icin)
+     */
+    private function insertExtraPaymentRangeRow(
+        PDO $pdo,
+        int $homeId,
+        int $typeId,
+        string $startDate,
+        string $endDate,
+        float $value,
+        int $currencyId,
+        string $priceType,
+        string $description,
+        array $row
+    ): void {
+        $hasNightColumn = $this->columnExists($pdo, 'dbo', 'HomesExtraPaymentPrices', 'ChargeNightLimit');
+        $hasNight = $hasNightColumn && (array_key_exists('ChargeNightLimit', $row) || array_key_exists('chargeNightLimit', $row));
+        $stmt = $pdo->prepare(
+            'INSERT INTO dbo.HomesExtraPaymentPrices
+                (HomesId, SeasonId, StartDate, EndDate, CurrencyId, PriceType, ExtraPaymentTypeId, Value, Description, CreatedOn, IsDeleted'
+            . ($hasNight ? ', ChargeNightLimit' : '') . ')
+             VALUES
+                (:homeId, NULL, CONVERT(date, :startDate, 104), CONVERT(date, :endDate, 104), :currencyId, :priceType, :typeId, :value, :description, GETDATE(), 0'
+            . ($hasNight ? ', :nights' : '') . ')'
+        );
+        $params = [
+            ':homeId' => $homeId,
+            ':typeId' => $typeId,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate,
+            ':currencyId' => $currencyId > 0 ? $currencyId : null,
+            ':priceType' => $priceType,
+            ':value' => $value,
+            ':description' => $description,
+        ];
+        if ($hasNight) {
+            $params[':nights'] = max(0, $this->numericValue($row, ['ChargeNightLimit', 'chargeNightLimit']));
+        }
+        $stmt->execute($params);
+    }
+
+    /**
+     * Sezon eklenince / tarihleri degisince: sezona yazilan ek ucret tiplerinin (temizlik -> temizlikFiyat + temizlikGece,
+     * isitma -> isitmaFiyat, aktif) tarih araligi satirlarindan sezonu kapsayani bulunur ve degeri sezona yazilir.
+     * Sezonun baslangicini kapsayan satir onceliklidir, yoksa sezonla kesisen en yeni satir. Satir yoksa sezona dokunulmaz.
+     */
+    private function applyExtraPaymentRangesToSeason(PDO $pdo, int $homeId, int $seasonId, string $startDate, string $endDate): void
+    {
+        if ($seasonId <= 0 || $startDate === '' || $endDate === ''
+            || !$this->tableExists($pdo, 'dbo', 'HomesExtraPaymentPrices') || !$this->tableExists($pdo, 'dbo', 'HomesExtraPaymentTypes')) {
+            return;
+        }
+        $seasonColumns = $this->sezonlarColumns($pdo);
+        $nightSelect = $this->columnExists($pdo, 'dbo', 'HomesExtraPaymentPrices', 'ChargeNightLimit')
+            ? 'ep.ChargeNightLimit' : 'CAST(NULL AS int)';
+
+        foreach (['temizlik' => 'temizlikFiyat', 'isitma' => 'isitmaFiyat'] as $base => $column) {
+            if (!isset($seasonColumns[strtolower($column)])) {
+                continue;
+            }
+            $stmt = $pdo->prepare(
+                "SELECT TOP 1 ep.Value AS value, {$nightSelect} AS nights
+                 FROM dbo.HomesExtraPaymentPrices ep
+                 INNER JOIN dbo.HomesExtraPaymentTypes ept ON ept.ExtraPaymentTypeId = ep.ExtraPaymentTypeId
+                 WHERE ep.HomesId = :homeId
+                   AND ISNULL(ep.IsDeleted, 0) = 0
+                   AND ISNULL(ept.IsDeleted, 0) = 0
+                   AND (LOWER(ept.HomeColumnBase) = :base OR LOWER(ept.Code) = :base2)
+                   AND ep.StartDate <= CONVERT(date, :endDate, 104)
+                   AND ep.EndDate >= CONVERT(date, :startDate, 104)
+                 ORDER BY CASE WHEN ep.StartDate <= CONVERT(date, :startDate2, 104) AND ep.EndDate >= CONVERT(date, :startDate3, 104) THEN 0 ELSE 1 END,
+                          ep.ExtraPaymentPriceId DESC"
+            );
+            $stmt->execute([
+                ':homeId' => $homeId,
+                ':base' => $base,
+                ':base2' => $base,
+                ':startDate' => $startDate,
+                ':endDate' => $endDate,
+                ':startDate2' => $startDate,
+                ':startDate3' => $startDate,
+            ]);
+            $fee = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!is_array($fee)) {
+                continue;
+            }
+            $set = "[{$column}] = :value";
+            $params = [':value' => (float) str_replace(',', '.', (string) $fee['value']), ':id' => $seasonId, ':homeId' => $homeId];
+            if ($base === 'temizlik' && isset($seasonColumns['temizlikgece']) && $fee['nights'] !== null) {
+                $set .= ', temizlikGece = :nights';
+                $params[':nights'] = (int) $fee['nights'];
+            }
+            if ($base === 'isitma' && isset($seasonColumns['isitmahizmetdisi'])) {
+                $set .= ', isitmaHizmetDisi = 0';
+            }
+            $pdo->prepare("UPDATE sezonlar SET {$set} WHERE id = :id AND islem_id = :homeId AND islem = 'emlak'")->execute($params);
+        }
+    }
+
+    /**
+     * Ayni villa + ek ucret tipinde [startDate, endDate] ile cakisan aktif fiyat satirlarini kirpar:
+     *  - tamamen icinde kalan satir silinir (IsDeleted = 1),
+     *  - soldan tasan satirin bitisi startDate - 1 olur, sagdan tasan satirin baslangici endDate + 1 olur,
+     *  - yeni aralik eski satirin ortasina dusuyorsa eski satir ikiye bolunur (sol parca guncellenir, sag parca eklenir).
+     * Tarihler gg.aa.yyyy.
+     */
+    private function trimOverlappingExtraPaymentPrices(PDO $pdo, int $homeId, int $typeId, string $startDate, string $endDate): void
+    {
+        if ($typeId <= 0) {
+            return;
+        }
+        $stmt = $pdo->prepare(
+            "SELECT ExtraPaymentPriceId AS id,
+                    CASE WHEN StartDate < CONVERT(date, :s1, 104) THEN 1 ELSE 0 END AS leftOut,
+                    CASE WHEN EndDate > CONVERT(date, :e1, 104) THEN 1 ELSE 0 END AS rightOut
+             FROM dbo.HomesExtraPaymentPrices
+             WHERE HomesId = :homeId
+               AND ExtraPaymentTypeId = :typeId
+               AND ISNULL(IsDeleted, 0) = 0
+               AND StartDate <= CONVERT(date, :e2, 104)
+               AND EndDate >= CONVERT(date, :s2, 104)"
+        );
+        $stmt->execute([
+            ':homeId' => $homeId,
+            ':typeId' => $typeId,
+            ':s1' => $startDate,
+            ':e1' => $endDate,
+            ':s2' => $startDate,
+            ':e2' => $endDate,
+        ]);
+
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $id = (int) $row['id'];
+            $leftOut = (int) $row['leftOut'] === 1;
+            $rightOut = (int) $row['rightOut'] === 1;
+
+            if (!$leftOut && !$rightOut) {
+                $pdo->prepare('UPDATE dbo.HomesExtraPaymentPrices SET IsDeleted = 1, UpdatedOn = GETDATE() WHERE ExtraPaymentPriceId = :id')
+                    ->execute([':id' => $id]);
+                continue;
+            }
+            if ($leftOut && $rightOut) {
+                // Sag parca: endDate + 1 .. eski bitis (ayni deger / tip / sezon / gece siniri)
+                $night = $this->columnExists($pdo, 'dbo', 'HomesExtraPaymentPrices', 'ChargeNightLimit') ? ', ChargeNightLimit' : '';
+                $pdo->prepare(
+                    "INSERT INTO dbo.HomesExtraPaymentPrices
+                        (HomesId, SeasonId, StartDate, EndDate, CurrencyId, PriceType, ExtraPaymentTypeId, Value, Description, CreatedOn, IsDeleted{$night})
+                     SELECT HomesId, SeasonId, DATEADD(day, 1, CONVERT(date, :endDate, 104)), EndDate, CurrencyId, PriceType,
+                            ExtraPaymentTypeId, Value, Description, GETDATE(), 0{$night}
+                     FROM dbo.HomesExtraPaymentPrices WHERE ExtraPaymentPriceId = :id"
+                )->execute([':endDate' => $endDate, ':id' => $id]);
+            }
+            if ($leftOut) {
+                $pdo->prepare(
+                    'UPDATE dbo.HomesExtraPaymentPrices
+                     SET EndDate = DATEADD(day, -1, CONVERT(date, :startDate, 104)), UpdatedOn = GETDATE()
+                     WHERE ExtraPaymentPriceId = :id'
+                )->execute([':startDate' => $startDate, ':id' => $id]);
+            } else {
+                $pdo->prepare(
+                    'UPDATE dbo.HomesExtraPaymentPrices
+                     SET StartDate = DATEADD(day, 1, CONVERT(date, :endDate, 104)), UpdatedOn = GETDATE()
+                     WHERE ExtraPaymentPriceId = :id'
+                )->execute([':endDate' => $endDate, ':id' => $id]);
+            }
+        }
+    }
+
     private function deactivateSeasonExtraPaymentPrices(PDO $pdo, int $homeId, int $typeId, string $startDate, string $endDate): void
     {
         $stmt = $pdo->prepare(
@@ -2602,13 +2813,43 @@ final class HomesManagementPricesController extends Controller
             return;
         }
 
+        // Havuz isitma Ek Ucretler'den eklenince sezonda hep aktif yazilir (isitmaHizmetDisi = 0; kolon varsa)
+        $activeSet = strcasecmp($column, 'isitmaFiyat') === 0 && isset($this->sezonlarColumns($pdo)['isitmahizmetdisi'])
+            ? ', isitmaHizmetDisi = 0'
+            : '';
+
         $stmt = $pdo->prepare(
             "UPDATE sezonlar
-             SET [{$column}] = :value
+             SET [{$column}] = :value{$activeSet}
              WHERE id = :seasonId AND islem_id = :homeId AND islem = 'emlak'"
         );
         $stmt->execute([
             ':value' => $value,
+            ':seasonId' => $seasonId,
+            ':homeId' => $homeId,
+        ]);
+    }
+
+    /**
+     * Temizlik tipi (HomesExtraPaymentTypes.HomeColumnBase / Code = temizlik) sezona yazilirken gece siniri
+     * (sezonlar.temizlikGece) da guncellenir: konaklama bu geceden kisaysa temizlik ucreti alinir. 0 = sinir yok.
+     *
+     * @param array{id:int,code:string,name:string,home_column_base:string,is_included:int} $type
+     */
+    private function updateSeasonCleaningNights(PDO $pdo, int $homeId, int $seasonId, array $type, int $nights): void
+    {
+        $key = $type['home_column_base'] !== '' ? $type['home_column_base'] : $type['code'];
+        if (strtolower((string) $key) !== 'temizlik' || !isset($this->sezonlarColumns($pdo)['temizlikgece'])) {
+            return;
+        }
+
+        $stmt = $pdo->prepare(
+            "UPDATE sezonlar
+             SET temizlikGece = :nights
+             WHERE id = :seasonId AND islem_id = :homeId AND islem = 'emlak'"
+        );
+        $stmt->execute([
+            ':nights' => (string) max(0, $nights),
             ':seasonId' => $seasonId,
             ':homeId' => $homeId,
         ]);
@@ -2622,8 +2863,10 @@ final class HomesManagementPricesController extends Controller
         $key = $type['home_column_base'] !== '' ? $type['home_column_base'] : $type['code'];
         // Elektrik sezonda ayri kolonda tutulmaz; sezonlar.isitmaFiyat isitma fiyatidir (eskiden elektrik buraya
         // yaziliyor, isitma fiyatinin uzerine yaziyordu). Elektrik ucreti ek ucret fiyat tablosunda kalir.
+        // Havuz isitma (setup tipi isitma): sezonlar.isitmaFiyat'a yazilir (hesap gece basina kullanir).
         $map = [
             'temizlik' => 'temizlikFiyat',
+            'isitma' => 'isitmaFiyat',
         ];
         $column = $map[$key] ?? '';
         if ($column === '') {

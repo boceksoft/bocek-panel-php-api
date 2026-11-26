@@ -145,6 +145,11 @@ final class HomesExtraFields
 
         foreach ($keys as $key) {
             $field = $catalog[$key];
+            // Config homes_orj_ad_reference_link: "Villanin Orjinal Adi" alani referans linki olarak kullaniliyor.
+            if ($key === 'orj_ad' && !empty($app['homes_orj_ad_reference_link'])) {
+                $field['label'] = 'Referans Linki';
+                $field['hint'] = 'Villanın referans linki';
+            }
             if (isset($field['relation'])) {
                 $options = self::relationOptions($pdo, (string) $field['relation']);
                 if ($options === null) {

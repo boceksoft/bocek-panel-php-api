@@ -547,6 +547,12 @@ final class HomesManagementDetailUpdateController extends Controller
             $updates[$column] = $value;
         }
 
+        // Config homes_belge_no_homes: bazi sitelerde eski panel belge noyu homes.gavelBelgeNo'ya yaziyor;
+        // aciksa belge no kanun7464'e ek olarak homes.gavelBelgeNo'ya da yazilir (kolon yoksa updateHomes atlar).
+        if (!empty($this->app['homes_belge_no_homes']) && array_key_exists('gavelbelgeno', $payload)) {
+            $updates['gavelBelgeNo'] = $this->normalizeScalar($payload['gavelbelgeno']);
+        }
+
         return $updates;
     }
 

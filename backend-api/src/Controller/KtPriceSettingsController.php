@@ -207,6 +207,7 @@ final class KtPriceSettingsController extends Controller
             }
         }
 
+        $this->markHtmlCacheHome($homesId);
         $this->writeLog($pdo, 'emlak-fiyat-ice-aktar', $homesId, $discountImported
             ? 'Kiralama Takvimi fiyatları ve indirimleri içe aktarıldı.'
             : 'Kiralama Takvimi fiyatları içe aktarıldı.');
@@ -351,6 +352,7 @@ final class KtPriceSettingsController extends Controller
             throw new HttpException('Fiyatlar içe aktarılamadı.', 'KT_IMPORT_FAILED', 400);
         }
 
+        $this->markHtmlCacheHome($homesId);
         $this->writeLog($pdo, 'emlak-fiyat-ice-aktar', $homesId, 'HotelRunner / Elektra fiyatları içe aktarıldı.');
         $this->response->success(['imported' => true]);
     }

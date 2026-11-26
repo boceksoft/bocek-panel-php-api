@@ -32,6 +32,15 @@ return [
     // ariyorsa o sitede acin. Panel okurken bosluklari zaten temizler.
     'homes_kategori_comma_space' => false,
 
+    // Acik ise fiyat / indirim / sezon / son dakika / hafta sonu / KT fiyat ice aktarma / takvim kapatma kayitlarindan sonra
+    // sitenin on yuz HTML cache'i ({siteRoot}/HtmlCache, cache.php) eski ASP panel (asp_scripts/cacheScripts.asp) gibi silinir:
+    // liste sayfalari (HtmlCache/l, tip / destinations url'leri, HtmlCacheFile/listingLinks.html) + villanin detay klasorleri.
+    // Kapali (varsayilan): cache'e dokunulmaz. Villa Kiralama > Config ekranindan degistirilir. Bkz. src/Support/HtmlCacheCleaner.php
+    'html_cache_clear' => false,
+
+    // Sitenin kok klasoru (HtmlCache bunun altinda). Bos (varsayilan): backend-api'nin bir ust klasoru.
+    'html_cache_root' => '',
+
     // true: villa adi donen yerlerde (ilan listesi, katalog, rezervasyonlar, raporlar...) ad yerine homes.evkodu gosterilir;
     // evkodu bossa ad kullanilir. false (varsayilan): villa adi. Villa Kiralama > Config ekranindan degistirilir.
     'homes_title_use_code' => false,
@@ -99,6 +108,17 @@ return [
     // true: homes.orj_ad doluysa orj_ad, bossa homes.baslik. orj_ad kolonu sitede yoksa ayar yok sayilir.
     // homes_title_use_code acikken kod yine once gelir.
     'homes_site_name_orj_ad' => false,
+
+    // "Villanin Orjinal Adi" (homes.orj_ad) alani referans linki olarak kullaniliyor mu (bazi siteler bu alana villanin referans linkini yazar).
+    // false (varsayilan): orj_ad villa adidir; ilan aramasinda (ilanlar listesi, paneldeki ust genel arama) aranir, genel aramada gosterilir.
+    // true: ilan ekraninda alanin adi "Referans Linki" olur; orj_ad'da aranmaz ve listede original_name bos doner.
+    // homes_real_name_orj_ad / homes_site_name_orj_ad acikken villa adi zaten orj_ad'dan geldigi icin o ad etkilenmez.
+    'homes_orj_ad_reference_link' => false,
+
+    // Belge no (bakanlik belge numarasi) ilan kaydinda nereye yazilir. false (varsayilan): sadece kanun7464.gavelBelgeNo.
+    // true: kanun7464.gavelBelgeNo'ya ek olarak homes.gavelBelgeNo'ya da (eski panel bazi sitelerde homes'a yaziyor).
+    // Acikken ilan detayinda kanun7464'te belge no yoksa homes.gavelBelgeNo gosterilir.
+    'homes_belge_no_homes' => false,
 
     // Villa indirim turleri (indirimler.discountType); degerlerin anlami siteye gore degisir. Bkz. src/Support/HomesDiscountTypes.php
     //   options: value, label, payer (rezervasyonda kim karsilar: site | ev_sahibi | genel),
@@ -477,6 +497,8 @@ return [
         'homes_search_capacity_at_least' => 'bool',
         'homes_meta_title_min_length' => 'int',
         'homes_kategori_comma_space' => 'bool',
+        'html_cache_clear' => 'bool',
+        'html_cache_root' => 'string',
         'homes_title_use_code' => 'bool',
         'homes_fake_discount' => 'bool',
         'homes_featured_features' => 'bool',
@@ -484,6 +506,8 @@ return [
         'homes_whatsapp_rez_takip' => 'bool',
         'homes_real_name_orj_ad' => 'bool',
         'homes_site_name_orj_ad' => 'bool',
+        'homes_orj_ad_reference_link' => 'bool',
+        'homes_belge_no_homes' => 'bool',
         'homes_extra_fields' => 'array',
         'homes_code' => 'array',
         'homes_empty_seasons' => 'array',

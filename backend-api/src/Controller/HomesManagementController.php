@@ -84,6 +84,10 @@ final class HomesManagementController extends Controller
         $extraNameColumns = [];
         if ($title !== '' || $search !== '') {
             foreach (['orj_ad', 'villaadi'] as $extraNameColumn) {
+                // Config homes_orj_ad_reference_link aciksa orj_ad referans linkidir, orda aranmaz.
+                if ($extraNameColumn === 'orj_ad' && !$this->searchOrjAdEnabled()) {
+                    continue;
+                }
                 if ($this->homesColumnExists($pdo, $extraNameColumn)) {
                     $extraNameColumns[] = "ISNULL(CONVERT(nvarchar(500), h.[{$extraNameColumn}]), N'')";
                 }
@@ -285,6 +289,9 @@ final class HomesManagementController extends Controller
         $urlSql = $this->homesColumnExists($pdo, $urlColumn) ? "ISNULL(CONVERT(nvarchar(1000), h.[{$urlColumn}]), N'')" : "N''";
         // Taslak: yeni ilan ekraninda olusturulup "Kaydet" ile tamamlanmamis ilan (homes.template = 1).
         $draftSql = $this->homesColumnExists($pdo, 'template') ? 'CAST(ISNULL(h.template, 0) AS int)' : 'CAST(0 AS int)';
+        // Basvuru numarasi (kanun7464.gavelBasvuruNo); kolon olmayan sitelerde bos
+        $basvuruStmt = $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.kanun7464', 'gavelBasvuruNo') IS NULL THEN 0 ELSE 1 END");
+        $basvuruSql = (int) $basvuruStmt->fetchColumn() === 1 ? "ISNULL(CONVERT(nvarchar(200), gavel.gavelBasvuruNo), N'')" : "N''";
 
         $sql = " 
 SELECT
@@ -297,7 +304,7 @@ SELECT
     " . $this->homeTitleSql('h', $titleColumn) . " AS title,
     {$titleColumn} AS gavel_title,
     " . $this->homeRealNameSql($pdo, 'h', $titleColumn) . " AS real_title,
-    " . ($this->homesColumnExists($pdo, 'orj_ad') ? "ISNULL(CONVERT(nvarchar(500), h.orj_ad), N'')" : "N''") . " AS original_name,
+    " . ($this->searchOrjAdEnabled() && $this->homesColumnExists($pdo, 'orj_ad') ? "ISNULL(CONVERT(nvarchar(500), h.orj_ad), N'')" : "N''") . " AS original_name,
 {$extraTitleSql}    h.siralama AS sort_order, 
     {$imageColumn} AS image,
     h.yatak_odasi AS bedroom_count,
@@ -318,6 +325,7 @@ SELECT
     {$regionTitleColumn} AS region_title,
     ISNULL(gavel.gavel, 0) AS document_passive,
     ISNULL(gavel.gavelBelgeNo, '') AS GavelBelgeNo,
+    {$basvuruSql} AS GavelBasvuruNo,
     " . $this->gavelDurationSelectSql('gavel') . " AS document_duration,
     CASE WHEN ISNULL(gavel.gavel, 0) = 0 THEN 'default' ELSE '' END AS document_button_class,
     calendar.exists_value AS rental_calendar,
@@ -402,7 +410,7 @@ WHERE {$whereSql}
                 'gavel_title' => (string) $row['gavel_title'],
                 // Gercek villa adi (config homes_code: kod basliga yaziliyorsa homes.villaadi)
                 'real_title' => (string) ($row['real_title'] ?? ''),
-                // "Villanin Orjinal Adi" (homes.orj_ad); kolon yoksa bos
+                // "Villanin Orjinal Adi" (homes.orj_ad); kolon yoksa veya config homes_orj_ad_reference_link aciksa (alan referans linki) bos
                 'original_name' => trim((string) ($row['original_name'] ?? '')),
                 // Diger sitelerdeki villa adlari [{id, name, title}]; baslik kolonu olmayan site yok
                 'site_titles' => array_map(function (array $extraSite) use ($row): array {
@@ -435,6 +443,8 @@ WHERE {$whereSql}
                 'region_title' => (string) $row['region_title'],
                 'document_passive' => (int) $row['document_passive'],
                 'GavelBelgeNo' => (string) $row['GavelBelgeNo'],
+                // Basvuru numarasi (belge no yokken listede gosterilir)
+                'GavelBasvuruNo' => trim((string) ($row['GavelBasvuruNo'] ?? '')),
                 // Belge sure tipi: 1 suresiz, 2 sureli, null bilinmiyor
                 'document_duration' => $row['document_duration'] !== null ? (int) $row['document_duration'] : null,
                 'document_button_class' => (string) $row['document_button_class'],
@@ -827,6 +837,15 @@ WHERE {$whereSql}
         $parts = explode(',', $site, 2);
 
         return trim($parts[0]);
+    }
+
+    /**
+     * Ilan aramasinda ve listede "Villanin Orjinal Adi" (homes.orj_ad) kullanilir mi.
+     * Config homes_orj_ad_reference_link aciksa alan referans linkidir: kullanilmaz.
+     */
+    private function searchOrjAdEnabled(): bool
+    {
+        return empty($this->app['homes_orj_ad_reference_link']);
     }
 
     /**
