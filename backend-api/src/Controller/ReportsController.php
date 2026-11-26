@@ -223,9 +223,9 @@ WHERE {$filterColumn} >= {$range['start']} AND {$filterColumn} < {$range['end']}
      *   Talep/potansiyel: o gün açılan her rezervasyon kaydı (kayitlar.islem_tarihi).
      *   Gerçekleşen/kaçan: o gün durumu değişen kayıtlar (kayitlar.son_durum_guncelleme), panel raporu gibi;
      *   gerçekleşen dolu.durum 3, kaçan 2 (süresi doldu) + 4 (iptal) + silinen. Önceki günlerin talepleri de gelir.
-     *   Alınan ön ödeme (prepaymentTotal): panel rapor-yonetimi.asp "Toplam Alınan Ön Ödeme" (işlem tarihi) ile aynı;
-     *   onaylı kayıtların (kayitlar.kayit_durum 3) ön ödemesi (kayitlar.tutar), onaylandığı güne
-     *   (kayitlar.son_durum_guncelleme) göre.
+     *   Alınan ön ödeme (prepaymentTotal): gerçekleşenlerle aynı küme (dolu.durum 3) ve gün; ön ödeme kayitlar.tutar.
+     *   Panel rapor-yonetimi.asp "Toplam Alınan Ön Ödeme" kayitlar.kayit_durum'a bakar; kayit_durum dolu ile senkron
+     *   olmayabildiği için (ör. 99568: kayit_durum 1, dolu.durum 3) burada dolu.durum kullanılır, panelden fazla çıkabilir.
      *   dateType=rez_tarihi verilirse tüm metrikler (talep, gerçekleşen/kaçan, ön ödeme, kurala uymayan) giriş
      *   tarihine (kayitlar.rez_tarihi) göre filtrelenir ve günlere dağıtılır: o gün girişli talepler ve sonuçları.
      *
@@ -277,25 +277,17 @@ SELECT
     SUM(CASE WHEN {$durum} = 3 THEN {$tutar} ELSE 0 END) AS gerceklesen_ciro,
     SUM(CASE WHEN {$lost} THEN 1 ELSE 0 END) AS kacan,
     SUM(CASE WHEN {$lost} THEN {$tutar} ELSE 0 END) AS kacan_ciro,
-    SUM(CASE WHEN {$durum} = 2 THEN 1 ELSE 0 END) AS suresi_dolan
+    SUM(CASE WHEN {$durum} = 2 THEN 1 ELSE 0 END) AS suresi_dolan,
+    -- Alınan ön ödeme: gerçekleşenlerle aynı küme (dolu.durum = 3). kayitlar.kayit_durum dolu ile senkron
+    -- olmayabiliyor (ör. kayit_durum 1, dolu.durum 3), o yüzden kullanılmaz. Kur boşsa dövizli tutar sayılmaz (panel gibi).
+    SUM(CASE WHEN {$durum} = 3 THEN k.tutar * (CASE WHEN k.doviz = 'tl' THEN 1 ELSE k.kur END) ELSE 0 END) AS on_odeme
 {$from}
 WHERE {$resultDay} >= {$range['start']} AND {$resultDay} < {$range['end']}
   AND ({$durum} = 3 OR {$lost}){$filter}
 GROUP BY CAST({$resultDay} AS date)";
 
-        // Alınan ön ödeme: panelde dolu tablosuna bakılmaz, kur boşsa tutar sayılmaz (panel ile aynı).
-        $prepaymentFrom = $joins ? "FROM kayitlar k{$joins}" : 'FROM kayitlar k';
-        $prepaymentSql = "
-SELECT
-    CONVERT(varchar(10), CAST({$resultDay} AS date), 23) AS gun,
-    SUM(k.tutar * (CASE WHEN k.doviz = 'tl' THEN 1 ELSE k.kur END)) AS on_odeme
-{$prepaymentFrom}
-WHERE k.kayit_durum = 3
-  AND {$resultDay} >= {$range['start']} AND {$resultDay} < {$range['end']}{$filter}
-GROUP BY CAST({$resultDay} AS date)";
-
         $byDay = [];
-        foreach ([$requestSql, $resultSql, $prepaymentSql] as $sql) {
+        foreach ([$requestSql, $resultSql] as $sql) {
             foreach ($this->db->pdo()->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $row) {
                 $key = (string) $row['gun'];
                 $byDay[$key] = array_merge($byDay[$key] ?? [], $row);
@@ -347,9 +339,11 @@ GROUP BY CAST({$resultDay} AS date)";
 
     /**
      * Potansiyel raporunun rezervasyon listesi (ayrı istek; rapor tablosu ile birlikte yüklenmez).
-     * Tablodaki taleplerin (totalInquiries) kendisi: /potential ile aynı tarih aralığı, tarih tipi ve villa/bölge filtresi.
-     * Kolonlar ve tutarlar kasa raporu (vault) ile aynı hesaplanır. Silinen kayıtlar da talep sayıldığı için listededir
-     * (durum 5). Giriş tarihine göre sıralı, en fazla MAX_POTENTIAL_RESERVATIONS kayıt.
+     * Panel rapor-yonetimi (genelRaporSayfasi.asp) gibi: dateType=islem_tarihi iken durumu (onay / iptal / süresi dolma)
+     * aralıkta değişen kayıtlar (kayitlar.son_durum_guncelleme); dateType=rez_tarihi iken girişi aralıkta olanlar.
+     * /potential'daki gerçekleşen / kaçan kayıtlarla aynı küme. Villa/bölge filtresi aynı.
+     * Kolonlar ve tutarlar kasa raporu (vault) ile aynı hesaplanır. Silinen kayıtlar da listededir (durum 5).
+     * Giriş tarihine göre sıralı, en fazla MAX_POTENTIAL_RESERVATIONS kayıt.
      *
      * @Get("potential/reservations")
      * @query startDate string Başlangıç tarihi (YYYY-MM-DD veya DD.MM.YYYY), varsayılan 6 gün önce
@@ -374,7 +368,7 @@ GROUP BY CAST({$resultDay} AS date)";
             'startDate' => $f['startDate'],
             'endDate' => $f['endDate'],
             'dateType' => $f['dateType'],
-        ] + $this->potentialReservationRows($f['filter'], $f['requestDay'], $f['range'], $statuses));
+        ] + $this->potentialReservationRows($f['filter'], $f['resultDay'], $f['range'], $statuses));
     }
 
     /**
@@ -435,10 +429,11 @@ GROUP BY CAST({$resultDay} AS date)";
      * Potansiyel rezervasyon listesi sorgusu, toplamlar ve durum sayıları.
      *
      * @param string $filter potentialFilters() villa/bölge koşulları ("\n  AND ..." biçiminde)
+     * @param string $dayColumn Aralığın uygulandığı kolon (k.son_durum_guncelleme veya k.rez_tarihi)
      * @param array{start:string,end:string} $range rangeLiterals() çıktısı
      * @param int[] $statuses Boşsa tüm durumlar; aksi halde dolu.durum (silinen için 5)
      */
-    private function potentialReservationRows(string $filter, string $requestDay, array $range, array $statuses): array
+    private function potentialReservationRows(string $filter, string $dayColumn, array $range, array $statuses): array
     {
         $pdo = $this->db->pdo();
         $deleted = $this->deletedStatus();
@@ -456,11 +451,16 @@ GROUP BY CAST({$resultDay} AS date)";
         $limit = self::MAX_POTENTIAL_RESERVATIONS;
         $sql = "
 SELECT TOP " . ($limit + 1) . "
-    {$parts['select']}
+    {$parts['select']},
+    CONVERT(varchar(19), k.son_durum_guncelleme, 120) AS son_durum_tarihi,
+    CONVERT(varchar(19), k.islem_tarihi, 120) AS islem_tarihi_raw,
+    -- Kâr: panel genelRaporSayfasi.asp toplamKomisyon ile aynı formül (toplam tutar x kazanç oranı, TL).
+    ISNULL(TRY_CONVERT(money, dbo.fnTemizle(k.toplam_tutar)) / 100 * k.kazancorani
+        * (CASE WHEN k.doviz = 'tl' THEN 1 ELSE k.kur END), 0) AS panel_kar
 FROM dbo.kayitlar k
 INNER JOIN dbo.dolu d ON d.kayitid = k.id
 {$parts['joins']}
-WHERE {$requestDay} >= {$range['start']} AND {$requestDay} < {$range['end']}{$filter}{$statusSql}
+WHERE {$dayColumn} >= {$range['start']} AND {$dayColumn} < {$range['end']}{$filter}{$statusSql}
 ORDER BY k.rez_tarihi ASC, k.id ASC";
 
         $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
@@ -478,6 +478,13 @@ ORDER BY k.rez_tarihi ASC, k.id ASC";
         $statusCounts = [];
         foreach ($rows as $r) {
             $item = $this->reservationListItem($r, $netCommissionBase);
+            // Durum değişikliği (onay / iptal) ve kayıt tarihi: liste İşlem Tarihi modunda son_durum_tarihi'ne göre süzülür.
+            $item['son_durum_tarihi'] = (string) ($r['son_durum_tarihi'] ?? '');
+            $item['islem_tarihi'] = (string) ($r['islem_tarihi_raw'] ?? '');
+            // Kâr panel toplamKomisyon formülüyle: toplam tutar / 100 x kazanç oranı x kur (kur boşsa dövizli 0).
+            // Kasa raporundaki kâr (kayitlar_odeme.kazanc_tutari) burada kullanılmaz.
+            $item['kar'] = round((float) ($r['panel_kar'] ?? 0), 2);
+            $item['kar_formatted'] = number_format($item['kar'], 0, ',', '.') . ' TL';
             foreach (array_keys($sum) as $key) {
                 $sum[$key] += $item[$key] ?? 0;
             }
