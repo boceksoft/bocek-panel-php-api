@@ -271,7 +271,11 @@ final class ReservationsController extends Controller
             $this->columnExists($pdo, 'dbo', 'homes', 'bakimciad'),
             $whatsappSql,
             $villaCodeSql,
-            $villaRealNameSql
+            $villaRealNameSql,
+            // Hemen Kirala'dan gelen rezervasyon (kayitlar.bookabledirectly = 1); kolon yoksa 0
+            $this->columnExists($pdo, 'dbo', 'kayitlar', 'bookabledirectly')
+                ? 'CASE WHEN ISNULL(TRY_CONVERT(int, kayitlar.bookabledirectly), 0) = 1 THEN 1 ELSE 0 END'
+                : '0'
         );
 
         // Çalıştır
@@ -537,7 +541,8 @@ final class ReservationsController extends Controller
         bool $hasHomeCaretaker = false,
         string $whatsappSql = "N''",
         string $villaCodeSql = "N''",
-        string $villaRealNameSql = 'homes.baslik'
+        string $villaRealNameSql = 'homes.baslik',
+        string $bookableDirectlySql = '0'
     ): string
     {
         // dolu.durum API koduna çevrilir (siteye özel silinme kodu -> 5).
@@ -661,7 +666,8 @@ $acentaSelectSql
     ISNULL(kayitlar.gonderildi, 0) AS gonderildi,
     ISNULL(kanun7464.belgeSuresiTipi, 0) AS belgeSuresiTipi,
     ISNULL(kanun7464.gavel, 0) AS gavel,
-    CASE WHEN ISNULL(kanun7464.belgeSuresiTipi, 1) = 2 AND ISNULL(kanun7464.gavel, 0) = 0 THEN 1 ELSE 0 END AS ozelden_al
+    CASE WHEN ISNULL(kanun7464.belgeSuresiTipi, 1) = 2 AND ISNULL(kanun7464.gavel, 0) = 0 THEN 1 ELSE 0 END AS ozelden_al,
+    {$bookableDirectlySql} AS bookable_directly
 FROM kayitlar
 CROSS APPLY (
     SELECT
@@ -797,7 +803,7 @@ INNER JOIN dolu ON dolu.kayitid = kayitlar.id
             'id', 'site', 'evid', 'home_id', 'gece', 'odeme_sekli', 'odeme_turu', 'durum',
             'acenta', 'kisi_bilgileri_count', 'opsiyon_count', 'has_opsiyon',
             'dolu_fake_count', 'has_bizdeki_tarih', 'arandi', 'sozlesme', 'gonderildi',
-            'belgeSuresiTipi', 'gavel', 'ozelden_al',
+            'belgeSuresiTipi', 'gavel', 'ozelden_al', 'bookable_directly',
             'acenta_rez_no', 'acenta_rez_durum', 'acenta_user_id',
         ];
 

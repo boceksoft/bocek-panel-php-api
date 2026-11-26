@@ -1879,11 +1879,18 @@ IF OBJECT_ID(N'[dbo].[HomesExtraPaymentPrices]', N'U') IS NOT NULL
 ALTER TABLE dbo.HomesExtraPaymentPrices ADD UpdatedOn smalldatetime NULL;
 GO
 
+-- Temizlik gece siniri (Ek Ucretler tarih araligi satirinda; sonradan eklenen sezonlara temizlikGece olarak yazilir)
+IF OBJECT_ID(N'[dbo].[HomesExtraPaymentPrices]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[HomesExtraPaymentPrices]', N'ChargeNightLimit') IS NULL
+ALTER TABLE dbo.HomesExtraPaymentPrices ADD ChargeNightLimit int NULL;
+GO
+
 MERGE dbo.HomesExtraPaymentTypes AS target
 USING (VALUES
            (N'hasar', N'Hasar Depozitosu', N'hasar', CONVERT(bit, 0)),
            (N'temizlik', N'Temizlik', N'temizlik', CONVERT(bit, 0)),
-           (N'elektrik', N'Elektrik-Su', N'elektrik', CONVERT(bit, 0))
+           (N'elektrik', N'Elektrik-Su', N'elektrik', CONVERT(bit, 0)),
+           (N'isitma', N'Havuz Isıtma', N'isitma', CONVERT(bit, 0))
 ) AS source (Code, Name, HomeColumnBase, IsIncluded)
 ON target.Code = source.Code
 WHEN MATCHED THEN
@@ -4185,11 +4192,18 @@ IF OBJECT_ID(N'[dbo].[HomesExtraPaymentPrices]', N'U') IS NOT NULL
 ALTER TABLE dbo.HomesExtraPaymentPrices ADD UpdatedOn smalldatetime NULL;
 GO
 
+-- Temizlik gece siniri (Ek Ucretler tarih araligi satirinda; sonradan eklenen sezonlara temizlikGece olarak yazilir)
+IF OBJECT_ID(N'[dbo].[HomesExtraPaymentPrices]', N'U') IS NOT NULL
+    AND COL_LENGTH(N'[dbo].[HomesExtraPaymentPrices]', N'ChargeNightLimit') IS NULL
+ALTER TABLE dbo.HomesExtraPaymentPrices ADD ChargeNightLimit int NULL;
+GO
+
 MERGE dbo.HomesExtraPaymentTypes AS target
 USING (VALUES
            (N'hasar', N'Hasar Depozitosu', N'hasar', CONVERT(bit, 0)),
            (N'temizlik', N'Temizlik', N'temizlik', CONVERT(bit, 0)),
-           (N'elektrik', N'Elektrik-Su', N'elektrik', CONVERT(bit, 0))
+           (N'elektrik', N'Elektrik-Su', N'elektrik', CONVERT(bit, 0)),
+           (N'isitma', N'Havuz Isıtma', N'isitma', CONVERT(bit, 0))
 ) AS source (Code, Name, HomeColumnBase, IsIncluded)
 ON target.Code = source.Code
 WHEN MATCHED THEN
