@@ -34,6 +34,54 @@ abstract class Controller
         $this->app = $app;
     }
 
+    /** @var array<int,int> Istek basarili biterse HTML cache'i temizlenecek villalar */
+    private $htmlCacheHomeIds = [];
+
+    /** @var bool Temizlik bu istekte calisti mi */
+    private $htmlCacheDone = false;
+
+    /**
+     * Villanin site on yuz HTML cache'i istek basariyla bitince temizlensin (config html_cache_clear).
+     * Temizlik basarili yanit (response->success) gonderilmeden hemen once calisir ve raporu yanita
+     * data.html_cache olarak eklenir. Aksiyon hata firlatirsa success cagrilmaz, temizlik yapilmaz.
+     */
+    protected function markHtmlCacheHome(int $homeId): void
+    {
+        if ($homeId <= 0) {
+            return;
+        }
+        if ($this->htmlCacheHomeIds === []) {
+            $this->response->addSuccessExtra('html_cache', function () {
+                return $this->runHtmlCacheClear();
+            });
+        }
+        $this->htmlCacheHomeIds[$homeId] = $homeId;
+    }
+
+    /**
+     * @return array<string,mixed> temizlik raporu (config kapaliysa enabled=false)
+     */
+    private function runHtmlCacheClear(): array
+    {
+        $this->htmlCacheDone = true;
+        try {
+            return \App\Support\HtmlCacheCleaner::clearHomes($this->db->pdo(), $this->app, array_values($this->htmlCacheHomeIds));
+        } catch (\Throwable $e) {
+            // Cache temizligi kaydi etkilemez; hata yanitta gorunur (orn. HtmlCacheCleaner.php sunucuda yok).
+            return ['enabled' => !empty($this->app['html_cache_clear']), 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Router, aksiyon hatasiz bittikten sonra cagirir (success cagrilmadiysa temizlik burada yapilir).
+     */
+    public function afterAction(): void
+    {
+        if ($this->htmlCacheHomeIds !== [] && !$this->htmlCacheDone) {
+            $this->runHtmlCacheClear();
+        }
+    }
+
     /** @var bool|null homes.isDeleted kolonu var mi (istek boyunca bir kez bakilir) */
     private $homesHasDeletedColumn = null;
 
@@ -44,9 +92,7 @@ abstract class Controller
     protected function homesNotDeletedSql(\PDO $pdo, string $alias = 'h'): string
     {
         if ($this->homesHasDeletedColumn === null) {
-            $this->homesHasDeletedColumn = (int) $pdo->query(
-                "SELECT CASE WHEN COL_LENGTH('dbo.homes', 'isDeleted') IS NULL THEN 0 ELSE 1 END"
-            )->fetchColumn() === 1;
+            $this->homesHasDeletedColumn = \App\Support\SchemaColumns::exists($pdo, 'dbo.homes', 'isDeleted');
         }
         if (!$this->homesHasDeletedColumn) {
             return '1 = 1';
@@ -78,9 +124,7 @@ abstract class Controller
                 $parts[] = "NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(500), {$titleExpr}))), '')";
                 continue;
             }
-            $exists = (int) $pdo->query(
-                "SELECT CASE WHEN COL_LENGTH('dbo.homes', '{$column}') IS NULL THEN 0 ELSE 1 END"
-            )->fetchColumn() === 1;
+            $exists = \App\Support\SchemaColumns::exists($pdo, 'dbo.homes', $column);
             if ($exists) {
                 $parts[] = "NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(500), {$alias}.[{$column}]))), '')";
             }
@@ -162,9 +206,7 @@ abstract class Controller
     {
         if ($this->homesHasOrjAdCache === null) {
             try {
-                $this->homesHasOrjAdCache = (int) $this->db->pdo()->query(
-                    "SELECT CASE WHEN COL_LENGTH('dbo.homes', 'orj_ad') IS NULL THEN 0 ELSE 1 END"
-                )->fetchColumn() === 1;
+                $this->homesHasOrjAdCache = \App\Support\SchemaColumns::exists($this->db->pdo(), 'dbo.homes', 'orj_ad');
             } catch (\Throwable $e) {
                 $this->homesHasOrjAdCache = false;
             }
@@ -201,9 +243,7 @@ abstract class Controller
     {
         if ($this->gavelDurationColumnExistsCache === null) {
             try {
-                $stmt = $this->db->pdo()->prepare("SELECT CASE WHEN COL_LENGTH('dbo.kanun7464', :col) IS NULL THEN 0 ELSE 1 END");
-                $stmt->execute([':col' => $this->gavelDurationColumn()]);
-                $this->gavelDurationColumnExistsCache = (int) $stmt->fetchColumn() === 1;
+                $this->gavelDurationColumnExistsCache = \App\Support\SchemaColumns::exists($this->db->pdo(), 'dbo.kanun7464', $this->gavelDurationColumn());
             } catch (\Throwable $e) {
                 $this->gavelDurationColumnExistsCache = false;
             }

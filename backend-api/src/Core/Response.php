@@ -17,6 +17,9 @@ final class Response
     /** @var int|null Aktif endpoint'in sürümü (varsa yanıta eklenir) */
     private $version = null;
 
+    /** @var array<string,callable> success() yanıtına eklenecek alanlar: alan adı => değeri üreten fonksiyon (bir kez çalışır) */
+    private $successExtras = [];
+
     /**
      * @param array $options config/app.php (force_http_200, cors_origin) ayarları
      */
@@ -33,8 +36,26 @@ final class Response
         $this->version = $version;
     }
 
+    /**
+     * success() çağrıldığında $data[$key] = $producer() eklenir (örn. html_cache temizlik raporu). Her biri bir kez çalışır.
+     */
+    public function addSuccessExtra(string $key, callable $producer): void
+    {
+        $this->successExtras[$key] = $producer;
+    }
+
     public function success(array $data = [], int $status = 200): void
     {
+        $extras = $this->successExtras;
+        $this->successExtras = [];
+        foreach ($extras as $key => $producer) {
+            try {
+                $data[$key] = $producer();
+            } catch (\Throwable $e) {
+                $data[$key] = ['error' => $e->getMessage()];
+            }
+        }
+
         $this->send($status, ['success' => true, 'data' => $data]);
     }
 
@@ -75,6 +96,7 @@ final class Response
             header('Access-Control-Allow-Origin: ' . ($this->options['cors_origin'] ?? '*'));
             header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
             header('Access-Control-Allow-Headers: Content-Type, Authorization');
+            header('Server-Timing: ' . \App\Support\ServerTiming::header());
 
             // IIS hata sayfalarını yutmasın diye istenirse her zaman 200 dön.
             http_response_code(!empty($this->options['force_http_200']) ? 200 : $status);

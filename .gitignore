@@ -6,6 +6,8 @@ backend-api/config/app.local.php
 # Otomatik güncellemenin ürettiği çalışma zamanı dosyaları (her sunucuda farklı).
 backend-api/.deploy-state.json
 backend-api/.update.log
+backend-api/.html-cache.log
 backend-api/.backups/
 Panel-kodlari
 /.idea/
+.idea

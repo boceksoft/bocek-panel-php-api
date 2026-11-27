@@ -66,6 +66,7 @@ final class Router
 
         $controller = new $controllerClass($this->request, $this->response, $this->db, $this->app);
         $controller->{$action}();
+        $controller->afterAction();
     }
 
     /**
