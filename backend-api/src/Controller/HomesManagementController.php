@@ -413,8 +413,10 @@ WHERE {$whereSql}
                 $detailSql = substr($sql, 0, $wherePos) . "\nWHERE h.id IN ({$ids})\n{$orderSql}";
                 $stmt = $pdo->prepare($detailSql);
                 foreach ($params as $key => $value) {
-                    // Detay sorgusunda sadece geceren parametreler (yil, tam eslesme siralamasi) baglanir
-                    if (strpos($detailSql, $key) !== false) {
+                    // Detay sorgusunda sadece geceren parametreler (yil, tam eslesme siralamasi) baglanir.
+                    // Tam ad eslesmesi: ':keywordExact' ':keywordExactOrder' icinde de gectigi icin strpos ile
+                    // sorguda olmayan parametre baglaniyor, rakamla (id ile) aramada sorgu hata veriyordu.
+                    if (preg_match('/' . preg_quote($key, '/') . '(?![A-Za-z0-9_])/', $detailSql) === 1) {
                         $stmt->bindValue($key, $value);
                     }
                 }
