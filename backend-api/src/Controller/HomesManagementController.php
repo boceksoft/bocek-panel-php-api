@@ -194,15 +194,16 @@ final class HomesManagementController extends Controller
         $seo = $this->p('seo');
         $hasSeoColumn = \App\Support\HomesSeoScore::columnExists($pdo);
         $seoColumn = 'h.[' . \App\Support\HomesSeoScore::COLUMN . ']';
-        // Sadece Bizde (homes.sadece_bizde); kolon yoksa 0
-        $hasOnlyUsColumn = \App\Support\SchemaColumns::exists($pdo, 'dbo.homes', 'sadece_bizde');
+        // Sadece Bizde (homes.sadece_bizde); kolon yoksa 0. Deger bit (1) ya da metin ('true') olabilir.
+        // Kolon kontrolu ilan detayiyla ayni (COL_LENGTH); deger PHP'de detaydaki gibi yorumlanir.
+        $hasOnlyUsColumn = $pdo->query("SELECT COL_LENGTH('dbo.homes', 'sadece_bizde')")->fetchColumn() !== null;
         if ($seo === '1' || $seo === '0') {
             if (!$hasSeoColumn) {
                 throw new \App\Core\HttpException('SEO filtresi icin once setup calistirilmali.', 'SETUP_REQUIRED', 409);
             }
             $where[] = $seo === '1' ? "{$seoColumn} = 100" : "ISNULL({$seoColumn}, 0) < 100";
         }
-
+ 
         $document = $this->p('document') !== '' ? $this->p('document') : $this->p('gavelBelge');
         // Sure tipi ayardaki kolondan okunur (gavel_duration_column); 1 suresiz, 2 sureli
         $durationSql = $this->gavelDurationSql('gavel');
@@ -338,7 +339,7 @@ SELECT
     ISNULL(h.doviz, '') AS currency,
     " . ($hasCompletionColumn ? $completionColumn : 'CAST(NULL AS int)') . " AS completion_percent,
     " . ($hasSeoColumn ? $seoColumn : 'CAST(NULL AS int)') . " AS seo_percent,
-    " . ($hasOnlyUsColumn ? 'CASE WHEN ISNULL(TRY_CONVERT(int, h.sadece_bizde), 0) = 1 THEN 1 ELSE 0 END' : '0') . " AS only_us
+    " . ($hasOnlyUsColumn ? 'CONVERT(nvarchar(20), h.sadece_bizde)' : 'CAST(NULL AS nvarchar(20))') . " AS only_us
 FROM homes h
 INNER JOIN destinations d ON d.id = h.emlak_bolgesi
 LEFT JOIN kanun7464 gavel ON gavel.homeId = h.id
@@ -442,7 +443,23 @@ WHERE {$whereSql}
         $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
         // Sitenin adresi (villa linki icin), HomesController ile ayni kaynak
         $siteDomain = $this->siteDomain($pdo, $siteId);
+        // Sadece Bizde: ilan detayindaki gibi homes satiri (SELECT *) okunur, kolon adi buyuk/kucuk harf farketmez.
+        // [id => ham deger]; kolon homes'ta yoksa anahtar olmaz.
+        $onlyUsById = [];
+        $onlyUsIds = array_values(array_filter(array_map(function (array $r): int {
+            return (int) ($r['id'] ?? 0);
+        }, $rows)));
+        if ($onlyUsIds) {
+            $onlyUsStmt = $pdo->query('SELECT * FROM homes WHERE id IN (' . implode(',', $onlyUsIds) . ')');
+            foreach ($onlyUsStmt->fetchAll(PDO::FETCH_ASSOC) as $homeRow) {
+                $homeRow = array_change_key_case($homeRow, CASE_LOWER);
+                if (array_key_exists('sadece_bizde', $homeRow)) {
+                    $onlyUsById[(int) $homeRow['id']] = $homeRow['sadece_bizde'];
+                }
+            }
+        }
         foreach ($rows as &$row) {
+            $onlyUsRaw = $onlyUsById[(int) ($row['id'] ?? 0)] ?? null;
             unset($row['totalCount']);
             // Villa fotograflari yeni CDN yapisinda (/property/small/{villaId}/)
             $imageList = $this->imageList((string) $row['image'], Uploads::homeImageBase($cdnBase, (int) ($row['id'] ?? 0), $this->app));
@@ -507,7 +524,8 @@ WHERE {$whereSql}
                 // SEO puani (homes.seo_yuzdesi); setup calismadiysa veya hesaplanmadiysa null.
                 'seo_percent' => $row['seo_percent'] !== null ? (int) $row['seo_percent'] : null,
                 // Sadece Bizde (homes.sadece_bizde = 1)
-                'only_us' => (int) $row['only_us'],
+                // NULL / bos / false -> 0; 1, true, evet, on, yes -> 1 (ilan detayindaki ile ayni yorum)
+                'only_us' => (is_bool($onlyUsRaw) ? $onlyUsRaw : in_array(strtolower(trim((string) $onlyUsRaw)), ['1', 'true', 'on', 'evet', 'yes'], true)) ? 1 : 0,
             ];
         }
         unset($row);

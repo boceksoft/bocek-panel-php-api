@@ -448,7 +448,7 @@ final class HomesController extends Controller
 
         // sadecebizde=1: sadece homes.sadece_bizde = 1 villalar; Config'de alan secili degilse yok sayilir.
         if ($this->p('sadecebizde') === '1' && HomesExtraFields::onlyUsEnabled($pdo, $this->app)) {
-            $sql .= ' AND ISNULL(h.sadece_bizde, 0) = 1';
+            $sql .= " AND (CASE WHEN LOWER(LTRIM(RTRIM(CONVERT(nvarchar(10), h.sadece_bizde)))) IN (N'1', N'true', N'evet') THEN 1 ELSE 0 END) = 1";
         }
 
         // Ozel liste ekrani (indirim=1): secilen tarihlerde sitede su an gosterilen bir indirimi olan villalar.
@@ -920,8 +920,8 @@ WHERE " . (empty($c['includeInactive']) ? "h.aktif{$c['dbt']} = 1" : '1 = 1') . 
     private function orderClause(int $orderBy, string $orderByEk, bool $isFilterSelected): string
     {
         if ($isFilterSelected) {
-            $gelismis = "(CASE WHEN h.sadece_bizde = 1 AND bosluklar.girisbosluk = 0 AND bosluklar.cikisbosluk = 0 THEN 1 ELSE 0 END) DESC, "
-                . "(CASE WHEN h.sadece_bizde = 1 AND ((bosluklar.girisbosluk = 0 AND mm.val <= bosluklar.cikisbosluk) OR (bosluklar.cikisbosluk = 0 AND mm.val <= bosluklar.girisbosluk)) THEN 1 ELSE 0 END) DESC, ";
+            $gelismis = "(CASE WHEN (CASE WHEN LOWER(LTRIM(RTRIM(CONVERT(nvarchar(10), h.sadece_bizde)))) IN (N'1', N'true', N'evet') THEN 1 ELSE 0 END) = 1 AND bosluklar.girisbosluk = 0 AND bosluklar.cikisbosluk = 0 THEN 1 ELSE 0 END) DESC, "
+                . "(CASE WHEN (CASE WHEN LOWER(LTRIM(RTRIM(CONVERT(nvarchar(10), h.sadece_bizde)))) IN (N'1', N'true', N'evet') THEN 1 ELSE 0 END) = 1 AND ((bosluklar.girisbosluk = 0 AND mm.val <= bosluklar.cikisbosluk) OR (bosluklar.cikisbosluk = 0 AND mm.val <= bosluklar.girisbosluk)) THEN 1 ELSE 0 END) DESC, ";
         } else {
             $gelismis = '';
         }
