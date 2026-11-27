@@ -13,6 +13,8 @@ use PDO;
  *   GET  /bulk-edit/fields?type=villas|pages|blog      alan listesi (+ secenekler, kolon var mi)
  *   GET  /bulk-edit?type=..&fields=a,b&page=1&per_page=50&search=&active=1|0&sort=   kayitlar
  *        sort: order (siralama, varsayilan) | id_desc | id_asc | title_asc | title_desc
+ *        villalarda her satirda original_name de doner (homes.orj_ad; AI toplu duzenlemede anahtar kelimeye eklenir).
+ *        Config homes_orj_ad_reference_link aciksa (alan referans linki) veya kolon yoksa bos doner.
  *   POST /bulk-edit/save { type, changes: [{ id, values: { alan: deger } }] }
  *   POST /bulk-edit/save { type: villas, action: delete, ids: [..] }   toplu silme: homes.isDeleted = 1, aktif = 0 (satir silinmez,
  *        panel listelerinde gosterilmez; geri almak icin isDeleted = 0)
@@ -120,6 +122,11 @@ final class BulkEditController extends Controller
         $total = (int) $countStmt->fetchColumn();
 
         $selectSql = ['id', 'baslik AS __label'];
+        // Villanin orijinal adi (homes.orj_ad). Referans linki yazilan sitelerde (config homes_orj_ad_reference_link) kullanilmaz.
+        $withOriginalName = $type === 'villas' && in_array('orj_ad', $columns, true) && empty($this->app['homes_orj_ad_reference_link']);
+        if ($withOriginalName) {
+            $selectSql[] = 'CONVERT(nvarchar(500), orj_ad) AS __original';
+        }
         foreach ($select as $key => $column) {
             $selectSql[] = "[{$column}] AS [{$key}]";
         }
@@ -149,7 +156,13 @@ final class BulkEditController extends Controller
                 $value = $pools[$id][$tipId][$poolColumn] ?? null;
                 $values[$key] = $this->outputValue($definitions[$key]['type'], $value);
             }
-            $rows[] = ['id' => $id, 'label' => (string) ($raw['__label'] ?? ''), 'values' => $values];
+            $row = ['id' => $id, 'label' => (string) ($raw['__label'] ?? ''), 'values' => $values];
+            if ($type === 'villas') {
+                $original = $withOriginalName ? trim((string) ($raw['__original'] ?? '')) : '';
+                // Alana link yazilmissa ad sayilmaz.
+                $row['original_name'] = preg_match('~^(https?://|www\.)~i', $original) ? '' : $original;
+            }
+            $rows[] = $row;
         }
 
         $this->response->success([
