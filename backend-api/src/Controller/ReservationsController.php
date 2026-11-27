@@ -277,7 +277,11 @@ final class ReservationsController extends Controller
             // Hemen Kirala'dan gelen rezervasyon (kayitlar.bookabledirectly = 1); kolon yoksa 0
             $this->columnExists($pdo, 'dbo', 'kayitlar', 'bookabledirectly')
                 ? 'CASE WHEN ISNULL(TRY_CONVERT(int, kayitlar.bookabledirectly), 0) = 1 THEN 1 ELSE 0 END'
-                : '0'
+                : '0',
+            // Villa adresi: Turizm belgesindeki adres (kanun7464.gavelAdres); kolon yoksa bos
+            $this->columnExists($pdo, 'dbo', 'kanun7464', 'gavelAdres')
+                ? "ISNULL(LTRIM(RTRIM(CONVERT(nvarchar(1000), kanun7464.gavelAdres))), N'')"
+                : "N''"
         );
 
         // Çalıştır
@@ -549,7 +553,8 @@ final class ReservationsController extends Controller
         string $whatsappSql = "N''",
         string $villaCodeSql = "N''",
         string $villaRealNameSql = 'homes.baslik',
-        string $bookableDirectlySql = '0'
+        string $bookableDirectlySql = '0',
+        string $villaAddressSql = "N''"
     ): string
     {
         // dolu.durum API koduna çevrilir (siteye özel silinme kodu -> 5).
@@ -674,7 +679,8 @@ $acentaSelectSql
     ISNULL(kanun7464.belgeSuresiTipi, 0) AS belgeSuresiTipi,
     ISNULL(kanun7464.gavel, 0) AS gavel,
     CASE WHEN ISNULL(kanun7464.belgeSuresiTipi, 1) = 2 AND ISNULL(kanun7464.gavel, 0) = 0 THEN 1 ELSE 0 END AS ozelden_al,
-    {$bookableDirectlySql} AS bookable_directly
+    {$bookableDirectlySql} AS bookable_directly,
+    {$villaAddressSql} AS villa_adres
 FROM kayitlar
 CROSS APPLY (
     SELECT

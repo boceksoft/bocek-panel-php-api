@@ -464,6 +464,9 @@ return [
     // Kolon DB'de olsa da site kullanmiyor olabilir; varsayilan kapali, kullanan sitede (orn. villavillam) acilir.
     // Kapaliyken alan ilan ekraninda gorunmez ve kaydedilmez. Acik olsa da kolon yoksa etkisiz.
     // Fiyat hesaplamasi (calculate) bu ayarlara bakmaz; kolon varsa eskisi gibi okur.
+    // homes_season_heating kapaliyken ilan detayi isitma fiyatini gondermez: Ek Ucretler'de sezonlardaki havuz
+    // isitma satirlari listelenmez (Ek Ucretler'den isitma kaydi ise kolon varsa sezona yine yazilir).
+    // Ek Ucretler'den eklenen isitma sezona her zaman aktif (isitmaHizmetDisi = 0) yazilir.
     'homes_season_heating' => false,
     'homes_season_heating_off' => false,
 
