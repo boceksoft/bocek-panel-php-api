@@ -343,6 +343,15 @@ final class ReservationsController extends Controller
 
         $rows = $this->normalizeRows($rows);
 
+        // kiralama_takvimi: villa Kiralama Takvimi'ne bagli mi (KiralamaTakvimi.CalendarHomes); Rozetler kolonunda kullanilir.
+        if ($rows) {
+            $calendarHomes = $this->calendarHomeIds($pdo, array_map('intval', array_column($rows, 'home_id')));
+            foreach ($rows as &$row) {
+                $row['kiralama_takvimi'] = isset($calendarHomes[(int) ($row['home_id'] ?? 0)]);
+            }
+            unset($row);
+        }
+
         \App\Support\ServerTiming::add('extra', $extraStartedAt);
         $this->response->success([
             'status'      => 'success',
@@ -797,6 +806,25 @@ INNER JOIN dolu ON dolu.kayitid = kayitlar.id
      * @param array<int,array> $rows
      * @return array<int,array>
      */
+    /**
+     * Kiralama Takvimi'ne bagli villalar (id => true). Tablo olmayan kurulumda bos.
+     * HomesController::calendarHomeIds ile ayni.
+     *
+     * @param array<int,int> $homeIds
+     * @return array<int,bool>
+     */
+    private function calendarHomeIds(PDO $pdo, array $homeIds): array
+    {
+        $homeIds = array_values(array_unique(array_filter($homeIds)));
+        if ($homeIds === [] || $pdo->query("SELECT OBJECT_ID('KiralamaTakvimi.CalendarHomes', 'U')")->fetchColumn() === null) {
+            return [];
+        }
+        $idList = implode(',', array_map('intval', $homeIds));
+        $ids = $pdo->query('SELECT DISTINCT homesId FROM KiralamaTakvimi.CalendarHomes WHERE homesId IN (' . $idList . ')')->fetchAll(PDO::FETCH_COLUMN);
+
+        return array_fill_keys(array_map('intval', $ids), true);
+    }
+
     private function normalizeRows(array $rows): array
     {
         $moneyFields = [
