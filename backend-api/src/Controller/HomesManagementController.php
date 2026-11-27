@@ -194,6 +194,8 @@ final class HomesManagementController extends Controller
         $seo = $this->p('seo');
         $hasSeoColumn = \App\Support\HomesSeoScore::columnExists($pdo);
         $seoColumn = 'h.[' . \App\Support\HomesSeoScore::COLUMN . ']';
+        // Sadece Bizde (homes.sadece_bizde); kolon yoksa 0
+        $hasOnlyUsColumn = \App\Support\SchemaColumns::exists($pdo, 'dbo.homes', 'sadece_bizde');
         if ($seo === '1' || $seo === '0') {
             if (!$hasSeoColumn) {
                 throw new \App\Core\HttpException('SEO filtresi icin once setup calistirilmali.', 'SETUP_REQUIRED', 409);
@@ -335,7 +337,8 @@ SELECT
     price.min_price AS min_price,
     ISNULL(h.doviz, '') AS currency,
     " . ($hasCompletionColumn ? $completionColumn : 'CAST(NULL AS int)') . " AS completion_percent,
-    " . ($hasSeoColumn ? $seoColumn : 'CAST(NULL AS int)') . " AS seo_percent
+    " . ($hasSeoColumn ? $seoColumn : 'CAST(NULL AS int)') . " AS seo_percent,
+    " . ($hasOnlyUsColumn ? 'CASE WHEN ISNULL(TRY_CONVERT(int, h.sadece_bizde), 0) = 1 THEN 1 ELSE 0 END' : '0') . " AS only_us
 FROM homes h
 INNER JOIN destinations d ON d.id = h.emlak_bolgesi
 LEFT JOIN kanun7464 gavel ON gavel.homeId = h.id
@@ -410,8 +413,10 @@ WHERE {$whereSql}
                 $detailSql = substr($sql, 0, $wherePos) . "\nWHERE h.id IN ({$ids})\n{$orderSql}";
                 $stmt = $pdo->prepare($detailSql);
                 foreach ($params as $key => $value) {
-                    // Detay sorgusunda sadece geceren parametreler (yil, tam eslesme siralamasi) baglanir
-                    if (strpos($detailSql, $key) !== false) {
+                    // Detay sorgusunda sadece geceren parametreler (yil, tam eslesme siralamasi) baglanir.
+                    // Tam ad eslesmesi: ':keywordExact' ':keywordExactOrder' icinde de gectigi icin strpos ile
+                    // sorguda olmayan parametre baglaniyor, rakamla (id ile) aramada sorgu hata veriyordu.
+                    if (preg_match('/' . preg_quote($key, '/') . '(?![A-Za-z0-9_])/', $detailSql) === 1) {
                         $stmt->bindValue($key, $value);
                     }
                 }
@@ -501,6 +506,8 @@ WHERE {$whereSql}
                 'completion_percent' => $row['completion_percent'] !== null ? (int) $row['completion_percent'] : null,
                 // SEO puani (homes.seo_yuzdesi); setup calismadiysa veya hesaplanmadiysa null.
                 'seo_percent' => $row['seo_percent'] !== null ? (int) $row['seo_percent'] : null,
+                // Sadece Bizde (homes.sadece_bizde = 1)
+                'only_us' => (int) $row['only_us'],
             ];
         }
         unset($row);
