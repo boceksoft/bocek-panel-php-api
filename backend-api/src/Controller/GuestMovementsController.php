@@ -54,10 +54,13 @@ final class GuestMovementsController extends Controller
         $perPage = max(1, (int) $this->firstRequestValue(['per_page', 'limit'], '50'));
         $search = $this->firstRequestValue(['kelime', 'search', 'q'], '');
         $siteId = $this->siteId();
+        // site parametresi acikca gonderildiyse rezervasyonun geldigi siteye (kayitlar.site) gore filtrelenir.
+        // Gonderilmezse eski davranis: tum siteler.
+        $siteFilter = $this->hasSiteParam() ? $siteId : null;
 
-        $girisRows = $this->fetchRows('giris', $startDate, $endDate, $siteId);
-        $cikisRows = $this->fetchRows('cikis', $startDate, $endDate, $siteId);
-        $icerdeRows = $this->fetchRows('icerde', $startDate, $endDate, $siteId);
+        $girisRows = $this->fetchRows('giris', $startDate, $endDate, $siteFilter);
+        $cikisRows = $this->fetchRows('cikis', $startDate, $endDate, $siteFilter);
+        $icerdeRows = $this->fetchRows('icerde', $startDate, $endDate, $siteFilter);
 
         if ($search !== '') {
             $girisRows = $this->filterRowsBySearch($girisRows, $search);
@@ -136,6 +139,21 @@ final class GuestMovementsController extends Controller
         return $default;
     }
 
+    private function hasSiteParam(): bool
+    {
+        foreach (['site', 'Site', 'site_id', 'SiteId', 'siteId', 'currentSite', 'currentSiteId'] as $key) {
+            $value = $this->request->query($key, null);
+            if ($value === null) {
+                $value = $this->request->input($key, null);
+            }
+            if ($value !== null && trim((string) $value) !== '') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function siteId(): int
     {
         $value = $this->firstRequestValue(['site', 'Site', 'site_id', 'SiteId', 'siteId', 'currentSite', 'currentSiteId'], '1');
@@ -193,12 +211,16 @@ final class GuestMovementsController extends Controller
     /**
      * @return array<int,array<string,mixed>>
      */
-    private function fetchRows(string $type, string $startDate, string $endDate, int $siteId): array
+    private function fetchRows(string $type, string $startDate, string $endDate, ?int $siteId): array
     {
         $reservationIdSql = $this->doluReservationIdSql();
         $whereSql = $this->dateWhere($type);
         $externalFilterSql = $this->columnExists('dbo.dolu', 'IsExternal')
             ? 'AND ISNULL(d.IsExternal, 0) <> 1'
+            : '';
+        // Site bos olan eski kayitlar varsayilan site (1) sayilir; rapor filtreleriyle ayni mantik.
+        $siteFilterSql = $siteId !== null && $this->columnExists('dbo.kayitlar', 'site')
+            ? 'AND ISNULL(k.site, 1) = :siteId'
             : '';
 
         $orderDateSql = $type === 'cikis'
@@ -304,6 +326,8 @@ WHERE {$whereSql}
 
   {$externalFilterSql}
 
+  {$siteFilterSql}
+
 ORDER BY
 
     {$orderDateSql} ASC,
@@ -317,6 +341,9 @@ ORDER BY
         $stmt = $this->db->pdo()->prepare($sql);
 
         $this->bindDateWhereValues($stmt, $startDate, $endDate);
+        if ($siteFilterSql !== '') {
+            $stmt->bindValue(':siteId', $siteId, PDO::PARAM_INT);
+        }
 
         $stmt->execute();
 

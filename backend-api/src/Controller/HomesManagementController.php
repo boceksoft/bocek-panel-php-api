@@ -38,6 +38,8 @@ final class HomesManagementController extends Controller
      */
     public function index(): void
     {
+        // Ölçüm: ana sorgudan önceki hazırlık (kolon kontrolleri, site bilgisi) ve ana sorgu süresi
+        $requestStartedAt = microtime(true);
         $pdo = $this->db->pdo();
         $siteId = $this->siteId();
         $currentSite = $this->siteInfo($pdo, $siteId);
@@ -52,7 +54,7 @@ final class HomesManagementController extends Controller
         // WhatsApp grup adi: sitenin config'indeki WhatsappColumnName; tanimli degilse whatsapp_grup, yoksa rez_takip_yeri_adi.
         $whatsappColumn = "N''";
         foreach ($this->whatsappColumnCandidates() as $candidate) {
-            if ((int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.homes', '{$candidate}') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1) {
+            if (\App\Support\SchemaColumns::exists($pdo, 'dbo.homes', $candidate)) {
                 $whatsappColumn = "ISNULL(h.[{$candidate}], N'')";
                 break;
             }
@@ -192,13 +194,16 @@ final class HomesManagementController extends Controller
         $seo = $this->p('seo');
         $hasSeoColumn = \App\Support\HomesSeoScore::columnExists($pdo);
         $seoColumn = 'h.[' . \App\Support\HomesSeoScore::COLUMN . ']';
+        // Sadece Bizde (homes.sadece_bizde); kolon yoksa 0. Deger bit (1) ya da metin ('true') olabilir.
+        // Kolon kontrolu ilan detayiyla ayni (COL_LENGTH); deger PHP'de detaydaki gibi yorumlanir.
+        $hasOnlyUsColumn = $pdo->query("SELECT COL_LENGTH('dbo.homes', 'sadece_bizde')")->fetchColumn() !== null;
         if ($seo === '1' || $seo === '0') {
             if (!$hasSeoColumn) {
                 throw new \App\Core\HttpException('SEO filtresi icin once setup calistirilmali.', 'SETUP_REQUIRED', 409);
             }
             $where[] = $seo === '1' ? "{$seoColumn} = 100" : "ISNULL({$seoColumn}, 0) < 100";
         }
-
+ 
         $document = $this->p('document') !== '' ? $this->p('document') : $this->p('gavelBelge');
         // Sure tipi ayardaki kolondan okunur (gavel_duration_column); 1 suresiz, 2 sureli
         $durationSql = $this->gavelDurationSql('gavel');
@@ -290,8 +295,7 @@ final class HomesManagementController extends Controller
         // Taslak: yeni ilan ekraninda olusturulup "Kaydet" ile tamamlanmamis ilan (homes.template = 1).
         $draftSql = $this->homesColumnExists($pdo, 'template') ? 'CAST(ISNULL(h.template, 0) AS int)' : 'CAST(0 AS int)';
         // Basvuru numarasi (kanun7464.gavelBasvuruNo); kolon olmayan sitelerde bos
-        $basvuruStmt = $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.kanun7464', 'gavelBasvuruNo') IS NULL THEN 0 ELSE 1 END");
-        $basvuruSql = (int) $basvuruStmt->fetchColumn() === 1 ? "ISNULL(CONVERT(nvarchar(200), gavel.gavelBasvuruNo), N'')" : "N''";
+        $basvuruSql = \App\Support\SchemaColumns::exists($pdo, 'dbo.kanun7464', 'gavelBasvuruNo') ? "ISNULL(CONVERT(nvarchar(200), gavel.gavelBasvuruNo), N'')" : "N''";
 
         $sql = " 
 SELECT
@@ -334,7 +338,8 @@ SELECT
     price.min_price AS min_price,
     ISNULL(h.doviz, '') AS currency,
     " . ($hasCompletionColumn ? $completionColumn : 'CAST(NULL AS int)') . " AS completion_percent,
-    " . ($hasSeoColumn ? $seoColumn : 'CAST(NULL AS int)') . " AS seo_percent
+    " . ($hasSeoColumn ? $seoColumn : 'CAST(NULL AS int)') . " AS seo_percent,
+    " . ($hasOnlyUsColumn ? 'CONVERT(nvarchar(20), h.sadece_bizde)' : 'CAST(NULL AS nvarchar(20))') . " AS only_us
 FROM homes h
 INNER JOIN destinations d ON d.id = h.emlak_bolgesi
 LEFT JOIN kanun7464 gavel ON gavel.homeId = h.id
@@ -379,22 +384,82 @@ WHERE {$whereSql}
 {$orderSql}
 {$pagingSql}";
 
-        $stmt = $pdo->prepare($sql);
-        foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
-        }
-        if (!$allRows) {
+        \App\Support\ServerTiming::add('prep', $requestStartedAt);
+        $sqlStartedAt = microtime(true);
+        $fromPos = strpos($sql, "\nFROM homes h\n");
+        $wherePos = strpos($sql, "\nWHERE {$whereSql}\n");
+        if (!$allRows && $fromPos !== false && $wherePos !== false) {
+            // Iki asama: once filtre + siralama + sayfalama ile sadece sayfadaki id'ler ve toplam sayi alinir;
+            // fiyat, ev sahibi gibi sadece listede gosterilen alt sorgular yalnizca bu id'ler icin hesaplanir.
+            // Tek sorguda COUNT(*) OVER() yuzunden bu alt sorgular filtreye uyan tum villalar icin calisiyordu.
+            $fromSql = substr($sql, $fromPos, $wherePos - $fromPos);
+            $idSql = "SELECT COUNT(*) OVER() AS totalCount, h.id{$fromSql}\nWHERE {$whereSql}\n{$orderSql}\n{$pagingSql}";
+            $stmt = $pdo->prepare($idSql);
+            foreach ($params as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
             $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
             $stmt->bindValue(':perPage', $perPage, PDO::PARAM_INT);
+            $stmt->execute();
+            $idRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $stmt->closeCursor();
+            \App\Support\ServerTiming::add('sqlids', $sqlStartedAt);
+            $total = $idRows ? (int) $idRows[0]['totalCount'] : 0;
+            $rows = [];
+            if ($idRows) {
+                $detailStartedAt = microtime(true);
+                $ids = implode(',', array_map(function (array $r): int {
+                    return (int) $r['id'];
+                }, $idRows));
+                $detailSql = substr($sql, 0, $wherePos) . "\nWHERE h.id IN ({$ids})\n{$orderSql}";
+                $stmt = $pdo->prepare($detailSql);
+                foreach ($params as $key => $value) {
+                    // Detay sorgusunda sadece geceren parametreler (yil, tam eslesme siralamasi) baglanir.
+                    // Tam ad eslesmesi: ':keywordExact' ':keywordExactOrder' icinde de gectigi icin strpos ile
+                    // sorguda olmayan parametre baglaniyor, rakamla (id ile) aramada sorgu hata veriyordu.
+                    if (preg_match('/' . preg_quote($key, '/') . '(?![A-Za-z0-9_])/', $detailSql) === 1) {
+                        $stmt->bindValue($key, $value);
+                    }
+                }
+                $stmt->execute();
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                \App\Support\ServerTiming::add('sqldetail', $detailStartedAt);
+            }
+        } else {
+            $stmt = $pdo->prepare($sql);
+            foreach ($params as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
+            if (!$allRows) {
+                $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+                $stmt->bindValue(':perPage', $perPage, PDO::PARAM_INT);
+            }
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $total = $rows ? (int) $rows[0]['totalCount'] : 0;
         }
-        $stmt->execute();
-
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $total = $rows ? (int) $rows[0]['totalCount'] : 0;
+        \App\Support\ServerTiming::add('sql', $sqlStartedAt);
+        $postStartedAt = microtime(true);
         $cdnBase = (defined('Cdn') ? (string) constant('Cdn') : '') . '/uploads/small/';
         // Sitenin adresi (villa linki icin), HomesController ile ayni kaynak
         $siteDomain = $this->siteDomain($pdo, $siteId);
+        // Sadece Bizde: ilan detayindaki gibi homes satiri (SELECT *) okunur, kolon adi buyuk/kucuk harf farketmez.
+        // [id => ham deger]; kolon homes'ta yoksa anahtar olmaz.
+        $onlyUsById = [];
+        $onlyUsIds = array_values(array_filter(array_map(function (array $r): int {
+            return (int) ($r['id'] ?? 0);
+        }, $rows)));
+        if ($onlyUsIds) {
+            $onlyUsStmt = $pdo->query('SELECT * FROM homes WHERE id IN (' . implode(',', $onlyUsIds) . ')');
+            foreach ($onlyUsStmt->fetchAll(PDO::FETCH_ASSOC) as $homeRow) {
+                $homeRow = array_change_key_case($homeRow, CASE_LOWER);
+                if (array_key_exists('sadece_bizde', $homeRow)) {
+                    $onlyUsById[(int) $homeRow['id']] = $homeRow['sadece_bizde'];
+                }
+            }
+        }
         foreach ($rows as &$row) {
+            $onlyUsRaw = $onlyUsById[(int) ($row['id'] ?? 0)] ?? null;
             unset($row['totalCount']);
             // Villa fotograflari yeni CDN yapisinda (/property/small/{villaId}/)
             $imageList = $this->imageList((string) $row['image'], Uploads::homeImageBase($cdnBase, (int) ($row['id'] ?? 0), $this->app));
@@ -458,10 +523,14 @@ WHERE {$whereSql}
                 'completion_percent' => $row['completion_percent'] !== null ? (int) $row['completion_percent'] : null,
                 // SEO puani (homes.seo_yuzdesi); setup calismadiysa veya hesaplanmadiysa null.
                 'seo_percent' => $row['seo_percent'] !== null ? (int) $row['seo_percent'] : null,
+                // Sadece Bizde (homes.sadece_bizde = 1)
+                // NULL / bos / false -> 0; 1, true, evet, on, yes -> 1 (ilan detayindaki ile ayni yorum)
+                'only_us' => (is_bool($onlyUsRaw) ? $onlyUsRaw : in_array(strtolower(trim((string) $onlyUsRaw)), ['1', 'true', 'on', 'evet', 'yes'], true)) ? 1 : 0,
             ];
         }
         unset($row);
 
+        \App\Support\ServerTiming::add('post', $postStartedAt);
         $this->response->success([
             'items' => $rows,
             'meta' => [
@@ -609,10 +678,7 @@ WHERE {$whereSql}
 
     private function homesColumnExists(PDO $pdo, string $column): bool
     {
-        $stmt = $pdo->prepare("SELECT CASE WHEN COL_LENGTH('dbo.homes', :c) IS NULL THEN 0 ELSE 1 END");
-        $stmt->execute([':c' => $column]);
-
-        return (int) $stmt->fetchColumn() === 1;
+        return \App\Support\SchemaColumns::exists($pdo, 'dbo.homes', $column);
     }
 
     /**
@@ -782,7 +848,7 @@ WHERE {$whereSql}
             if ($column === 'baslik' || preg_match('/^[A-Za-z0-9_]+$/', $column) !== 1) {
                 continue;
             }
-            $exists = (int) $pdo->query("SELECT CASE WHEN COL_LENGTH('dbo.homes', '{$column}') IS NULL THEN 0 ELSE 1 END")->fetchColumn();
+            $exists = \App\Support\SchemaColumns::exists($pdo, 'dbo.homes', $column) ? 1 : 0;
             if ($exists !== 1) {
                 continue;
             }

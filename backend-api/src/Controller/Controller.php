@@ -92,9 +92,7 @@ abstract class Controller
     protected function homesNotDeletedSql(\PDO $pdo, string $alias = 'h'): string
     {
         if ($this->homesHasDeletedColumn === null) {
-            $this->homesHasDeletedColumn = (int) $pdo->query(
-                "SELECT CASE WHEN COL_LENGTH('dbo.homes', 'isDeleted') IS NULL THEN 0 ELSE 1 END"
-            )->fetchColumn() === 1;
+            $this->homesHasDeletedColumn = \App\Support\SchemaColumns::exists($pdo, 'dbo.homes', 'isDeleted');
         }
         if (!$this->homesHasDeletedColumn) {
             return '1 = 1';
@@ -126,9 +124,7 @@ abstract class Controller
                 $parts[] = "NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(500), {$titleExpr}))), '')";
                 continue;
             }
-            $exists = (int) $pdo->query(
-                "SELECT CASE WHEN COL_LENGTH('dbo.homes', '{$column}') IS NULL THEN 0 ELSE 1 END"
-            )->fetchColumn() === 1;
+            $exists = \App\Support\SchemaColumns::exists($pdo, 'dbo.homes', $column);
             if ($exists) {
                 $parts[] = "NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(500), {$alias}.[{$column}]))), '')";
             }
@@ -210,9 +206,7 @@ abstract class Controller
     {
         if ($this->homesHasOrjAdCache === null) {
             try {
-                $this->homesHasOrjAdCache = (int) $this->db->pdo()->query(
-                    "SELECT CASE WHEN COL_LENGTH('dbo.homes', 'orj_ad') IS NULL THEN 0 ELSE 1 END"
-                )->fetchColumn() === 1;
+                $this->homesHasOrjAdCache = \App\Support\SchemaColumns::exists($this->db->pdo(), 'dbo.homes', 'orj_ad');
             } catch (\Throwable $e) {
                 $this->homesHasOrjAdCache = false;
             }
@@ -249,9 +243,7 @@ abstract class Controller
     {
         if ($this->gavelDurationColumnExistsCache === null) {
             try {
-                $stmt = $this->db->pdo()->prepare("SELECT CASE WHEN COL_LENGTH('dbo.kanun7464', :col) IS NULL THEN 0 ELSE 1 END");
-                $stmt->execute([':col' => $this->gavelDurationColumn()]);
-                $this->gavelDurationColumnExistsCache = (int) $stmt->fetchColumn() === 1;
+                $this->gavelDurationColumnExistsCache = \App\Support\SchemaColumns::exists($this->db->pdo(), 'dbo.kanun7464', $this->gavelDurationColumn());
             } catch (\Throwable $e) {
                 $this->gavelDurationColumnExistsCache = false;
             }

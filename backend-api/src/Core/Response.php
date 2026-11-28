@@ -96,6 +96,7 @@ final class Response
             header('Access-Control-Allow-Origin: ' . ($this->options['cors_origin'] ?? '*'));
             header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
             header('Access-Control-Allow-Headers: Content-Type, Authorization');
+            header('Server-Timing: ' . \App\Support\ServerTiming::header());
 
             // IIS hata sayfalarını yutmasın diye istenirse her zaman 200 dön.
             http_response_code(!empty($this->options['force_http_200']) ? 200 : $status);

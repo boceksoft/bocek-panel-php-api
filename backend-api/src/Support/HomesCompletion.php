@@ -158,7 +158,7 @@ final class HomesCompletion
 
     public static function homesColumnExists(PDO $pdo, string $column): bool
     {
-        return $pdo->query("SELECT COL_LENGTH('dbo.homes', '" . str_replace("'", '', $column) . "')")->fetchColumn() !== null;
+        return SchemaColumns::exists($pdo, 'dbo.homes', $column);
     }
 
     /**

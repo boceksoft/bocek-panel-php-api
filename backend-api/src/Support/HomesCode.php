@@ -411,7 +411,7 @@ final class HomesCode
         static $has = null;
         if ($has === null) {
             try {
-                $has = (int) $pdo->query("SELECT CASE WHEN COL_LENGTH('homes', 'evkodu') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
+                $has = SchemaColumns::exists($pdo, 'dbo.homes', 'evkodu');
             } catch (\Throwable $e) {
                 $has = false;
             }

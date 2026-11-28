@@ -4,7 +4,7 @@
 // 2) Formdan bir JPG yukleyin: PHP dosyayi alabiliyor mu, hangi hata/uyari var gosterir.
 $startupError = error_get_last();
 header('Content-Type: text/html; charset=utf-8');
-echo '<pre>';
+echo '<pre>' ;
 
 $tmp = (string) ini_get('upload_tmp_dir');
 echo "PHP surumu       : " . PHP_VERSION . " (" . PHP_SAPI . ")\n";
