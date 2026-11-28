@@ -256,14 +256,16 @@ final class BtransController extends Controller
      * @query page int Sayfa numarası (varsayılan: 1)
      * @query perPage int Sayfa başına kayıt sayısı (varsayılan: 300)
      * @query hashurl string Kaydedilmiş bir BTRANS dosyasına ait kayıtları getirmek için hashurl
+     * @query gavel int 0 = Tümü (varsayılan), 1 = Belgeli, 2 = Belgesiz
+     * @query sanal_pos string Gizlenecek sanal POS id'leri, virgülle ayrılmış (0 = hiçbirini gizleme)
      */
     public function records(): void
     {
         $pdo = $this->db->pdo();
         $this->ensureBtransTable($pdo);
 
-        $year = (int) $this->request->query('year');
-        $month = (int) $this->request->query('month');
+        $year = (int) ($this->request->query('year') ?? $this->request->query('yil'));
+        $month = (int) ($this->request->query('month') ?? $this->request->query('ay'));
         $hashurl = trim((string) ($this->request->query('hashurl') ?? ''));
 
         // Eğer hashurl verilmişse ve year/month boşsa, btrans tablosundan oku
@@ -281,8 +283,10 @@ final class BtransController extends Controller
             throw new HttpException('Geçerli bir yıl ve ay (1-12) belirtilmelidir.', 'VALIDATION', 422);
         }
 
-        $page = max(1, (int) ($this->request->query('page', 1)));
+        $page = max(1, (int) ($this->request->query('page') ?? $this->request->query('s', 1)));
         $perPage = max(1, min(1000, (int) ($this->request->query('perPage', 300))));
+        $gavel = trim((string) ($this->request->query('gavel') ?? '0'));
+        $sanalPos = $this->request->query('sanal_pos') ?? $this->request->query('sanalPos') ?? '';
 
         $monthStr = str_pad((string) $month, 2, '0', STR_PAD_LEFT);
         $periodStart = '01/' . $monthStr . '/' . $year;
@@ -300,6 +304,9 @@ final class BtransController extends Controller
             }
         }
 
+        // btrans.asp filtreleri: sanal_pos (gizlenecek POS'lar) ve gavel (belgeli/belgesiz)
+        $sqlEkVeri = $this->buildSanalPosFilter($sanalPos) . $sqlEkVeri . $this->buildGavelFilter($gavel);
+
         $company = $this->companySettings($pdo);
         $totalCount = $this->countPeriodRecords($pdo, $periodStart, $periodEnd, $sqlEkVeri);
 
@@ -313,6 +320,10 @@ final class BtransController extends Controller
                 'month' => $monthStr,
                 'startDate' => sprintf('%04d-%02d-01', $year, $month),
                 'endDate' => date('Y-m-t', strtotime(sprintf('%04d-%02d-01', $year, $month))),
+            ],
+            'filters' => [
+                'gavel' => in_array($gavel, ['1', '2'], true) ? $gavel : '0',
+                'sanalPos' => $this->parseSanalPosIds($sanalPos),
             ],
             'suggestedFileName' => $year . $monthStr . '-' . $page . '-' . $this->randomHash(24),
             'meta' => [
@@ -370,6 +381,7 @@ final class BtransController extends Controller
      * @body fileName string Dosya kayıt adı (boşsa otomatik üretilir)
      * @body selectedIds array Seçilen rezervasyon kimlikleri (boş bırakılırsa tümü dahil edilir)
      * @body originalProcessCount int Orijinal işlem sayısı
+     * @body homeOwners object Natsisa ev sahibi bilgileri: {"<evsahibiId>": {ad, soyad, vkTuru, tc, vkn, vkUnvan, iban, tel}} (opsiyonel)
      */
     public function create(): void
     {
@@ -457,6 +469,21 @@ final class BtransController extends Controller
         $records = $this->fetchPeriodRecords($pdo, $periodStart, $periodEnd, $sqlEkVeri, 0, 5000);
         $processCount = count($records);
 
+        // Natsisa'dan gelen ev sahibi bilgileri (varsa) site verisinin yerine kullanılır.
+        // Excel aynı veriyi göstersin diye dbo.btrans.HomeOwnerOverrides kolonuna da yazılır.
+        $homeOwnerOverrides = $this->parseHomeOwnerOverrides($this->request->input('homeOwners'));
+        $homeOwnerOverridesJson = null;
+        if (!empty($homeOwnerOverrides)) {
+            $records = $this->applyHomeOwnerOverrides($records, $homeOwnerOverrides);
+            $homeOwnerOverridesJson = json_encode($homeOwnerOverrides, JSON_UNESCAPED_UNICODE);
+
+            $columnStatus = [];
+            $this->addColumnIfNotExists($pdo, 'btrans', 'HomeOwnerOverrides', 'nvarchar(max)', $columnStatus);
+            if (strpos((string) ($columnStatus['btrans.HomeOwnerOverrides'] ?? ''), 'ERROR') === 0) {
+                throw new HttpException('btrans.HomeOwnerOverrides kolonu eklenemedi.', 'SETUP_FAILED', 500);
+            }
+        }
+
         $isEdit = ($processCount === $originalProcessCount && empty($sqlEkVeri)) ? 0 : 1;
 
         // Son dosya no (dosyano)
@@ -470,12 +497,7 @@ final class BtransController extends Controller
         $company = $this->companySettings($pdo);
         $xmlContent = $this->buildBtransXml($company, $records, $year, $monthStr, $nextFileNo, $processCount);
 
-        $insertSql = "INSERT INTO dbo.btrans 
-            (SqlEkVeri, veri, hashurl, sayfa, yil, ay, FileName, NumberOfOriginalProccess, NumberOfProccess, isEdit, isDownload, CreatedDateTime)
-            VALUES (:sqlEkVeri, :veri, :hashurl, :sayfa, :yil, :ay, :fileName, :origCount, :procCount, :isEdit, 0, GETDATE())";
-
-        $insertStmt = $pdo->prepare($insertSql);
-        $insertStmt->execute([
+        $insertParams = [
             ':sqlEkVeri' => $sqlEkVeri,
             ':veri' => $xmlContent,
             ':hashurl' => $hashUrl,
@@ -486,7 +508,21 @@ final class BtransController extends Controller
             ':origCount' => $originalProcessCount,
             ':procCount' => $processCount,
             ':isEdit' => $isEdit,
-        ]);
+        ];
+
+        if ($homeOwnerOverridesJson !== null) {
+            $insertSql = "INSERT INTO dbo.btrans
+                (SqlEkVeri, veri, hashurl, sayfa, yil, ay, FileName, NumberOfOriginalProccess, NumberOfProccess, isEdit, isDownload, CreatedDateTime, HomeOwnerOverrides)
+                VALUES (:sqlEkVeri, :veri, :hashurl, :sayfa, :yil, :ay, :fileName, :origCount, :procCount, :isEdit, 0, GETDATE(), :homeOwnerOverrides)";
+            $insertParams[':homeOwnerOverrides'] = $homeOwnerOverridesJson;
+        } else {
+            $insertSql = "INSERT INTO dbo.btrans
+                (SqlEkVeri, veri, hashurl, sayfa, yil, ay, FileName, NumberOfOriginalProccess, NumberOfProccess, isEdit, isDownload, CreatedDateTime)
+                VALUES (:sqlEkVeri, :veri, :hashurl, :sayfa, :yil, :ay, :fileName, :origCount, :procCount, :isEdit, 0, GETDATE())";
+        }
+
+        $insertStmt = $pdo->prepare($insertSql);
+        $insertStmt->execute($insertParams);
 
         $createdId = (int) $pdo->lastInsertId();
 
@@ -763,7 +799,12 @@ final class BtransController extends Controller
             $fileName = $year . $month . '-' . $hash . $suffix;
 
             $records = $this->fetchPeriodRecords($pdo, $periodStart, $periodEnd, $sqlEkVeri, 0, 10000);
-            $html = $this->buildIslemlerExcelHtml($records, $isFaturaNo);
+            // Dosya oluşturulurken Natsisa'dan gelen ev sahibi bilgileri (XML ile aynı veri)
+            $records = $this->applyHomeOwnerOverrides(
+                $records,
+                $this->parseHomeOwnerOverrides($record['HomeOwnerOverrides'] ?? null)
+            );
+            $html =$this->buildIslemlerExcelHtml($records, $isFaturaNo);
         }
 
         if (!headers_sent()) {
@@ -819,42 +860,73 @@ final class BtransController extends Controller
      */
     private function buildQuerySql(PDO $pdo, string $sqlEkVeri = '', bool $forCount = false): string
     {
+        // Panel-kodlari/Btrans_SQL.asp sorgusunun birebir karşılığı.
         $hasFn = $this->hasFnTemizle($pdo);
 
+        // WHERE: not dbo.fnTemizle(k.toplam_tutar)='0'
         $cleanTutar = $hasFn
             ? 'dbo.fnTemizle(k.toplam_tutar)'
             : "REPLACE(REPLACE(ISNULL(k.toplam_tutar, '0'), '.', ''), ',', '.')";
 
-        $cleanOnOdeme = $hasFn
-            ? 'dbo.fnTemizle(k.on_odeme)'
+        // replace(dbo.fnTemizle(replace(x,'.',',')),',','.') -> ondalık nokta
+        $moneyTutar = $hasFn
+            ? "REPLACE(dbo.fnTemizle(REPLACE(k.toplam_tutar, '.', ',')), ',', '.')"
+            : "REPLACE(REPLACE(ISNULL(k.toplam_tutar, '0'), '.', ''), ',', '.')";
+        $moneyOnOdeme = $hasFn
+            ? "REPLACE(dbo.fnTemizle(REPLACE(k.on_odeme, '.', ',')), ',', '.')"
             : "REPLACE(REPLACE(ISNULL(k.on_odeme, '0'), '.', ''), ',', '.')";
 
+        // Komisyon oranı: eski sorguda virgül tamamen siliniyor (replace(...,',',''))
+        $rawTutar = $hasFn
+            ? "REPLACE(dbo.fnTemizle(REPLACE(k.toplam_tutar, '.', ',')), ',', '')"
+            : "REPLACE(REPLACE(ISNULL(k.toplam_tutar, '0'), '.', ''), ',', '')";
+        $rawOnOdeme = $hasFn
+            ? "REPLACE(dbo.fnTemizle(REPLACE(k.on_odeme, '.', ',')), ',', '')"
+            : "REPLACE(REPLACE(ISNULL(k.on_odeme, '0'), '.', ''), ',', '')";
+
+        $evSahibiOdeme = "CONVERT(money, {$moneyOnOdeme}) - CONVERT(money, {$moneyTutar}) / 100 * h.kazancorani";
+
+        // Eski sorguda ORDER BY yok; SQL Server kayıtları k.rez_tarihi aralık filtresi
+        // nedeniyle giriş tarihine göre döndürüyor. Aynı sıra (ve aynı sayfa bölünmesi) için.
+        $rezDate = "(CASE
+                WHEN TRY_CONVERT(date, k.rez_tarihi, 103) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 103)
+                WHEN TRY_CONVERT(date, k.rez_tarihi, 104) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 104)
+                WHEN TRY_CONVERT(date, k.rez_tarihi, 120) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 120)
+                ELSE TRY_CONVERT(date, k.rez_tarihi)
+              END)";
+
+        $fromWhere = "
+        FROM dbo.kayitlar AS k
+        INNER JOIN dbo.genel g ON g.id = 1
+        INNER JOIN dbo.homes h ON h.id = k.evid
+        INNER JOIN dbo.dolu ON dolu.kayitid = k.id
+        INNER JOIN dbo.kullanici u ON u.id = h.evsahibi
+        INNER JOIN dbo.destinations d ON d.id = h.emlak_bolgesi
+        INNER JOIN dbo.destinations d2 ON d2.id = d.cat
+        INNER JOIN dbo.destinations d3 ON d3.id = d2.cat
+        LEFT JOIN dbo.destinations d4 ON d4.id = d3.cat
+        LEFT JOIN dbo.kanun7464 kanun ON kanun.homeId = h.id
+        OUTER APPLY (SELECT TOP 1 * FROM dbo.hesaplar WHERE hesaplar.kullanici = h.evsahibi) AS he
+        WHERE dolu.durum = 3
+          AND (((NOT k.VirtualPosId = 1 AND NOT k.VirtualPosId = 2) AND k.odeme = 1) OR NOT k.odeme = 1)
+          AND (CASE
+                WHEN TRY_CONVERT(date, k.rez_tarihi, 103) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 103)
+                WHEN TRY_CONVERT(date, k.rez_tarihi, 104) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 104)
+                WHEN TRY_CONVERT(date, k.rez_tarihi, 120) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 120)
+                ELSE TRY_CONVERT(date, k.rez_tarihi)
+              END)
+              BETWEEN CONVERT(date, :periodStart, 103) AND CONVERT(date, :periodEnd, 103)
+          AND NOT {$cleanTutar} = '0'
+          AND NOT {$cleanTutar} = ''" . $sqlEkVeri;
+
         if ($forCount) {
-            return "SELECT COUNT(*)
-                    FROM dbo.kayitlar AS k
-                    INNER JOIN dbo.genel g ON g.id = 1
-                    INNER JOIN dbo.homes h ON h.id = k.evid
-                    INNER JOIN dbo.dolu ON dolu.kayitid = k.id
-                    INNER JOIN dbo.kullanici u ON u.id = h.evsahibi
-                    LEFT JOIN dbo.destinations d ON d.id = h.emlak_bolgesi
-                    LEFT JOIN dbo.destinations d2 ON d2.id = d.cat
-                    LEFT JOIN dbo.destinations d3 ON d3.id = d2.cat
-                    LEFT JOIN dbo.destinations d4 ON d4.id = d3.cat
-                    WHERE dolu.durum = 3
-                      AND (CASE 
-                            WHEN TRY_CONVERT(date, k.rez_tarihi, 103) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 103)
-                            WHEN TRY_CONVERT(date, k.rez_tarihi, 104) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 104)
-                            WHEN TRY_CONVERT(date, k.rez_tarihi, 120) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 120)
-                            ELSE TRY_CONVERT(date, k.rez_tarihi)
-                          END)
-                          BETWEEN CONVERT(date, :periodStart, 103) AND CONVERT(date, :periodEnd, 103)
-                      AND NOT {$cleanTutar} = '0'
-                      AND NOT {$cleanTutar} = ''" . $sqlEkVeri;
+            return 'SELECT COUNT(*)' . $fromWhere;
         }
 
         return "SELECT
+            kanun.gavelBelgeNo,
             CASE WHEN h.btrans_cadde = '' THEN NULL ELSE h.btrans_cadde END AS btrans_cadde,
-            CASE WHEN h.btrans_sokak = '' THEN NULL ELSE h.btrans_sokak END AS btrans_sokak,
+            d.baslik AS btrans_sokak,
             CASE WHEN h.btrans_dis_kapi_no = '' THEN NULL ELSE h.btrans_dis_kapi_no END AS btrans_dis_kapi_no,
             CASE WHEN h.btrans_ic_kapi_no = '' THEN NULL ELSE h.btrans_ic_kapi_no END AS btrans_ic_kapi_no,
             CASE WHEN h.btrans_imar_plani_icinde = '' THEN NULL ELSE h.btrans_imar_plani_icinde END AS btrans_imar_plani_icinde,
@@ -864,58 +936,60 @@ final class BtransController extends Controller
             CASE WHEN h.btrans_cevre_sehircilik_basvuru = '' THEN NULL ELSE h.btrans_cevre_sehircilik_basvuru END AS btrans_cevre_sehircilik_basvuru,
             CASE WHEN h.btrans_yapi_kayit_belgesi_no = '' THEN NULL ELSE h.btrans_yapi_kayit_belgesi_no END AS btrans_yapi_kayit_belgesi_no,
             CASE WHEN h.btrans_yapi_kayit_basvuru_no = '' THEN NULL ELSE h.btrans_yapi_kayit_basvuru_no END AS btrans_yapi_kayit_basvuru_no,
-            CASE WHEN LEN(REPLACE(h.btrans_yapi_kayit_duzenleme_tarihi, '-', '')) > 0 
-                 THEN REPLACE(h.btrans_yapi_kayit_duzenleme_tarihi, '-', '') 
+            CASE WHEN LEN(REPLACE(h.btrans_yapi_kayit_duzenleme_tarihi, '-', '')) > 0
+                 THEN REPLACE(h.btrans_yapi_kayit_duzenleme_tarihi, '-', '')
                  ELSE '10000101' END AS btrans_yapi_kayit_duzenleme_tarihi,
             k.site AS site,
             k.faturaseri AS faturaseri,
-            CASE WHEN LEN(k.btrans_odeme_yapan_iban_no) = 26 
-                 THEN k.btrans_odeme_yapan_iban_no 
-                 ELSE ISNULL((SELECT TOP 1 REPLACE(iban_tl, ' ', '') FROM dbo.hesaplar WHERE kullanici = 0 ORDER BY id ASC), '00000000000000000000000000') 
+            CASE WHEN LEN(k.btrans_odeme_yapan_iban_no) = 26
+                 THEN k.btrans_odeme_yapan_iban_no
+                 ELSE (SELECT TOP 1 REPLACE(iban_tl, ' ', '') FROM dbo.hesaplar WHERE kullanici = 0 ORDER BY id ASC)
             END AS btrans_odeme_yapan_iban_no,
             ISNULL(k.btrans_odeme_bilgisi, '2') AS btrans_odeme_bilgisi,
             ISNULL(ISNULL(REPLACE(k.btrans_odeme_tarihi, '-', ''), REPLACE(CONVERT(varchar(10), DATEADD(day, 1, ISNULL(TRY_CONVERT(date, k.rez_tarihi, 103), TRY_CONVERT(date, k.rez_tarihi))), 120), '-', '')), '10000101') AS btrans_odeme_tarihi,
-            ISNULL(ISNULL(k.btrans_komisyon_orani, ({$cleanOnOdeme} * 100) / NULLIF({$cleanTutar}, 0)), '0') AS btrans_komisyon_orani,
-            REPLACE(ISNULL(ISNULL(k.btrans_odeme_tutari_kdv_dahil, CONVERT(money, {$cleanOnOdeme}) - CONVERT(money, {$cleanTutar}) / 100 * ISNULL(h.kazancorani, 0)), '0'), ',', '.') AS btrans_odeme_tutari_kdv_dahil,
+            ISNULL(ISNULL(k.btrans_komisyon_orani, CONVERT(int, (CONVERT(money, {$rawOnOdeme}) * 100) / NULLIF(CONVERT(money, {$rawTutar}), 0))), '0') AS btrans_komisyon_orani,
+            REPLACE(ISNULL(ISNULL(k.btrans_odeme_tutari_kdv_dahil,
+                CASE WHEN ({$evSahibiOdeme}) < 1 THEN 0 ELSE {$evSahibiOdeme} END), '0'), ',', '.') AS btrans_odeme_tutari_kdv_dahil,
             k.btrans_iban AS btrans_iban_id,
+            h.evsahibi AS evsahibi_id,
             ISNULL(LEFT(REPLACE(
-                CASE 
-                    WHEN k.btrans_iban = '01' OR k.btrans_iban = '02' 
+                CASE
+                    WHEN k.btrans_iban = '01' OR k.btrans_iban = '02'
                     THEN ISNULL(REPLACE(UPPER(k.btrans_farkli_alici_iban), ' ', ''), '00000000000000000000000000')
-                    ELSE 
-                        CASE WHEN LEN(ISNULL((SELECT REPLACE(iban, ' ', '') FROM dbo.hesaplar WHERE hesaplar.id = k.btrans_iban), '')) >= 26 
-                             THEN (SELECT REPLACE(iban, ' ', '') FROM dbo.hesaplar WHERE hesaplar.id = k.btrans_iban)
+                    ELSE
+                        CASE WHEN LEN(ISNULL((SELECT REPLACE(iban, ' ', '') FROM dbo.hesaplar WHERE hesaplar.id = k.btrans_iban), REPLACE(he.iban, ' ', ''))) >= 26
+                             THEN ISNULL((SELECT iban FROM dbo.hesaplar WHERE hesaplar.id = k.btrans_iban), REPLACE(he.iban, ' ', ''))
                              ELSE '00000000000000000000000000'
                         END
                 END, ' ', ''), 26), '00000000000000000000000000') AS btrans_iban_no,
             ISNULL(k.btrans_para_birimi, 'TRY') AS btrans_para_birimi,
-            CASE WHEN LEN(REPLACE(k.btrans_baslangic_tarihi, '-', '')) > 0 
-                 THEN REPLACE(k.btrans_baslangic_tarihi, '-', '') 
-                 ELSE REPLACE(k.rez_tarihi, '-', '') 
+            CASE WHEN LEN(REPLACE(k.btrans_baslangic_tarihi, '-', '')) > 0
+                 THEN REPLACE(k.btrans_baslangic_tarihi, '-', '')
+                 ELSE REPLACE(k.rez_tarihi, '-', '')
             END AS btrans_baslangic_tarihi,
-            CASE WHEN LEN(REPLACE(k.btrans_bitis_tarihi, '-', '')) > 0 
-                 THEN REPLACE(k.btrans_bitis_tarihi, '-', '') 
-                 ELSE REPLACE(k.gelecek_tarih, '-', '') 
+            CASE WHEN LEN(REPLACE(k.btrans_bitis_tarihi, '-', '')) > 0
+                 THEN REPLACE(k.btrans_bitis_tarihi, '-', '')
+                 ELSE REPLACE(k.gelecek_tarih, '-', '')
             END AS btrans_bitis_tarihi,
             k.btrans_guncelleme_tarihi,
             ISNULL(k.btrans_odeme_yontemi, '4') AS btrans_odeme_yontemi,
-            ISNULL(CASE WHEN k.btrans_iban = '01' THEN '1' WHEN k.btrans_iban = '02' THEN '2' END, '1') AS vkturu,
+            ISNULL(CASE WHEN k.btrans_iban = '01' THEN '1' WHEN k.btrans_iban = '02' THEN '2' ELSE u.vkturu END, '1') AS vkturu,
             CASE WHEN k.btrans_iban = '01' OR k.btrans_iban = '02' THEN k.btrans_farkli_alici_unvan ELSE u.vkUnvan END AS vkUnvan,
             LEFT(REPLACE(ISNULL(CASE WHEN LEN(REPLACE(u.tc, ' ', '')) = 11 THEN REPLACE(u.tc, ' ', '') ELSE '00000000000' END, '00000000000'), ' ', ''), 11) AS tc,
             LEFT(REPLACE(ISNULL(CASE WHEN LEN(REPLACE(u.vkn, ' ', '')) = 10 THEN REPLACE(u.vkn, ' ', '') ELSE '0000000000' END, '0000000000'), ' ', ''), 10) AS vkn,
             k.id AS kid,
-            ISNULL(CASE WHEN d4.kod IS NULL THEN d3.kod ELSE LEFT(d4.kod, 2) END, '07') AS ilkod,
-            ISNULL(CASE WHEN LEN(d2.kod) > 0 THEN d2.kod ELSE '1135' END, '1135') AS ilcekod,
-            ISNULL(d2.baslik, '') AS bolgebaslik,
+            CASE WHEN d4.kod IS NULL THEN d3.kod ELSE LEFT(d4.kod, 2) END AS ilkod,
+            CASE WHEN LEN(d2.kod) > 0 THEN d2.kod ELSE '1135' END AS ilcekod,
+            d2.baslik AS bolgebaslik,
             g.faturaVkn,
             g.faturaTitle,
             g.siteadi,
-            g.domain,
+            REPLACE(g.domain, 'web.', 'www.') AS domain,
             h.baslik AS evadi,
             h.evkodu AS evkodu,
-            g.domain + '/' + h.url AS url,
-            CASE WHEN LEN(CONVERT(nvarchar(50), h.enlem)) > 0 THEN CONVERT(nvarchar(50), h.enlem) ELSE '12.12345678' END AS enlem,
-            CASE WHEN LEN(CONVERT(nvarchar(50), h.boylam)) > 0 THEN CONVERT(nvarchar(50), h.boylam) ELSE '12.12345678' END AS boylam,
+            REPLACE(g.domain, 'web.', 'www.') + '/' + h.url AS url,
+            CASE WHEN LEN(CONVERT(nvarchar(30), h.enlem)) > 0 THEN CONVERT(nvarchar(30), h.enlem) ELSE '12.12345678' END AS enlem,
+            CASE WHEN LEN(CONVERT(nvarchar(30), h.boylam)) > 0 THEN CONVERT(nvarchar(30), h.boylam) ELSE '12.12345678' END AS boylam,
             h.kazancorani,
             (CASE WHEN ISNULL(TRY_CONVERT(date, k.rez_tarihi, 103), TRY_CONVERT(date, k.rez_tarihi)) < CONVERT(date, '01/08/2023', 103) THEN '18' ELSE '20' END) AS kdv,
             REPLACE(k.rez_tarihi, '-', '') AS rez_tarihi,
@@ -926,36 +1000,67 @@ final class BtransController extends Controller
             UPPER(REPLACE(REPLACE(REPLACE(REPLACE(k.doviz, 'tl', 'TRY'), 'pound', 'GBP'), 'dolar', 'USD'), 'euro', 'EUR')) AS parabirimi,
             REPLACE(CONVERT(varchar(10), ISNULL(TRY_CONVERT(date, k.islem_tarihi, 103), TRY_CONVERT(date, k.islem_tarihi)), 120), '-', '') AS islem_tarihi,
             CONVERT(varchar(10), ISNULL(TRY_CONVERT(date, k.islem_tarihi, 103), TRY_CONVERT(date, k.islem_tarihi)), 120) AS islem_tarihi_format,
-            ISNULL((SELECT TOP 1 REPLACE(iban, ' ', '') FROM dbo.hesaplar WHERE kullanici = u.id), '00000000000000000000000000') AS iban,
-            ISNULL((SELECT TOP 1 REPLACE(iban_tl, ' ', '') FROM dbo.hesaplar WHERE kullanici = 0), '00000000000000000000000000') AS siteiban,
-            {$cleanTutar} - ({$cleanTutar} * ISNULL(h.kazancorani, 0)) / 100 AS evsahibiodeme,
-            ISNULL(CASE WHEN LEN(RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(u.tel, CHAR(160), ''), '(', ''), ')', ''), ' ', ''), '+90', ''), '-', ''), 10)) = 10 
-                        THEN RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(u.tel, CHAR(160), ''), '(', ''), ')', ''), ' ', ''), '+90', ''), '-', ''), 10) 
-                        ELSE '0000000000' 
+            ISNULL((SELECT TOP 1 REPLACE(iban, N' ', '') FROM dbo.hesaplar WHERE kullanici = u.id), '00000000000000000000000000') AS iban,
+            ISNULL((SELECT TOP 1 REPLACE(iban_tl, N' ', '') FROM dbo.hesaplar WHERE kullanici = 0), '00000000000000000000000000') AS siteiban,
+            {$cleanTutar} - ({$cleanTutar} * h.kazancorani) / 100 AS evsahibiodeme,
+            ISNULL(CASE WHEN LEN(RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(u.tel, NCHAR(160), ''), '(', ''), ')', ''), ' ', ''), '+90', ''), 10)) = 10
+                        THEN RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(u.tel, NCHAR(160), ''), '(', ''), ')', ''), ' ', ''), '+90', ''), 10)
+                        ELSE '0000000000'
                    END, '0000000000') AS usertel,
             CASE WHEN k.btrans_iban = '01' OR k.btrans_iban = '02' THEN k.btrans_farkli_alici_adi ELSE u.ad END AS evsahibiad,
             CASE WHEN k.btrans_iban = '01' OR k.btrans_iban = '02' THEN k.btrans_farkli_alici_soyadi ELSE u.soyad END AS evsahibisoyad,
-            '' AS usermail
-        FROM dbo.kayitlar AS k
-        INNER JOIN dbo.genel g ON g.id = 1
-        INNER JOIN dbo.homes h ON h.id = k.evid
-        INNER JOIN dbo.dolu ON dolu.kayitid = k.id
-        INNER JOIN dbo.kullanici u ON u.id = h.evsahibi
-        LEFT JOIN dbo.destinations d ON d.id = h.emlak_bolgesi
-        LEFT JOIN dbo.destinations d2 ON d2.id = d.cat
-        LEFT JOIN dbo.destinations d3 ON d3.id = d2.cat
-        LEFT JOIN dbo.destinations d4 ON d4.id = d3.cat
-        WHERE dolu.durum = 3
-          AND (CASE 
-                WHEN TRY_CONVERT(date, k.rez_tarihi, 103) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 103)
-                WHEN TRY_CONVERT(date, k.rez_tarihi, 104) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 104)
-                WHEN TRY_CONVERT(date, k.rez_tarihi, 120) IS NOT NULL THEN TRY_CONVERT(date, k.rez_tarihi, 120)
-                ELSE TRY_CONVERT(date, k.rez_tarihi)
-              END)
-              BETWEEN CONVERT(date, :periodStart, 103) AND CONVERT(date, :periodEnd, 103)
-          AND NOT {$cleanTutar} = '0'
-          AND NOT {$cleanTutar} = ''" . $sqlEkVeri . "
-        ORDER BY k.id ASC";
+            '' AS usermail" . $fromWhere . "
+        ORDER BY {$rezDate} ASC, k.id ASC";
+    }
+
+    /**
+     * sanal_pos parametresini sayısal POS id listesine çevirir.
+     * "0" seçiliyse (Hiçbirini gizleme) boş liste döner.
+     *
+     * @param mixed $sanalPos virgülle ayrılmış metin veya dizi
+     * @return int[]
+     */
+    private function parseSanalPosIds($sanalPos): array
+    {
+        $parts = is_array($sanalPos) ? $sanalPos : explode(',', (string) $sanalPos);
+        $ids = [];
+        foreach ($parts as $part) {
+            $part = trim((string) $part);
+            if ($part === '' || !ctype_digit($part)) {
+                continue;
+            }
+            if ((int) $part === 0) {
+                return [];
+            }
+            $ids[] = (int) $part;
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * Btrans_SQL.asp: seçili sanal POS'ları listeden çıkarır (havale vb. NULL kayıtlar kalır).
+     *
+     * @param mixed $sanalPos
+     */
+    private function buildSanalPosFilter($sanalPos): string
+    {
+        $ids = $this->parseSanalPosIds($sanalPos);
+        return $ids ? ' AND ISNULL(k.VirtualPosId, 0) NOT IN (' . implode(',', $ids) . ') ' : '';
+    }
+
+    /**
+     * btrans.asp GavelModu: 1 = Belgeli (kanun.gavel=0), 2 = Belgesiz (kanun.gavel=1), diğer = Tümü.
+     */
+    private function buildGavelFilter(string $gavel): string
+    {
+        if ($gavel === '1') {
+            return ' and kanun.gavel=0 ';
+        }
+        if ($gavel === '2') {
+            return ' and kanun.gavel=1 ';
+        }
+        return '';
     }
 
     /**
@@ -1007,8 +1112,10 @@ final class BtransController extends Controller
         $guncellemeTarihi = trim((string) ($row['btrans_guncelleme_tarihi'] ?? ''));
         $isUpdated = ($guncellemeTarihi !== '');
 
-        return [
+        $base = [
             'kid' => (int) ($row['kid'] ?? 0),
+            'site' => trim((string) ($row['site'] ?? '')),
+            'gavelBelgeNo' => trim((string) ($row['gavelBelgeNo'] ?? '')),
             'faturaSeri' => trim((string) ($row['faturaseri'] ?? '')),
             'evAdi' => trim((string) ($row['evadi'] ?? '')),
             'evKodu' => trim((string) ($row['evkodu'] ?? '')),
@@ -1034,7 +1141,9 @@ final class BtransController extends Controller
             'rezervasyonBasTar' => $this->formatDate8($row['btrans_baslangic_tarihi'] ?? null),
             'rezervasyonBitTar' => $this->formatDate8($row['btrans_bitis_tarihi'] ?? null),
             'toplamTutar' => trim((string) ($row['toplam_tutar'] ?? '0')),
-            'paraBirimi' => trim((string) ($row['parabirimi'] ?? 'TRY')),
+            // btrans.asp her yerde btrans_para_birimi kullanıyor (k.doviz değil)
+            'paraBirimi' => trim((string) ($row['btrans_para_birimi'] ?? 'TRY')),
+            'doviz' => trim((string) ($row['parabirimi'] ?? '')),
             'odemeBilgisi' => trim((string) ($row['btrans_odeme_bilgisi'] ?? '2')),
             'odemeYontemi' => trim((string) ($row['btrans_odeme_yontemi'] ?? '4')),
             'odemeYapanIbanNo' => trim((string) ($row['btrans_odeme_yapan_iban_no'] ?? '')),
@@ -1050,9 +1159,140 @@ final class BtransController extends Controller
             'evsahibiIbanNo' => trim((string) ($row['btrans_iban_no'] ?? '')),
             'usertel' => trim((string) ($row['usertel'] ?? '')),
             'usermail' => trim((string) ($row['usermail'] ?? '')),
+            // Ev sahibinin kullanici.id değeri (Natsisa'da müşterinin gizli HomeOwnerId alanıyla eşleşir)
+            'evsahibiId' => (int) ($row['evsahibi_id'] ?? 0),
+            // kayitlar.btrans_iban: boş = varsayılan hesap, 01/02 = farklı alıcı, diğer = seçili hesaplar.id
+            'btransIbanId' => trim((string) ($row['btrans_iban_id'] ?? '')),
             'isUpdated' => $isUpdated,
             'guncellemeTarihi' => $guncellemeTarihi,
         ];
+
+        return $this->buildRecordGroups($base);
+    }
+
+    /**
+     * Ekranda kullanılan koşullu grupları (peşin/komisyon, tüzel/gerçek kişi) düz alanlardan üretir.
+     */
+    private function buildRecordGroups(array $base): array
+    {
+        // btrans.asp listesinde kolonlar koşullu doluyor:
+        //   peşin (btrans_odeme_bilgisi=1) / komisyon (=2), tüzel (vkturu=2) / gerçek kişi (=1).
+        // Ekranda bu grupları kullanın; düz alanlar XML/Excel üretimi için olduğu gibi kalır.
+        $isPesin = $base['odemeBilgisi'] === '1';
+        $isKomisyon = $base['odemeBilgisi'] === '2';
+        $isTuzel = $base['vkTuru'] === '2';
+        $isGercek = $base['vkTuru'] === '1';
+
+        $base['pesinOdeme'] = [
+            'kiralanmaSuresiBasTar' => $isPesin ? $base['rezervasyonBasTar'] : '',
+            'kiralanmaSuresiBitTar' => $isPesin ? $base['rezervasyonBitTar'] : '',
+            'odemeYontemi' => $isPesin ? $base['odemeYontemi'] : '',
+            'ibanNo' => $isPesin ? $base['odemeYapanIbanNo'] : '',
+            'odemeTarihi' => $isPesin ? $base['odemeTarihi'] : '',
+            'toplamOdemeTutari' => $isPesin ? $base['odemeTutariKdvDahil'] : '',
+            'paraBirimi' => $isPesin ? $base['paraBirimi'] : '',
+        ];
+        $base['komisyonOdeme'] = [
+            'odemeYontemi' => $isKomisyon ? $base['odemeYontemi'] : '',
+            'ibanNo' => $isKomisyon ? $base['odemeYapanIbanNo'] : '',
+            'odemeTarihi' => $isKomisyon ? $base['odemeTarihi'] : '',
+            'komisyonOrani' => $isKomisyon ? $base['komisyonOrani'] : '',
+            'komisyonTutari' => $isKomisyon ? $base['odemeTutariKdvDahil'] : '',
+            'paraBirimi' => $isKomisyon ? $base['paraBirimi'] : '',
+        ];
+        $base['tuzelKisi'] = [
+            'vkn' => $isTuzel ? $base['vkn'] : '',
+            'unvan' => $isTuzel ? $base['vkUnvan'] : '',
+        ];
+        $base['gercekKisi'] = [
+            'kimlikTipi' => '1',
+            'tc' => $isGercek ? $base['tc'] : '',
+            'ad' => $isGercek ? $base['evsahibiAd'] : '',
+            'soyad' => $isGercek ? $base['evsahibiSoyad'] : '',
+        ];
+
+        return $base;
+    }
+
+    /**
+     * Natsisa'dan gelen ev sahibi bilgilerini ({evsahibiId: {...}}) doğrulayıp normalize eder.
+     *
+     * @param mixed $input dizi veya JSON metni
+     * @return array<int,array<string,string>>
+     */
+    private function parseHomeOwnerOverrides($input): array
+    {
+        if (is_string($input) && trim($input) !== '') {
+            $input = json_decode($input, true);
+        }
+        if (!is_array($input)) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($input as $key => $item) {
+            $id = filter_var($key, FILTER_VALIDATE_INT);
+            if ($id === false || $id <= 0 || !is_array($item)) {
+                continue;
+            }
+
+            $result[$id] = [
+                'ad' => trim((string) ($item['ad'] ?? '')),
+                'soyad' => trim((string) ($item['soyad'] ?? '')),
+                'vkTuru' => ((string) ($item['vkTuru'] ?? '1')) === '2' ? '2' : '1',
+                'tc' => substr(trim((string) ($item['tc'] ?? '')), 0, 11),
+                'vkn' => substr(trim((string) ($item['vkn'] ?? '')), 0, 10),
+                'vkUnvan' => trim((string) ($item['vkUnvan'] ?? '')),
+                'iban' => substr(trim((string) ($item['iban'] ?? '')), 0, 26),
+                'tel' => substr(trim((string) ($item['tel'] ?? '')), 0, 10),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Kayıtların ev sahibi alanlarını Natsisa müşteri bilgileriyle değiştirir.
+     * Farklı alıcı (btrans_iban 01/02) kayıtlarına dokunulmaz; rezervasyonda seçili bir hesap (hesaplar.id)
+     * varsa IBAN siteden kalır. Haritada olmayan ev sahipleri sitenin verisiyle kalır.
+     *
+     * @param array<int,array<string,mixed>> $records
+     * @param array<int,array<string,string>> $overrides
+     * @return array<int,array<string,mixed>>
+     */
+    private function applyHomeOwnerOverrides(array $records, array $overrides): array
+    {
+        if (empty($overrides)) {
+            return $records;
+        }
+
+        foreach ($records as $i => $r) {
+            $ibanId = (string) ($r['btransIbanId'] ?? '');
+            if ($ibanId === '01' || $ibanId === '02') {
+                continue;
+            }
+
+            $id = (int) ($r['evsahibiId'] ?? 0);
+            if ($id <= 0 || !isset($overrides[$id])) {
+                continue;
+            }
+
+            $o = $overrides[$id];
+            $r['evsahibiAd'] = $o['ad'];
+            $r['evsahibiSoyad'] = $o['soyad'];
+            $r['vkTuru'] = $o['vkTuru'];
+            $r['tc'] = $o['tc'];
+            $r['vkn'] = $o['vkn'];
+            $r['vkUnvan'] = $o['vkUnvan'];
+            $r['usertel'] = $o['tel'];
+            if ($ibanId === '') {
+                $r['evsahibiIbanNo'] = $o['iban'];
+            }
+
+            $records[$i] = $this->buildRecordGroups($r);
+        }
+
+        return $records;
     }
 
     /**
